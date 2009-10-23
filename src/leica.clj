@@ -10,7 +10,7 @@
   leica
   (:require [clojure.contrib.http.agent :as ha]
             [clojure.contrib.duck-streams :as duck])
-  (:import (java.io InputStream ByteArrayOutputStream
+  (:import (java.io File InputStream ByteArrayOutputStream
                     ByteArrayInputStream)
            (java.net HttpURLConnection InetAddress URI URL URLEncoder)
            (org.htmlparser Parser)
@@ -22,7 +22,7 @@
 
 (def *ping-timeout* 3000)
 
-(defn parse-data.cod.ru-page [#^String url]
+(defn parse-data.cod.ru-page [url]
   "Парсит страницу файла на датакоде."
   ;; spacep = re.compile('Вам доступно ([\d\.]+) (.+)')
   ;; value, unit = (match.group(1), match.group(2))
@@ -45,42 +45,70 @@
                  (when-let [the-name (.getAttribute tag "title")]
                    (reset! name the-name)))))]
     (.visitAllNodesWith parser visitor)
-    {:name @name :link @link}))
+    {:name @name :link (new URI @link)}))
 
 (defn job-cod.ru-link-name [job]
-  (when-let [#^String address (job :address)]
+  (when-let [#^URI address (job :address)]
     (let [parsed (leica/parse-data.cod.ru-page address)]
       (when (and (parsed :name) (parsed :link))
         (merge job {:name (parsed :name) :link (parsed :link)})))))
 
 (defn job-link [job]
-  (when-let [#^String address (job :address)]
-    (merge job {:link (. (new URI address) toASCIIString)})))
+  (when-let [#^URI address (job :address)]
+    (merge job {:link (.toASCIIString address)})))
 
 (defn job-name [job]
-  (when-let [#^String link (job :link)]
-    (merge job {:name (second (re-find #"/([^/]+)$" (. (new URI link) getPath)))})))
+  (when-let [#^URI link (job :link)]
+    (merge job {:name (second (re-find #"/([^/]+)$"
+                                       (.getPath link)))})))
 
 (defn job-tag [pattern job]
-  (when-let [#^String link (job :link)]
+  (when-let [#^URI link (job :link)]
     (when-let [tag (or (some (fn [p] (and (re-find p link) p))
                              (if (seq? pattern) pattern [pattern]))
-                       (. (new URI link) getHost))]
+                       (.getHost link))]
       (merge job {:tag tag}))))
 
-;; (defn job-length [job]
-  
+(defn job-length [job]
+  (when-let [#^URI link (job :link)]
+    (merge job {:length (Integer/parseInt
+                         (:content-length (ha/headers (ha/http-agent link))))})))
 
-;; def length(pattern=None):
-;;     def action(job):
+(defn job-file [dir job]
+  (when-let [name (job :name)]
+    (merge job {:file (new File (join-paths dir name))})))
+
+;; TODO: not working
+(defn download [job]
+  (when-let [#^URI link (job :link)]
+    (let [headers {"Range" (str "bytes=" (file-length (job :file)) "-")}
+          loader
+          (ha/http-agent link
+                         :headers headers
+                         :handler (fn [remote]
+                                    (with-open [local (duck/writer "/tmp/hagout")]
+                                      (duck/copy (ha/stream remote) local))))]
+      (ha/done? loader))))
 ;;         try:
-;;             responce = urlopen(Request(job.link))
-;;             job.length = int(responce.info().getheader('Content-Length'))
-;;         except URLError:
-;;             raise Fail('СБОЙ ПОЛУЧЕНИЯ РАЗМЕРА ЗАГРУЖАЕМОГО ФАЙЛА')
-;;         else:
-;;             if job.length: return job
-;;             else: raise RIP('НЕВОЗМОЖНО ПОЛУЧИТЬ РАЗМЕР ЗАГРУЖАЕМОГО ФАЙЛА')
+;;             remote_file = urlopen(Request(job.link, headers=headers))
+;;             with open(job.path, 'a') as local_file:
+;;                 transfer_bytes(source=remote_file, dest=local_file)
+;;         except URLError, e:
+;;             # TODO: подробнее проработать ошибки
+;;             if hasattr(e, 'reason'):
+;;                 raise Fail('СЕРВЕР НЕДОСТУПЕН. ПРИЧИНА: %s' % str(e.reason))
+;;             elif hasattr(e, 'code'):
+;;                 raise Fail('СЕРВЕР НЕ МОЖЕТ ВЫПОЛНИТЬ ЗАПРОС. КОД: %s' % str(e.code))
+;;         except IOError, e:
+;;             raise RIP('Ошибка ввода-вывода')
+
+;;; AUX
+
+(defn file-length [#^File file]
+  (if (.exists file) (.length file) 0))
+
+(defn join-paths [path1 path2]
+  (str (File. (File. path1) path2)))
 
 ;;; TESTING
 
