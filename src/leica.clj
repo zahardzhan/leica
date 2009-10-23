@@ -1,25 +1,35 @@
 ;;; leica.clj: многопоточная качалка для data.cod.ru и dsvload.net.
 
-;; Роман Захаров, Александр Золотов
+;; Роман Захаров
 ;; октябрь, 2009
 
 ;; Это свободная программа, используйте на свой страх и риск.
 
 (ns #^{:doc "Многопоточная качалка для data.cod.ru и dsvload.net."
-       :author "Роман Захаров, Александр Золотов"}
+       :author "Роман Захаров"}
   leica
   (:require [clojure.contrib.http.agent :as ha]
             [clojure.contrib.duck-streams :as duck])
   (:import (java.io InputStream ByteArrayOutputStream
                     ByteArrayInputStream)
-           (java.net HttpURLConnection)
+           (java.net HttpURLConnection InetAddress URI URL URLEncoder)
            (org.htmlparser Parser)
            (org.htmlparser.visitors NodeVisitor)
            (org.htmlparser.tags LinkTag)
            (org.htmlparser.nodes TagNode)))
 
-(defn parse-data.cod.ru-file-description-page [#^String url]
+(in-ns 'leica)
+
+(def *ping-timeout* 3000)
+
+(defn parse-data.cod.ru-page [#^String url]
   "Парсит страницу файла на датакоде."
+  ;; spacep = re.compile('Вам доступно ([\d\.]+) (.+)')
+  ;; value, unit = (match.group(1), match.group(2))
+  ;; self.space = int(float(value) * \
+  ;;                       rule.match(unit, {'ГБ': 1073741824,
+  ;;                                         'МБ': 1048576,
+  ;;                                         'КБ': 1024}))
   (let [name (atom nil)
         link (atom nil)      
         parser (Parser. url)
@@ -37,15 +47,45 @@
     (.visitAllNodesWith parser visitor)
     {:name @name :link @link}))
 
+(defn job-cod.ru-link-name [job]
+  (when-let [#^String address (job :address)]
+    (let [parsed (leica/parse-data.cod.ru-page address)]
+      (when (and (parsed :name) (parsed :link))
+        (merge job {:name (parsed :name) :link (parsed :link)})))))
+
+(defn job-link [job]
+  (when-let [#^String address (job :address)]
+    (merge job {:link (. (new URI address) toASCIIString)})))
+
+(defn job-name [job]
+  (when-let [#^String link (job :link)]
+    (merge job {:name (second (re-find #"/([^/]+)$" (. (new URI link) getPath)))})))
+
+(defn job-tag [pattern job]
+  (when-let [#^String link (job :link)]
+    (when-let [tag (or (some (fn [p] (and (re-find p link) p))
+                             (if (seq? pattern) pattern [pattern]))
+                       (. (new URI link) getHost))]
+      (merge job {:tag tag}))))
+
+;; (defn job-length [job]
+  
+
+;; def length(pattern=None):
+;;     def action(job):
+;;         try:
+;;             responce = urlopen(Request(job.link))
+;;             job.length = int(responce.info().getheader('Content-Length'))
+;;         except URLError:
+;;             raise Fail('СБОЙ ПОЛУЧЕНИЯ РАЗМЕРА ЗАГРУЖАЕМОГО ФАЙЛА')
+;;         else:
+;;             if job.length: return job
+;;             else: raise RIP('НЕВОЗМОЖНО ПОЛУЧИТЬ РАЗМЕР ЗАГРУЖАЕМОГО ФАЙЛА')
+
 ;;; TESTING
 
 ;; (ha/string (ha/http-agent "http://data.cod.ru"))
 
-;; (import '(java.net InetAddress))
-;; (def *timeout* 3000)
-;; (def *mask* "192.16.1.")
-;; (def *up* (ref []))
-;; (def ip-list (for [x (range 1 255)] (str *mask* x)))
 ;; (def agents (for [ip ip-list] (agent ip)))
 
 ;; (defn ping [hostname]
@@ -78,20 +118,28 @@
 ;; Generic Functions that must be defined for each environment
 ;; For each new type of environment you want to define, you will need a defstructure that inherits from (includes) ENVIRONMENT, and you will need to write new methods (or inherit existing methods) for each of the following eight functions. Here are the ones that will change for each new environment:
 
-(defmulti percept [agent env])
-;;    Return the percept for this agent.
+(defmulti percept 
+  "[agent env] Return the percept for this agent."
+  identity)
 
-(defmulti update-fn [env])
-;;    Modify the environment, based on agents actions, etc.
+(defmulti update-fn 
+  "[env] Modify the environment, based on agents actions, etc."
+  identity)
 
-(defmulti legal-actions [env])
-;;    A list of the action operators that an agent can do.
+(defmulti legal-actions
+  "[env] A list of the action operators that an agent can do."
+  identity)
 
-(defmulti termination? [env])
-;;    Return true if the simulation should end now.
+(defmulti termination?
+  "[env] Return true if the simulation should end now."
+  identity)
 
-(defmulti display-environment [env])
-;;    Display the current state of the environment.
+(defmulti display-environment
+  "[env] Display the current state of the environment."
+  identity)
 
-(defmulti execute-agent-actions [env]
-;;    Each agent (if the agent is alive and has specified a legal action) takes the action.
+(defmulti execute-agent-actions
+  "[env] Each agent (if the agent is alive and has specified a legal action) takes the action."
+  identity)
+
+
