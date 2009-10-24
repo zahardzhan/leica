@@ -47,9 +47,6 @@
     (.visitAllNodesWith parser visitor)
     {:name @name :link (new URI @link)}))
 
-(defn match-address [pattern line]
-  (re-find pattern line))
-
 (defn job-cod.ru-link-name [job]
   (when-let [#^URI address (job :address)]
     (let [parsed (leica/parse-data.cod.ru-page address)]
@@ -152,11 +149,64 @@
 (defstruct environment :agents :state)
 ;;    The world in which agents exist.
 
-;; An agent is something that perceives and acts. As such, each agent has a slot to hold its current percept, and its current action. The action will be handed back to the environment simulator to perform (if legal). Each agent also has a slot for the agent program, and one for its score as determined by the performance measure.
+;; Агент это что-то, что воспринимает свое окружение и действует.
+;; У агента есть тело, которое хранит состояние, и программа,
+;; которая выбирает действие, основываясь на состоянии агента и 
+;; восприятии окружения. Действие агента возвращается обратно в окружение
+;; для его выполнения.
 
-(defstruct agere :program :body :score :percept :action :name :alive)
+(defstruct agere 
+  :name 
+  :program 
+  ;; слот программы агента, содержит функцию одного аргумента,
+  ;; результата восприятия окружения, и возвращает действие.
+  ;; Представление восприятия и действия зависит от конкретного
+  ;; окружения и агента.
+  :percept :action :alive)
 
-;;    Agents take actions (based on percepts and the agent program) and receive a score (based on the performance measure). An agent has a body which can take action, and a program to choose the actions, based on percepts.
+;; Агент для скачивания файла.
+
+(defstruct job
+  :address ;; адрес задания.
+  :actions ;; набор функций-действий агента.
+  :link    ;; прямая ссылка на файл.
+  :tag     ;; идентификатор по которому разделяются потоки загрузок
+  :name    ;; имя файла.
+  :path    ;; путь файла.
+  :length  ;; размер файла.
+  :name :program :percept :action :alive)
+
+(defn make-job [line rules]
+  "Конструктор агента из строки с адресом и набора правил."
+  (when (and line rules)
+    (when-let [[address actions]
+               (match line rules {:matcher re-find :action list})]
+      (struct-map job :program reflex-job-program
+                  :address address
+                  :actions actions))))
+
+(defn reflex-job-program [percept]
+  "Простая рефлексная программа для загрузочного агента."
+  (letfn [(out-of-space
+           [percept]
+           (when-let [#^File file ((percept :self) :file)]
+             (< (.getUsableSpace file) (file-length file))))
+          (fully-loaded
+           [percept]
+           (<= ((percept :self) :length) (file-length ((percept :self) :file))))
+          (missing [key] (fn [percept] (not ((percept :self) key))))
+          (otherwise [_] true)]
+  (match percept
+         [[(missing :address) :rip]
+          [(missing :actions) :rip]
+          [(missing :link)    :obtain-link]
+          [(missing :tag)     :obtain-tag]
+          [(missing :name)    :obtain-name]
+          [(missing :path)    :obtain-path]
+          [(missing :length)  :obtain-length]
+          [fully-loaded       :rip]
+          [out-of-space       :rip]
+          [otherwise          :download]])))
 
 (defn run-environment [env] nil)
 
@@ -189,4 +239,35 @@
   "[env] Each agent (if the agent is alive and has specified a legal action) takes the action."
   identity)
 
+;;; TEST
 
+;; Хосты упорядочены от частного к общему
+(def job-rules
+     [[#"http://dsv.data.cod.ru/\d{6}"
+       {:obtain-link job-cod.ru-link-name
+        :obtain-tag  (partial job-tag [#"files3?.dsv.data.cod.ru"
+                                       #"files2.dsv.data.cod.ru"])
+        :obtain-path (partial job-file "/home/haru/inbox/dsv")
+        :obtain-length job-length
+        :download    download}]
+      [#"http://[\w\.]*data.cod.ru/\d+"
+       {:obtain-link job-cod.ru-link-name
+        :obtain-tag  (partial job-tag [#"files3?.dsv.data.cod.ru"
+                                       #"files2.dsv.data.cod.ru"])
+        :obtain-path (partial job-file "/home/haru/inbox/dsv")
+        :obtain-length job-length
+        :download    download}]
+      [#"http://77.35.112.8[1234]/.+"
+       {:obtain-link job-link
+        :obtain-name job-name
+        :obtain-tag  (partial job-tag nil)
+        :obtain-path (partial job-file "/home/haru/inbox/dsv")
+        :obtain-length job-length
+        :download    download}]
+      [#"http://dsvload.net/ftpupload/.+"
+       {:obtain-link job-link
+        :obtain-name job-name
+        :obtain-tag  (partial job-tag nil)
+        :obtain-path (partial job-file "/home/haru/inbox/dsv")
+        :obtain-length job-length
+        :download    download}]])
