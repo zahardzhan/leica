@@ -47,6 +47,9 @@
     (.visitAllNodesWith parser visitor)
     {:name @name :link (new URI @link)}))
 
+(defn match-address [pattern line]
+  (re-find pattern line))
+
 (defn job-cod.ru-link-name [job]
   (when-let [#^URI address (job :address)]
     (let [parsed (leica/parse-data.cod.ru-page address)]
@@ -78,29 +81,45 @@
   (when-let [name (job :name)]
     (merge job {:file (new File (join-paths dir name))})))
 
-;; TODO: not working
 (defn download [job]
   (when-let [#^URI link (job :link)]
-    (let [headers {"Range" (str "bytes=" (file-length (job :file)) "-")}
-          loader
-          (ha/http-agent link
-                         :headers headers
-                         :handler (fn [remote]
-                                    (with-open [local (duck/writer "/tmp/hagout")]
-                                      (duck/copy (ha/stream remote) local))))]
-      (ha/done? loader))))
-;;         try:
-;;             remote_file = urlopen(Request(job.link, headers=headers))
-;;             with open(job.path, 'a') as local_file:
-;;                 transfer_bytes(source=remote_file, dest=local_file)
-;;         except URLError, e:
-;;             # TODO: подробнее проработать ошибки
-;;             if hasattr(e, 'reason'):
-;;                 raise Fail('СЕРВЕР НЕДОСТУПЕН. ПРИЧИНА: %s' % str(e.reason))
-;;             elif hasattr(e, 'code'):
-;;                 raise Fail('СЕРВЕР НЕ МОЖЕТ ВЫПОЛНИТЬ ЗАПРОС. КОД: %s' % str(e.code))
-;;         except IOError, e:
-;;             raise RIP('Ошибка ввода-вывода')
+    (when-let [#^File file (job :file)]
+      (let [headers {"Range" (str "bytes=" (file-length file) "-")}
+            loader
+            (ha/http-agent link
+                           :headers headers
+                           :handler (fn [remote]
+                                      (with-open [local (duck/writer file)]
+                                        (duck/copy (ha/stream remote) local))))]
+        (ha/result loader)
+        (ha/done? loader)))))
+
+;;; RULE
+
+(defn default-matcher [rule sample]
+  "Дефолтный сопоставитель с образцом."
+  (cond (fn? rule) (rule sample)
+        (string? rule) (and (= rule sample) rule)))
+
+(defn match [sample rules &
+             {:keys [matcher rule-pattern rule-response action]
+              :or   {matcher default-matcher
+                     rule-pattern first
+                     rule-response second
+                     action #(and %1 %2)}}]
+  "Находит среди правил первое правило, которому соответствует образец, и
+   возвращает результат действия над этим правилом.
+   Сопоставитель (matcher) сравнивает паттерн с образцом, и если
+   в результате этого хоть что-то получается, то сравнение считается удачным.
+        
+   Обычно правила (rules) представлены в виде списка:
+        ((паттерн, соответствие),
+         (паттерн, соответствие),
+         ...)"
+  (some (fn [rule]
+          (when-let [result (matcher (rule-pattern rule) sample)]
+            (action result (rule-response rule))))
+        rules))
 
 ;;; AUX
 
