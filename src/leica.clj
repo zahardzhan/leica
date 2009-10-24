@@ -31,8 +31,9 @@
 (defn join-paths [path1 path2]
   (str (File. (File. path1) path2)))
 
-(defn parse-data.cod.ru-page [url]
+(defn parse-datacodru-page
   "Парсит страницу файла на датакоде."
+  [url]
   ;; spacep = re.compile('Вам доступно ([\d\.]+) (.+)')
   ;; value, unit = (match.group(1), match.group(2))
   ;; self.space = int(float(value) * \
@@ -56,9 +57,9 @@
     (.visitAllNodesWith parser visitor)
     {:name @name :link (new URI @link)}))
 
-(defn job-cod.ru-link-name [job]
+(defn job-datacodru-link-name [job]
   (when-let [#^URI address (job :address)]
-    (let [parsed (leica/parse-data.cod.ru-page (str address))]
+    (let [parsed (parse-datacodru-page (str address))]
       (when (and (parsed :name) (parsed :link))
         (assoc job :name (parsed :name) :link (parsed :link))))))
 
@@ -73,11 +74,10 @@
 
 (defn job-tag [pattern job]
   (when-let [#^URI link (job :link)]
-    (when-let [tag (if pattern 
-                     (some (fn [pat] (if (re-find pat (str link))
-                                       (str pat)))
-                           (if (sequential? pattern) pattern [pattern]))
-                     (.getHost link))]
+    (when-let [tag (or (if pattern 
+                         (some (fn [pat] (if (re-find pat (str link)) (str pat)))
+                               (if (sequential? pattern) pattern [pattern])))
+                       (.getHost link))]
       (assoc job :tag tag))))
 
 (defn job-length [job]
@@ -104,18 +104,14 @@
 
 ;;; RULE
 
-(defn default-matcher [rule sample]
+(defn default-matcher 
   "Дефолтный сопоставитель с образцом."
+  [rule sample]
   (cond (fn? rule) (rule sample)
         (string? rule) (if (= rule sample) rule)
         (= (type rule) java.util.regex.Pattern) (re-find rule sample)))
 
-(defn match [sample rules &
-             [{:keys [matcher rule-pattern rule-response action]
-               :or   {matcher default-matcher
-                      rule-pattern first
-                      rule-response second
-                      action #(if %1 %2)}}]]
+(defn match 
   "Находит среди правил первое правило, которому соответствует образец, и
    возвращает результат действия над этим правилом.
    Сопоставитель (matcher) сравнивает паттерн с образцом, и если
@@ -125,63 +121,52 @@
         ((паттерн, соответствие),
          (паттерн, соответствие),
          ...)"
+
+  [sample rules &
+   [{:keys [matcher rule-pattern rule-response action]
+     :or   {matcher default-matcher
+            rule-pattern first
+            rule-response second
+            action #(if %1 %2)}}]]
+
   (some (fn [rule]
           (when-let [result (matcher (rule-pattern rule) sample)]
             (action result (rule-response rule))))
         rules))
 
-;;; TESTING
+;;; AGENCY
 
-;; (ha/string (ha/http-agent "http://data.cod.ru"))
-
-;; (def agents (for [ip ip-list] (agent ip)))
-
-;; (defn ping [hostname]
-;;    (let [status (.isReachable (InetAddress/getByName hostname) *timeout*)]
-;;       (if status (dosync (commute *up* conj hostname)))))
-
-;; (defn ping-all []
-;;    (doseq [ip-agent agents]
-;;       (send-off ip-agent ping)))
-
-;; (ping-all)
-;; (apply await agents)
-
-;; (doseq [host (filter deref agents)]
-;;   (println (str @host " is up")))
-
-(defstruct environment :agents :state)
-;;    The world in which agents exist.
-
-;; Агент это что-то, что воспринимает свое окружение и действует.
-;; У агента есть тело, которое хранит состояние, и программа,
-;; которая выбирает действие, основываясь на состоянии агента и 
-;; восприятии окружения. Действие агента возвращается обратно в окружение
-;; для его выполнения.
-
-(defstruct agere 
-  :name 
-  :program 
-  ;; слот программы агента, содержит функцию одного аргумента,
-  ;; результата восприятия окружения, и возвращает действие.
-  ;; Представление восприятия и действия зависит от конкретного
-  ;; окружения и агента.
-  :percept :action :alive)
-
-;; Агент для скачивания файла.
+(defstruct environment
+  ;; Окружение, в котором агенты существуют.
+  :agents) ;; Агенты в окружении
 
 (defstruct job
-  :address ;; адрес задания.
-  :actions ;; набор функций-действий агента.
-  :link    ;; прямая ссылка на файл.
-  :tag     ;; идентификатор по которому разделяются потоки загрузок
-  :name    ;; имя файла.
-  :path    ;; путь файла.
-  :length  ;; размер файла.
-  :name :program :percept :action :alive)
+  ;; Агент для скачивания файла.
 
-(defn reflex-job-program [percept]
+  ;; Агент это что-то, что воспринимает свое окружение и действует.
+  ;; У агента есть тело, которое хранит состояние, и программа,
+  ;; которая выбирает действие, основываясь на состоянии агента и 
+  ;; восприятии окружения. Действие агента возвращается обратно в окружение
+  ;; для его выполнения. Представление восприятия и действия зависит от конкретного
+  ;; окружения и агента.
+
+  :name    ;; имя агента
+  :program ;; слот программы агента, содержит функцию одного аргумента,
+           ;; результата восприятия окружения, и возвращает действие
+  :actions ;; набор функций-действий агента
+  :percept ;; последнее восприятие
+  :action  ;; последнее действие
+  :alive   ;; определяет жив агент или умер
+
+  :address ;; адрес задания
+  :link    ;; прямая ссылка на файл, который нужно скачать
+  :tag     ;; идентификатор по которому разделяются потоки загрузок
+  :file    ;; файл в который сохраняется скачанное
+  :length) ;; размер файла, что нужно скачать
+
+(defn reflex-job-program
   "Простая рефлексная программа для загрузочного агента."
+  [percept]
   (letfn [(out-of-space
            [percept]
            (when-let [#^File file ((percept :self) :file)]
@@ -192,35 +177,36 @@
           (missing [key] (fn [percept] (not ((percept :self) key))))
           (otherwise [_] true)]
   (match percept
-         [[(missing :address) :rip]
-          [(missing :actions) :rip]
+         [[(missing :address) :die]
+          [(missing :actions) :die]
           [(missing :link)    :obtain-link]
           [(missing :tag)     :obtain-tag]
           [(missing :name)    :obtain-name]
           [(missing :path)    :obtain-path]
           [(missing :length)  :obtain-length]
-          [fully-loaded       :rip]
-          [out-of-space       :rip]
+          [fully-loaded       :die]
+          [out-of-space       :die]
           [otherwise          :download]])))
 
-(defn make-job [line rules]
+(defn make-job
   "Конструктор агента из строки с адресом и набора правил."
-  (when (and line rules)
-    (when-let [[address actions]
-               (match line rules {:matcher re-find :action list})]
-      (struct-map job :program reflex-job-program
-                  :address address
-                  :actions actions))))
-
-(defn run-environment [env] nil)
-
-;;    Basic environment simulator. It gives each agent its percept, gets an action from each agent, and updates the environment. It also keeps score for each agent, and optionally displays intermediate results. [p 48]
-
-;; Generic Functions that must be defined for each environment
-;; For each new type of environment you want to define, you will need a defstructure that inherits from (includes) ENVIRONMENT, and you will need to write new methods (or inherit existing methods) for each of the following eight functions. Here are the ones that will change for each new environment:
+  [line rules]
+  (let [[address actions] (match line rules {:action list})]
+    (when (and address actions)
+      (agent (struct-map job :program reflex-job-program
+                         :address address
+                         :actions actions)))))
 
 (defmulti percept 
   "[agent env] Return the percept for this agent."
+  nil)
+
+(defmulti run-environment 
+  "Basic environment simulator.
+   It gives each agent its percept, gets an action from each agent, 
+   and updates the environment. It also keeps score for each agent, 
+   and optionally displays intermediate results."
+  ;; [env]
   identity)
 
 (defmulti update-fn 
@@ -248,35 +234,37 @@
 ;; Хосты упорядочены от частного к общему
 (def job-rules
      [[#"http://dsv.data.cod.ru/\d{6}"
-       {:obtain-link leica/job-cod.ru-link-name
-        :obtain-tag  (partial leica/job-tag [#"files3?.dsv.data.cod.ru"
+       {:obtain-link job-datacodru-link-name
+        :obtain-tag  (partial job-tag [#"files3?.dsv.data.cod.ru"
                                        #"files2.dsv.data.cod.ru"])
-        :obtain-path (partial leica/job-file "/home/haru/inbox/dsv")
-        :obtain-length leica/job-length
-        :download    leica/download}]
+        :obtain-path (partial job-file "/home/haru/inbox/dsv")
+        :obtain-length job-length
+        :download    download}]
       [#"http://[\w\.]*data.cod.ru/\d+"
-       {:obtain-link leica/job-cod.ru-link-name
-        :obtain-tag  (partial leica/job-tag [#"files3?.dsv.data.cod.ru"
-                                       #"files2.dsv.data.cod.ru"])
-        :obtain-path (partial leica/job-file "/home/haru/inbox/dsv")
-        :obtain-length leica/job-length
-        :download    leica/download}]
+       {:obtain-link job-datacodru-link-name
+        :obtain-tag  (partial job-tag nil)
+        :obtain-path (partial job-file "/home/haru/inbox/dsv")
+        :obtain-length job-length
+        :download    download}]
       [#"http://77.35.112.8[1234]/.+"
-       {:obtain-link leica/job-link
-        :obtain-name leica/job-name
-        :obtain-tag  (partial leica/job-tag nil)
-        :obtain-path (partial leica/job-file "/home/haru/inbox/dsv")
-        :obtain-length leica/job-length
-        :download    leica/download}]
+       {:obtain-link job-link
+        :obtain-name job-name
+        :obtain-tag  (partial job-tag nil)
+        :obtain-path (partial job-file "/home/haru/inbox/dsv")
+        :obtain-length job-length
+        :download    download}]
       [#"http://dsvload.net/ftpupload/.+"
-       {:obtain-link leica/job-link
-        :obtain-name leica/job-name
-        :obtain-tag  (partial leica/job-tag nil)
-        :obtain-path (partial leica/job-file "/home/haru/inbox/dsv")
-        :obtain-length leica/job-length
-        :download    leica/download}]])
+       {:obtain-link job-link
+        :obtain-name job-name
+        :obtain-tag  (partial job-tag nil)
+        :obtain-path (partial job-file "/home/haru/inbox/dsv")
+        :obtain-length job-length
+        :download    download}]])
 
 (let [jj {:link (URI. "http://files3.dsv.data.cod.ru/?WyIyMGI4%3D%3D")
+          :name "Hayate_the_combat_butler.mkv"
+          :address (URI. "http://dsv.data.cod.ru/433148")}
+      jk {:link (URI. "http://files4.dsv.data.cod.ru/?WyIyMGI4%3D%3D")
           :name "Hayate_the_combat_butler.mkv"
           :address (URI. "http://dsv.data.cod.ru/433148")}]
   (deftest test-tag
@@ -286,12 +274,13 @@
            "files3?.dsv.data.cod.ru"))
     (is (= (:tag (leica/job-tag [#"files3?.dsv.data.cod.ru"
                                  #"files2.dsv.data.cod.ru"] jj))
-           "files3?.dsv.data.cod.ru"))))
+           "files3?.dsv.data.cod.ru"))
+    (is (= (:tag (job-tag [#"files3?.dsv.data.cod.ru"
+                           #"files2.dsv.data.cod.ru"] jk))
+           "files4.dsv.data.cod.ru"))))
 
 (deftest test-match
   (is (= (match "http://dsv.data.cod.ru/433148"
                 '((#"http://dsv.data.cod.ru/\d{6}" :MATCH))
                 {:rule-response rest})
          '(:MATCH))))
-
-
