@@ -10,6 +10,7 @@
   leica
   (:require [clojure.contrib.http.agent :as ha]
             [clojure.contrib.duck-streams :as duck])
+  (:use clojure.contrib.test-is)
   (:import (java.io File InputStream ByteArrayOutputStream
                     ByteArrayInputStream)
            (java.net HttpURLConnection InetAddress URI URL URLEncoder)
@@ -21,6 +22,14 @@
 (in-ns 'leica)
 
 (def *ping-timeout* 3000)
+
+;;; AUX
+
+(defn file-length [#^File file]
+  (if (.exists file) (.length file) 0))
+
+(defn join-paths [path1 path2]
+  (str (File. (File. path1) path2)))
 
 (defn parse-data.cod.ru-page [url]
   "Парсит страницу файла на датакоде."
@@ -49,34 +58,36 @@
 
 (defn job-cod.ru-link-name [job]
   (when-let [#^URI address (job :address)]
-    (let [parsed (leica/parse-data.cod.ru-page address)]
+    (let [parsed (leica/parse-data.cod.ru-page (str address))]
       (when (and (parsed :name) (parsed :link))
-        (merge job {:name (parsed :name) :link (parsed :link)})))))
+        (assoc job :name (parsed :name) :link (parsed :link))))))
 
 (defn job-link [job]
   (when-let [#^URI address (job :address)]
-    (merge job {:link (.toASCIIString address)})))
+    (assoc job :link (.toASCIIString address))))
 
 (defn job-name [job]
   (when-let [#^URI link (job :link)]
-    (merge job {:name (second (re-find #"/([^/]+)$"
-                                       (.getPath link)))})))
+    (assoc job :name (second (re-find #"/([^/]+)$"
+                                      (.getPath link))))))
 
 (defn job-tag [pattern job]
   (when-let [#^URI link (job :link)]
-    (when-let [tag (or (some (fn [p] (and (re-find p link) p))
-                             (if (seq? pattern) pattern [pattern]))
-                       (.getHost link))]
-      (merge job {:tag tag}))))
+    (when-let [tag (if pattern 
+                     (some (fn [pat] (if (re-find pat (str link))
+                                       (str pat)))
+                           (if (sequential? pattern) pattern [pattern]))
+                     (.getHost link))]
+      (assoc job :tag tag))))
 
 (defn job-length [job]
   (when-let [#^URI link (job :link)]
-    (merge job {:length (Integer/parseInt
-                         (:content-length (ha/headers (ha/http-agent link))))})))
+    (assoc job :length (Integer/parseInt
+                        (:content-length (ha/headers (ha/http-agent link)))))))
 
 (defn job-file [dir job]
   (when-let [name (job :name)]
-    (merge job {:file (new File (join-paths dir name))})))
+    (assoc job :file (new File (join-paths dir name)))))
 
 (defn download [job]
   (when-let [#^URI link (job :link)]
@@ -96,14 +107,15 @@
 (defn default-matcher [rule sample]
   "Дефолтный сопоставитель с образцом."
   (cond (fn? rule) (rule sample)
-        (string? rule) (and (= rule sample) rule)))
+        (string? rule) (if (= rule sample) rule)
+        (= (type rule) java.util.regex.Pattern) (re-find rule sample)))
 
 (defn match [sample rules &
-             {:keys [matcher rule-pattern rule-response action]
-              :or   {matcher default-matcher
-                     rule-pattern first
-                     rule-response second
-                     action #(and %1 %2)}}]
+             [{:keys [matcher rule-pattern rule-response action]
+               :or   {matcher default-matcher
+                      rule-pattern first
+                      rule-response second
+                      action #(if %1 %2)}}]]
   "Находит среди правил первое правило, которому соответствует образец, и
    возвращает результат действия над этим правилом.
    Сопоставитель (matcher) сравнивает паттерн с образцом, и если
@@ -117,14 +129,6 @@
           (when-let [result (matcher (rule-pattern rule) sample)]
             (action result (rule-response rule))))
         rules))
-
-;;; AUX
-
-(defn file-length [#^File file]
-  (if (.exists file) (.length file) 0))
-
-(defn join-paths [path1 path2]
-  (str (File. (File. path1) path2)))
 
 ;;; TESTING
 
@@ -176,15 +180,6 @@
   :length  ;; размер файла.
   :name :program :percept :action :alive)
 
-(defn make-job [line rules]
-  "Конструктор агента из строки с адресом и набора правил."
-  (when (and line rules)
-    (when-let [[address actions]
-               (match line rules {:matcher re-find :action list})]
-      (struct-map job :program reflex-job-program
-                  :address address
-                  :actions actions))))
-
 (defn reflex-job-program [percept]
   "Простая рефлексная программа для загрузочного агента."
   (letfn [(out-of-space
@@ -207,6 +202,15 @@
           [fully-loaded       :rip]
           [out-of-space       :rip]
           [otherwise          :download]])))
+
+(defn make-job [line rules]
+  "Конструктор агента из строки с адресом и набора правил."
+  (when (and line rules)
+    (when-let [[address actions]
+               (match line rules {:matcher re-find :action list})]
+      (struct-map job :program reflex-job-program
+                  :address address
+                  :actions actions))))
 
 (defn run-environment [env] nil)
 
@@ -244,30 +248,50 @@
 ;; Хосты упорядочены от частного к общему
 (def job-rules
      [[#"http://dsv.data.cod.ru/\d{6}"
-       {:obtain-link job-cod.ru-link-name
-        :obtain-tag  (partial job-tag [#"files3?.dsv.data.cod.ru"
+       {:obtain-link leica/job-cod.ru-link-name
+        :obtain-tag  (partial leica/job-tag [#"files3?.dsv.data.cod.ru"
                                        #"files2.dsv.data.cod.ru"])
-        :obtain-path (partial job-file "/home/haru/inbox/dsv")
-        :obtain-length job-length
-        :download    download}]
+        :obtain-path (partial leica/job-file "/home/haru/inbox/dsv")
+        :obtain-length leica/job-length
+        :download    leica/download}]
       [#"http://[\w\.]*data.cod.ru/\d+"
-       {:obtain-link job-cod.ru-link-name
-        :obtain-tag  (partial job-tag [#"files3?.dsv.data.cod.ru"
+       {:obtain-link leica/job-cod.ru-link-name
+        :obtain-tag  (partial leica/job-tag [#"files3?.dsv.data.cod.ru"
                                        #"files2.dsv.data.cod.ru"])
-        :obtain-path (partial job-file "/home/haru/inbox/dsv")
-        :obtain-length job-length
-        :download    download}]
+        :obtain-path (partial leica/job-file "/home/haru/inbox/dsv")
+        :obtain-length leica/job-length
+        :download    leica/download}]
       [#"http://77.35.112.8[1234]/.+"
-       {:obtain-link job-link
-        :obtain-name job-name
-        :obtain-tag  (partial job-tag nil)
-        :obtain-path (partial job-file "/home/haru/inbox/dsv")
-        :obtain-length job-length
-        :download    download}]
+       {:obtain-link leica/job-link
+        :obtain-name leica/job-name
+        :obtain-tag  (partial leica/job-tag nil)
+        :obtain-path (partial leica/job-file "/home/haru/inbox/dsv")
+        :obtain-length leica/job-length
+        :download    leica/download}]
       [#"http://dsvload.net/ftpupload/.+"
-       {:obtain-link job-link
-        :obtain-name job-name
-        :obtain-tag  (partial job-tag nil)
-        :obtain-path (partial job-file "/home/haru/inbox/dsv")
-        :obtain-length job-length
-        :download    download}]])
+       {:obtain-link leica/job-link
+        :obtain-name leica/job-name
+        :obtain-tag  (partial leica/job-tag nil)
+        :obtain-path (partial leica/job-file "/home/haru/inbox/dsv")
+        :obtain-length leica/job-length
+        :download    leica/download}]])
+
+(let [jj {:link (URI. "http://files3.dsv.data.cod.ru/?WyIyMGI4%3D%3D")
+          :name "Hayate_the_combat_butler.mkv"
+          :address (URI. "http://dsv.data.cod.ru/433148")}]
+  (deftest test-tag
+    (is (= (:tag (leica/job-tag nil jj))
+           "files3.dsv.data.cod.ru"))
+    (is (= (:tag (leica/job-tag #"files3?.dsv.data.cod.ru" jj))
+           "files3?.dsv.data.cod.ru"))
+    (is (= (:tag (leica/job-tag [#"files3?.dsv.data.cod.ru"
+                                 #"files2.dsv.data.cod.ru"] jj))
+           "files3?.dsv.data.cod.ru"))))
+
+(deftest test-match
+  (is (= (match "http://dsv.data.cod.ru/433148"
+                '((#"http://dsv.data.cod.ru/\d{6}" :MATCH))
+                {:rule-response rest})
+         '(:MATCH))))
+
+
