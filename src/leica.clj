@@ -89,6 +89,9 @@
   (when-let [name (job :name)]
     (assoc job :file (new File (join-paths dir name)))))
 
+(defn job-die [job]
+  (assoc job :alive false))
+
 (defn download [job]
   (when-let [#^URI link (job :link)]
     (when-let [#^File file (job :file)]
@@ -117,10 +120,7 @@
    Сопоставитель (matcher) сравнивает паттерн с образцом, и если
    в результате этого хоть что-то получается, то сравнение считается удачным.
         
-   Обычно правила (rules) представлены в виде списка:
-        ((паттерн, соответствие),
-         (паттерн, соответствие),
-         ...)"
+   Обычно правила представлены в виде списка ((паттерн соответствие), ...)"
 
   [sample rules &
    [{:keys [matcher rule-pattern rule-response action]
@@ -135,10 +135,6 @@
         rules))
 
 ;;; AGENCY
-
-(defstruct environment
-  ;; Окружение, в котором агенты существуют.
-  :agents) ;; Агенты в окружении
 
 (defstruct job
   ;; Агент для скачивания файла.
@@ -163,6 +159,9 @@
   :tag     ;; идентификатор по которому разделяются потоки загрузок
   :file    ;; файл в который сохраняется скачанное
   :length) ;; размер файла, что нужно скачать
+
+(defn alive? [agnt] (:alive agnt))
+(def dead? (complement alive?))
 
 (defn reflex-job-program
   "Простая рефлексная программа для загрузочного агента."
@@ -189,47 +188,83 @@
           [otherwise          :download]])))
 
 (defn make-job
-  "Конструктор агента из строки с адресом и набора правил."
+  "Конструктор загрузочного агента из строки с адресом и набора правил."
   [line rules]
   (let [[address actions] (match line rules {:action list})]
     (when (and address actions)
-      (agent (struct-map job :program reflex-job-program
-                         :address address
-                         :actions actions)))))
+      (struct-map job :program reflex-job-program :alive true
+                  :address address :actions actions))))
 
-(defmulti percept 
-  "[agent env] Return the percept for this agent."
-  nil)
+;;; ENVIRONMENTS
 
-(defmulti run-environment 
-  "Basic environment simulator.
-   It gives each agent its percept, gets an action from each agent, 
-   and updates the environment. It also keeps score for each agent, 
-   and optionally displays intermediate results."
-  ;; [env]
-  identity)
+(defstruct tagger-environment
+  ;; Окружение отмечает неотмеченные агенты и отправляет их в
+  ;; отмеченные окружения.
+  :type    ;; тип окружения, для диспетчирезации мультиметодов
+  :tagenvs ;; отмеченные окружения располагаются в хэше {tag env, ...}
+  :agents) ;; неотмеченные агенты
 
-(defmulti update-fn 
-  "[env] Modify the environment, based on agents actions, etc."
-  identity)
+(defstruct tagged-environment
+  ;; Отмеченное (tagged) окружение с отмеченными агентами.
+  ;; Окружение выполняется как агент в окружении более высокого порядка.
+  :type    ;; ::tagged
+  :tag     ;; отметка
+  :agents) ;; агенты в окружении
 
-(defmulti legal-actions
-  "[env] A list of the action operators that an agent can do."
-  identity)
+(defmulti step
+  "Базовый симулятор окружения, в котором окружение проживает один момент.
+   Окружение дает каждому агенту восприятие, получает от него действие и
+   выполняет это действие. В итоге окружение получает обновленных агентов."
+  :type)
 
-(defmulti termination?
-  "[env] Return true if the simulation should end now."
-  identity)
+(defmulti add-agent 
+  "Добавляет агента в окружение."
+  (fn [env agnt] (:type env)))
 
-(defmulti display-environment
-  "[env] Display the current state of the environment."
-  identity)
+(defn make-tagger-environment [agents]
+  (struct-map tagger-environment :type ::tagger :agents agents :tagenvs (ref {})))
 
-(defmulti execute-agent-actions
-  "[env] Each agent (if the agent is alive and has specified a legal action) takes the action."
-  identity)
+(defn make-tagged-environment [tag agents]
+  (struct-map tagged-environment :type ::tagged :agents agents :tag tag))
 
-;;; TEST
+(defn all-agents-is-dead? [env]
+  (every? dead? (:agents env)))
+
+(defmethod step ::tagger [env]
+  (assoc env
+    :agents
+    (for [agnt (env :agents) :when agnt]
+      (if-not (alive? agnt) agnt
+              (let [percept {:self agnt}
+                    action  ((agnt :program) percept)
+                    tag (agnt :tag)]
+                (cond tag
+                      ;; После удачного получения тага агентом он перекидывается
+                      ;; в дочернее окружение с таким же тагом, если такое
+                      ;; окружение не существует -- оно создается.
+                      (let [tagenvs (env :tagenvs)
+                            toenv (or (tagenvs tag)
+                                      (dosync (alter tagenvs conj
+                                                     {tag (agent (make-tagged-environment tag []))})
+                                              (tagenvs tag)))]
+                        (do (send-off toenv add-agent agnt)
+                            nil))
+
+                      ;; Всё остальное выполняется в дочернем окружении.
+                      :else (when-not (= action :download)
+                              (((agnt :actions) action) agnt))))))))
+
+(defmethod step ::tagged [env]
+  (assoc env
+    :agents
+    (for [agnt (env :agents) :when agnt]
+      (if-not (alive? agnt) agnt
+              (let [percept {:self agnt}
+                    action  ((agnt :program) percept)]
+                (((agnt :actions) action) agnt))))))
+
+(defmethod add-agent ::tagged [env agnt]
+  (assoc env :agents (conj (env :agents) agnt)))
 
 ;; Хосты упорядочены от частного к общему
 (def job-rules
@@ -239,7 +274,8 @@
                                        #"files2.dsv.data.cod.ru"])
         :obtain-path (partial job-file "/home/haru/inbox/dsv")
         :obtain-length job-length
-        :download    download}]
+        :download    download
+        :die job-die}]
       [#"http://[\w\.]*data.cod.ru/\d+"
        {:obtain-link job-datacodru-link-name
         :obtain-tag  (partial job-tag nil)
@@ -260,6 +296,8 @@
         :obtain-path (partial job-file "/home/haru/inbox/dsv")
         :obtain-length job-length
         :download    download}]])
+
+;;; TESTS
 
 (let [jj {:link (URI. "http://files3.dsv.data.cod.ru/?WyIyMGI4%3D%3D")
           :name "Hayate_the_combat_butler.mkv"
@@ -284,3 +322,20 @@
                 '((#"http://dsv.data.cod.ru/\d{6}" :MATCH))
                 {:rule-response rest})
          '(:MATCH))))
+
+;; (let [jobs [(make-job "http://dsv.data.cod.ru/441778" job-rules)
+;;             (make-job "gold http://dsv.data.cod.ru/443824" job-rules)]
+;;       env (make-tagger-environment jobs)]
+;;   (def pte (step (step env))))
+
+;; (do
+;;   (for [a (pte :agents) :when a]
+;;     (let [tag (a :tag)
+;;           tagenvs (pte :tagenvs)
+;;           toenv (dosync (alter tagenvs conj
+;;                                {tag (agent (make-tagged-environment tag []))})
+;;                         (tagenvs tag))]
+;;       (send-off toenv add-agent a)))
+;;   (pte :tagenvs))
+
+;; (step pte)
