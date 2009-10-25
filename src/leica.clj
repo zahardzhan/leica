@@ -33,6 +33,7 @@
 
 (defn parse-datacodru-page
   "Парсит страницу файла на датакоде."
+  ;; TODO: нужно разобраться с парсером, ибо он необъятный
   [url]
   ;; spacep = re.compile('Вам доступно ([\d\.]+) (.+)')
   ;; value, unit = (match.group(1), match.group(2))
@@ -54,7 +55,7 @@
                  (and (instance? TagNode tag) (= "b" (.getRawTagName tag)))
                  (when-let [the-name (.getAttribute tag "title")]
                    (reset! name the-name)))))]
-    (.visitAllNodesWith parser visitor)
+    (.visitAllNodesWith parser visitor) ;; throws ParserException
     {:name @name :link (new URI @link)}))
 
 (defn job-datacodru-link-name [job]
@@ -198,15 +199,20 @@
 ;;; ENVIRONMENTS
 
 (defstruct tagger-environment
-  ;; Окружение отмечает неотмеченные агенты и отправляет их в
-  ;; отмеченные окружения.
+  ;; Агенты живут в этом окружении до тех пор, пока у них не появится таг.
+  ;; Потом они переходят в дочернее окружение с таким же тагом, и в нём уже
+  ;; загружаются. Все дочерние окружения выполняются как агенты.
+  ;; Окружение завершает работу после того как все агенты перейдут в 
+  ;; дочерние окружения и уже в них завершат своё дело.
+  
   :type    ;; тип окружения, для диспетчирезации мультиметодов
   :tagenvs ;; отмеченные окружения располагаются в хэше {tag env, ...}
   :agents) ;; неотмеченные агенты
 
 (defstruct tagged-environment
-  ;; Отмеченное (tagged) окружение с отмеченными агентами.
+  ;; Отмеченное окружение с отмеченными агентами.
   ;; Окружение выполняется как агент в окружении более высокого порядка.
+
   :type    ;; ::tagged
   :tag     ;; отметка
   :agents) ;; агенты в окружении
@@ -214,7 +220,7 @@
 (defmulti step
   "Базовый симулятор окружения, в котором окружение проживает один момент.
    Окружение дает каждому агенту восприятие, получает от него действие и
-   выполняет это действие. В итоге окружение получает обновленных агентов."
+   выполняет это действие. В итоге окружение возвращает в себя обновленных агентов."
   :type)
 
 (defmulti add-agent 
@@ -227,6 +233,12 @@
 (defn make-tagged-environment [tag agents]
   (struct-map tagged-environment :type ::tagged :agents agents :tag tag))
 
+(defmethod add-agent ::tagger [env agnt]
+  (assoc env :agents (conj (env :agents) agnt)))
+
+(defmethod add-agent ::tagged [env agnt]
+  (assoc env :agents (conj (env :agents) agnt)))
+
 (defn all-agents-is-dead? [env]
   (every? dead? (:agents env)))
 
@@ -238,21 +250,21 @@
               (let [percept {:self agnt}
                     action  ((agnt :program) percept)
                     tag (agnt :tag)]
-                (cond tag
-                      ;; После удачного получения тага агентом он перекидывается
-                      ;; в дочернее окружение с таким же тагом, если такое
-                      ;; окружение не существует -- оно создается.
-                      (let [tagenvs (env :tagenvs)
-                            toenv (or (tagenvs tag)
+                (cond 
+                  ;; После удачного получения тага агентом он перекидывается
+                  ;; в дочернее окружение с таким же тагом, если такое
+                  ;; окружение не существует -- оно создается.
+                  tag (let [tagenvs (env :tagenvs)
+                            toenv (or (@tagenvs tag)
                                       (dosync (alter tagenvs conj
                                                      {tag (agent (make-tagged-environment tag []))})
-                                              (tagenvs tag)))]
+                                              (@tagenvs tag)))]
                         (do (send-off toenv add-agent agnt)
                             nil))
 
-                      ;; Всё остальное выполняется в дочернем окружении.
-                      :else (when-not (= action :download)
-                              (((agnt :actions) action) agnt))))))))
+                  ;; Всё остальное выполняется в дочернем окружении.
+                  :else (when-not (= action :download)
+                          (((agnt :actions) action) agnt))))))))
 
 (defmethod step ::tagged [env]
   (assoc env
@@ -263,8 +275,33 @@
                     action  ((agnt :program) percept)]
                 (((agnt :actions) action) agnt))))))
 
-(defmethod add-agent ::tagged [env agnt]
-  (assoc env :agents (conj (env :agents) agnt)))
+;; def step(self):
+;;     agents = self.alive_agents()
+;;     actions = [agent.program(self.percept(agent)) for agent in agents]
+;;     for (agent, action) in zip(agents, actions):
+;;         self.execute(agent, action)
+;;     self.exogenous_change()
+;;     return self
+
+;; def step(self):
+;;     if not Environment.is_done(self):
+;;         Environment.step(self)
+;;     else:
+;;         # После того как окружение закончит свою работу оно ждёт дочерние окружения
+;;         for tag in self.subenv:
+;;             self.subenv[tag].set_wait(False)
+;;         while not self.all_subenvs_is_done():
+;;             for tag in self.subenv:
+;;                 env = self.subenv[tag]
+;;                 if env.is_alive():
+;;                     env.join()
+
+;; def run(self):
+;;     while not self.is_done():
+;;         self.agents += list(self.incoming_agents())
+;;         self.step()
+;;     else:
+;;         printdbg('environment %s is DONE' % self.name, self.verbosity)
 
 ;; Хосты упорядочены от частного к общему
 (def job-rules
@@ -323,10 +360,9 @@
                 {:rule-response rest})
          '(:MATCH))))
 
-;; (let [jobs [(make-job "http://dsv.data.cod.ru/441778" job-rules)
-;;             (make-job "gold http://dsv.data.cod.ru/443824" job-rules)]
-;;       env (make-tagger-environment jobs)]
-;;   (def pte (step (step env))))
+(let [jobs [(make-job "http://dsv.data.cod.ru/441778" job-rules)
+            (make-job "gold http://dsv.data.cod.ru/443824" job-rules)]]
+  (def env (step (step (make-tagger-environment jobs)))))
 
 ;; (do
 ;;   (for [a (pte :agents) :when a]
