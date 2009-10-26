@@ -10,7 +10,7 @@
   leica
   (:require [clojure.contrib.http.agent :as ha]
             [clojure.contrib.duck-streams :as duck])
-  (:use clojure.contrib.test-is)
+  (:use clojure.contrib.test-is clojure.contrib.seq-utils)
   (:import (java.io File InputStream ByteArrayOutputStream
                     ByteArrayInputStream)
            (java.net HttpURLConnection InetAddress URI URL URLEncoder)
@@ -33,8 +33,8 @@
 
 (defn parse-datacodru-page
   "Парсит страницу файла на датакоде."
-  ;; TODO: нужно разобраться с парсером, ибо он необъятный
   [url]
+  ;; TODO: нужно разобраться с парсером, ибо он необъятный
   ;; spacep = re.compile('Вам доступно ([\d\.]+) (.+)')
   ;; value, unit = (match.group(1), match.group(2))
   ;; self.space = int(float(value) * \
@@ -137,29 +137,33 @@
 
 ;;; AGENCY
 
-(defstruct job
-  ;; Агент для скачивания файла.
+(defstruct
+  #^{:doc "Агент для скачивания файла.
 
-  ;; Агент это что-то, что воспринимает свое окружение и действует.
-  ;; У агента есть тело, которое хранит состояние, и программа,
-  ;; которая выбирает действие, основываясь на состоянии агента и 
-  ;; восприятии окружения. Действие агента возвращается обратно в окружение
-  ;; для его выполнения. Представление восприятия и действия зависит от конкретного
-  ;; окружения и агента.
+  Агент это что-то, что воспринимает свое окружение и действует.
+  У агента есть тело, которое хранит состояние, и программа,
+  которая выбирает действие, основываясь на состоянии агента и 
+  восприятии окружения. Действие агента возвращается обратно в окружение
+  для его выполнения. Представление восприятия и действия зависит от конкретного
+  окружения и агента.
 
-  :name    ;; имя агента
-  :program ;; слот программы агента, содержит функцию одного аргумента,
-           ;; результата восприятия окружения, и возвращает действие
-  :actions ;; набор функций-действий агента
-  :percept ;; последнее восприятие
-  :action  ;; последнее действие
-  :alive   ;; определяет жив агент или умер
+  :name    имя агента
+  :program слот программы агента, содержит функцию одного аргумента,
+           результата восприятия окружения, и возвращает действие
+  :actions набор функций-действий агента
+  :percept последнее восприятие
+  :action  последнее действие
+  :alive   определяет жив агент или умер
 
-  :address ;; адрес задания
-  :link    ;; прямая ссылка на файл, который нужно скачать
-  :tag     ;; идентификатор по которому разделяются потоки загрузок
-  :file    ;; файл в который сохраняется скачанное
-  :length) ;; размер файла, что нужно скачать
+  :address адрес задания
+  :link    прямая ссылка на файл, который нужно скачать
+  :tag     идентификатор по которому разделяются потоки загрузок
+  :file    файл в который сохраняется скачанное
+  :length  размер файла, что нужно скачать"}
+
+  job 
+  :name :program :actions :percept :action :alive
+  :address :link :tag :file :length)
 
 (defn alive? [agnt] (:alive agnt))
 (def dead? (complement alive?))
@@ -198,24 +202,28 @@
 
 ;;; ENVIRONMENTS
 
-(defstruct tagger-environment
-  ;; Агенты живут в этом окружении до тех пор, пока у них не появится таг.
-  ;; Потом они переходят в дочернее окружение с таким же тагом, и в нём уже
-  ;; загружаются. Все дочерние окружения выполняются как агенты.
-  ;; Окружение завершает работу после того как все агенты перейдут в 
-  ;; дочерние окружения и уже в них завершат своё дело.
+(defstruct 
+    #^{:doc "Агенты живут в этом окружении до тех пор, пока у них не появится таг.
+  Потом они переходят в дочернее окружение с таким же тагом, и в нём уже
+  загружаются. Все дочерние окружения выполняются как агенты.
+  Окружение завершает работу после того как все агенты перейдут в 
+  дочерние окружения и уже в них завершат своё дело.
+
+  :type    тип окружения, для диспетчирезации мультиметодов
+  :tagenvs отмеченные окружения располагаются в хэше {tag env, ...}
+  :agents  неотмеченные агенты"}
+
+  tagger-environment :type :tagenvs :agents)
+
+(defstruct
+    #^{:doc "Отмеченное окружение с отмеченными агентами.
+  Окружение выполняется как агент в окружении более высокого порядка.
+
+  :type    ::tagged
+  :tag     отметка
+  :agents  агенты в окружении"}
   
-  :type    ;; тип окружения, для диспетчирезации мультиметодов
-  :tagenvs ;; отмеченные окружения располагаются в хэше {tag env, ...}
-  :agents) ;; неотмеченные агенты
-
-(defstruct tagged-environment
-  ;; Отмеченное окружение с отмеченными агентами.
-  ;; Окружение выполняется как агент в окружении более высокого порядка.
-
-  :type    ;; ::tagged
-  :tag     ;; отметка
-  :agents) ;; агенты в окружении
+  tagged-environment :type :tag :agents)
 
 (defmulti step
   "Базовый симулятор окружения, в котором окружение проживает один момент.
@@ -228,7 +236,7 @@
   (fn [env agnt] (:type env)))
 
 (defn make-tagger-environment [agents]
-  (struct-map tagger-environment :type ::tagger :agents agents :tagenvs (ref {})))
+  (struct-map tagger-environment :type ::tagger :agents agents :tagenvs {}))
 
 (defn make-tagged-environment [tag agents]
   (struct-map tagged-environment :type ::tagged :agents agents :tag tag))
@@ -239,41 +247,42 @@
 (defmethod add-agent ::tagged [env agnt]
   (assoc env :agents (conj (env :agents) agnt)))
 
+(defn alive-agents [agents] (filter alive? agents))
+
 (defn all-agents-is-dead? [env]
   (every? dead? (:agents env)))
 
-(defmethod step ::tagger [env]
-  (assoc env
-    :agents
-    (for [agnt (env :agents) :when agnt]
-      (if-not (alive? agnt) agnt
-              (let [percept {:self agnt}
-                    action  ((agnt :program) percept)
-                    tag (agnt :tag)]
-                (cond 
-                  ;; После удачного получения тага агентом он перекидывается
-                  ;; в дочернее окружение с таким же тагом, если такое
-                  ;; окружение не существует -- оно создается.
-                  tag (let [tagenvs (env :tagenvs)
-                            toenv (or (@tagenvs tag)
-                                      (dosync (alter tagenvs conj
-                                                     {tag (agent (make-tagged-environment tag []))})
-                                              (@tagenvs tag)))]
-                        (do (send-off toenv add-agent agnt)
-                            nil))
+(defn execute-agent-actions [agents & [{:keys [forbidden]
+                                        :or {:forbidden nil}}]]
+  (for [agnt agents :when agnt]
+    (let [percept {:self agnt}
+          action  ((agnt :program) percept)]
+      (if (contains? forbidden action) agnt
+          (((agnt :actions) action) agnt)))))
 
-                  ;; Всё остальное выполняется в дочернем окружении.
-                  :else (when-not (= action :download)
-                          (((agnt :actions) action) agnt))))))))
+(defmethod step ::tagger [env]
+  (let [[tagged-agents untagged-agents] 
+        (separate :tag (alive-agents (env :agents)))
+
+        ;; Агенты с тагом перекидываются в дочернее окружение с таким же тагом,
+        ;; если такое окружение не существует -- оно создается.
+        updated-tagenvs 
+        (loop [agents tagged-agents tag-envs (env :tagenvs)]
+          (if-not (seq agents) tag-envs
+                  (let [agnt (first agents)
+                        tag (agnt :tag)
+                        tag-env (or (tag-envs tag)
+                                    (agent (make-tagged-environment tag [])))]
+                    (send-off tag-env add-agent agnt)
+                    (recur (rest agents) (if-not (tag-envs tag) 
+                                           (assoc tag-envs tag tag-env)
+                                           tag-envs)))))] 
+    (assoc env :tagenvs updated-tagenvs
+           :agents (execute-agent-actions untagged-agents
+                                          {:forbidden [:download]}))))
 
 (defmethod step ::tagged [env]
-  (assoc env
-    :agents
-    (for [agnt (env :agents) :when agnt]
-      (if-not (alive? agnt) agnt
-              (let [percept {:self agnt}
-                    action  ((agnt :program) percept)]
-                (((agnt :actions) action) agnt))))))
+  (assoc env :agents (execute-agent-actions (alive-agents (env :agents)))))
 
 ;; def step(self):
 ;;     agents = self.alive_agents()
@@ -362,16 +371,7 @@
 
 (let [jobs [(make-job "http://dsv.data.cod.ru/441778" job-rules)
             (make-job "gold http://dsv.data.cod.ru/443824" job-rules)]]
-  (def env (step (step (make-tagger-environment jobs)))))
-
-;; (do
-;;   (for [a (pte :agents) :when a]
-;;     (let [tag (a :tag)
-;;           tagenvs (pte :tagenvs)
-;;           toenv (dosync (alter tagenvs conj
-;;                                {tag (agent (make-tagged-environment tag []))})
-;;                         (tagenvs tag))]
-;;       (send-off toenv add-agent a)))
-;;   (pte :tagenvs))
-
-;; (step pte)
+  (def env0 (make-tagger-environment jobs))
+  (def env1 (step env0))
+  (def env2 (step env1))
+  (def env3 (step env2)))
