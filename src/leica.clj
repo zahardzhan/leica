@@ -15,6 +15,7 @@
                     ByteArrayInputStream)
            (java.net HttpURLConnection InetAddress URI URL URLEncoder)
            (org.htmlparser Parser)
+           (org.htmlparser.util ParserException)
            (org.htmlparser.visitors NodeVisitor)
            (org.htmlparser.tags LinkTag)
            (org.htmlparser.nodes TagNode)))
@@ -32,8 +33,8 @@
   (str (File. (File. path1) path2)))
 
 (defn parse-datacodru-page
-  "Парсит страницу файла на датакоде."
-  [url]
+  "Парсит текст страницы файла на датакоде."
+  [page]
   ;; TODO: нужно разобраться с парсером, ибо он необъятный
   ;; spacep = re.compile('Вам доступно ([\d\.]+) (.+)')
   ;; value, unit = (match.group(1), match.group(2))
@@ -43,7 +44,7 @@
   ;;                                         'КБ': 1024}))
   (let [name (atom nil)
         link (atom nil)      
-        parser (Parser. url)
+        parser (Parser/createParser page nil)
         visitor
         (proxy [NodeVisitor] []
           (visitTag
@@ -55,14 +56,17 @@
                  (and (instance? TagNode tag) (= "b" (.getRawTagName tag)))
                  (when-let [the-name (.getAttribute tag "title")]
                    (reset! name the-name)))))]
-    (.visitAllNodesWith parser visitor) ;; throws ParserException
-    {:name @name :link (new URI @link)}))
+    (try (.visitAllNodesWith parser visitor)
+         {:name @name :link (new URI @link)}
+         (catch ParserException _ nil))))
 
 (defn job-datacodru-link-name [job]
   (when-let [#^URI address (job :address)]
-    (let [parsed (parse-datacodru-page (str address))]
-      (when (and (parsed :name) (parsed :link))
-        (assoc job :name (parsed :name) :link (parsed :link))))))
+    (let [page-agent (ha/http-agent address)]
+      (if-not (ha/success? page-agent) job ;; TODO: Проработать коды ошибок
+              (let [parsed (parse-datacodru-page (ha/string page-agent))]
+                (when (and (parsed :name) (parsed :link))
+                  (assoc job :name (parsed :name) :link (parsed :link))))))))
 
 (defn job-link [job]
   (when-let [#^URI address (job :address)]
@@ -70,8 +74,7 @@
 
 (defn job-name [job]
   (when-let [#^URI link (job :link)]
-    (assoc job :name (second (re-find #"/([^/]+)$"
-                                      (.getPath link))))))
+    (assoc job :name (second (re-find #"/([^/]+)$" (.getPath link))))))
 
 (defn job-tag [pattern job]
   (when-let [#^URI link (job :link)]
@@ -83,8 +86,10 @@
 
 (defn job-length [job]
   (when-let [#^URI link (job :link)]
-    (assoc job :length (Integer/parseInt
-                        (:content-length (ha/headers (ha/http-agent link)))))))
+    (let [job-agent (ha/http-agent link)]
+      (if-not (ha/success? job-agent) job
+              (assoc job :length (Integer/parseInt
+                                  (:content-length (ha/headers job-agent))))))))
 
 (defn job-file [dir job]
   (when-let [name (job :name)]
@@ -97,15 +102,17 @@
   (when-let [#^URI link (job :link)]
     (when-let [#^File file (job :file)]
       (let [headers {"Range" (str "bytes=" (file-length file) "-")}
-            loader
-            (ha/http-agent link
-                           :headers headers
-                           :handler (fn [remote]
-                                      (with-open [local (duck/writer file)]
-                                        (duck/copy (ha/stream remote) local))))]
+            loader (ha/http-agent link
+                                  :headers headers
+                                  :handler
+                                  (fn [remote]
+                                    (with-open [local (duck/writer file)]
+                                      (duck/copy (ha/stream remote) local))))]
         (ha/result loader)
-        (ha/done? loader)))))
-
+        (if (ha/done? loader)
+          (job-die job)
+          job)))))
+                      
 ;;; RULE
 
 (defn default-matcher 
@@ -186,7 +193,7 @@
           [(missing :link)    :obtain-link]
           [(missing :tag)     :obtain-tag]
           [(missing :name)    :obtain-name]
-          [(missing :path)    :obtain-path]
+          [(missing :file)    :obtain-file]
           [(missing :length)  :obtain-length]
           [fully-loaded       :die]
           [out-of-space       :die]
@@ -225,21 +232,29 @@
   
   tagged-environment :type :tag :agents)
 
+(defn make-tagger-environment [agents]
+  (struct-map tagger-environment :type ::tagger :agents agents :tagenvs {}))
+
+(defn make-tagged-environment [tag agents]
+  (struct-map tagged-environment :type ::tagged :agents agents :tag tag))
+
+(defmulti add-agent 
+  "Добавляет агента в окружение."
+  (fn [env agnt] (:type env)))
+
 (defmulti step
   "Базовый симулятор окружения, в котором окружение проживает один момент.
    Окружение дает каждому агенту восприятие, получает от него действие и
    выполняет это действие. В итоге окружение возвращает в себя обновленных агентов."
   :type)
 
-(defmulti add-agent 
-  "Добавляет агента в окружение."
-  (fn [env agnt] (:type env)))
+(defmulti run-env
+  "Симулятор окружения."
+  :type)
 
-(defn make-tagger-environment [agents]
-  (struct-map tagger-environment :type ::tagger :agents agents :tagenvs {}))
-
-(defn make-tagged-environment [tag agents]
-  (struct-map tagged-environment :type ::tagged :agents agents :tag tag))
+(defmulti termination? 
+  "Return true if the simulation should end now."
+  :type)
 
 (defmethod add-agent ::tagger [env agnt]
   (assoc env :agents (conj (env :agents) agnt)))
@@ -251,6 +266,16 @@
 
 (defn all-agents-is-dead? [env]
   (every? dead? (:agents env)))
+
+(defn no-agents [env]
+  (empty (:agents env)))
+
+(defmethod termination? ::tagged [env]
+  (or (no-agents env) (all-agents-is-dead? env)))
+
+(defmethod termination? ::tagger [env]
+  (and (or (no-agents env) (all-agents-is-dead? env))
+       (every? (fn [tagenv] (termination? @tagenv)) (env :tagenvs))))
 
 (defn execute-agent-actions [agents & [{:keys [forbidden]
                                         :or {:forbidden nil}}]]
@@ -284,17 +309,17 @@
 (defmethod step ::tagged [env]
   (assoc env :agents (execute-agent-actions (alive-agents (env :agents)))))
 
-;; def step(self):
-;;     agents = self.alive_agents()
-;;     actions = [agent.program(self.percept(agent)) for agent in agents]
-;;     for (agent, action) in zip(agents, actions):
-;;         self.execute(agent, action)
-;;     self.exogenous_change()
-;;     return self
+;; (defmethod run-env ::tagged [env]
+;;   (while (not (termination? env))
+;;     (send-off env step)
+;;     (await env)))
 
-;; def step(self):
-;;     if not Environment.is_done(self):
-;;         Environment.step(self)
+;; (defmethod run-env ::tagger [env]
+;;   (if-not (or (no-agents env) (all-agents-is-dead? env))
+;;     (do (send-off env step)
+;;         (when (seq (env :tagenvs))
+;;           (doseq [tagenv (env :tagenvs)] (run
+
 ;;     else:
 ;;         # После того как окружение закончит свою работу оно ждёт дочерние окружения
 ;;         for tag in self.subenv:
@@ -318,28 +343,28 @@
        {:obtain-link job-datacodru-link-name
         :obtain-tag  (partial job-tag [#"files3?.dsv.data.cod.ru"
                                        #"files2.dsv.data.cod.ru"])
-        :obtain-path (partial job-file "/home/haru/inbox/dsv")
+        :obtain-file (partial job-file "/home/haru/inbox/dsv")
         :obtain-length job-length
         :download    download
         :die job-die}]
       [#"http://[\w\.]*data.cod.ru/\d+"
        {:obtain-link job-datacodru-link-name
         :obtain-tag  (partial job-tag nil)
-        :obtain-path (partial job-file "/home/haru/inbox/dsv")
+        :obtain-file (partial job-file "/home/haru/inbox/dsv")
         :obtain-length job-length
         :download    download}]
       [#"http://77.35.112.8[1234]/.+"
        {:obtain-link job-link
         :obtain-name job-name
         :obtain-tag  (partial job-tag nil)
-        :obtain-path (partial job-file "/home/haru/inbox/dsv")
+        :obtain-file (partial job-file "/home/haru/inbox/dsv")
         :obtain-length job-length
         :download    download}]
       [#"http://dsvload.net/ftpupload/.+"
        {:obtain-link job-link
         :obtain-name job-name
         :obtain-tag  (partial job-tag nil)
-        :obtain-path (partial job-file "/home/haru/inbox/dsv")
+        :obtain-file (partial job-file "/home/haru/inbox/dsv")
         :obtain-length job-length
         :download    download}]])
 
@@ -374,4 +399,7 @@
   (def env0 (make-tagger-environment jobs))
   (def env1 (step env0))
   (def env2 (step env1))
-  (def env3 (step env2)))
+  (def env3 (step env2))
+  
+  (def e0 (val (first (env3 :tagenvs))))
+  (def a0 (first (@e0 :agents))))
