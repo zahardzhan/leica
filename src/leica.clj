@@ -214,166 +214,88 @@
 
 ;;; ENVIRONMENTS
 
-;; (defstruct 
-;;     #^{:doc "Агенты живут в этом окружении до тех пор, пока у них не появится таг.
-;;   Потом они переходят в дочернее окружение с таким же тагом, и в нём уже
-;;   загружаются. Все дочерние окружения выполняются как агенты.
-;;   Окружение завершает работу после того как все агенты перейдут в 
-;;   дочерние окружения и уже в них завершат своё дело.
+(defstruct
+    #^{:doc "Окружение.
 
-;;   :type    тип окружения, для диспетчирезации мультиметодов
-;;   :tagenvs отмеченные окружения располагаются в хэше {tag env, ...}
-;;   :agents  неотмеченные агенты"}
+  :type    тип окружения, для диспетчирезации мультиметодов
+  :walkers замыкания, координирующие работу агентов
+  :agents  неотмеченные агенты"}
+  environment :type :agents :walkers)
 
-;;   tagger-environment :type :tagenvs :agents)
+(defmulti add-agent
+  "Добавляет агента в окружение."
+  (fn [env ag] (:type env)))
 
-;; (defstruct
-;;     #^{:doc "Отмеченное окружение с отмеченными агентами.
-;;   Окружение выполняется как агент в окружении более высокого порядка.
+(defmulti add-walker
+  "??"
+  (fn [env tag walker] (:type env)))
 
-;;   :type    ::tagged
-;;   :tag     отметка
-;;   :agents  агенты в окружении"}
-  
-;;   tagged-environment :type :tag :agents)
+(defmulti step
+  "Базовый симулятор окружения, в котором окружение проживает один момент.
+   Окружение дает каждому агенту восприятие, получает от него действие и
+   выполняет это действие. В итоге окружение возвращает в себя обновленных агентов."
+  :type)
 
-;; (defn make-tagger-environment [agents]
-;;   (struct-map tagger-environment :type ::tagger :agents agents :tagenvs {}))
+(defmulti run
+  "Симулятор окружения."
+  :type)
 
-;; (defn make-tagged-environment [tag agents]
-;;   (struct-map tagged-environment :type ::tagged :agents agents :tag tag))
+(defmulti termination? 
+  "Return true if the simulation should end now."
+  :type)
 
-;; (defmulti add-agent 
-;;   "Добавляет агента в окружение."
-;;   (fn [env agnt] (:type env)))
+(defn alive-agents [agents] (filter alive? agents))
 
-;; (defmulti step
-;;   "Базовый симулятор окружения, в котором окружение проживает один момент.
-;;    Окружение дает каждому агенту восприятие, получает от него действие и
-;;    выполняет это действие. В итоге окружение возвращает в себя обновленных агентов."
-;;   :type)
+(defn all-agents-is-dead? [env]
+  (every? dead? (:agents env)))
 
-;; (defmulti run-env
-;;   "Симулятор окружения."
-;;   :type)
+(defn no-agents [env]
+  (empty (:agents env)))
 
-;; (defmulti termination? 
-;;   "Return true if the simulation should end now."
-;;   :type)
-
-;; (defmethod add-agent ::tagger [env agnt]
-;;   (assoc env :agents (conj (env :agents) agnt)))
-
-;; (defmethod add-agent ::tagged [env agnt]
-;;   (assoc env :agents (conj (env :agents) agnt)))
-
-;; (defn alive-agents [agents] (filter alive? agents))
-
-;; (defn all-agents-is-dead? [env]
-;;   (every? dead? (:agents env)))
-
-;; (defn no-agents [env]
-;;   (empty (:agents env)))
-
-;; (defmethod termination? ::tagged [env]
-;;   (or (no-agents env) (all-agents-is-dead? env)))
-
-;; (defmethod termination? ::tagger [env]
-;;   (and (or (no-agents env) (all-agents-is-dead? env))
-;;        (every? (fn [tagenv] (termination? @tagenv)) (env :tagenvs))))
-
-;; (defn execute-agent-actions [agents & [{:keys [forbidden]
-;;                                         :or {:forbidden nil}}]]
-;;   (for [agnt agents :when agnt]
-;;     (let [percept {:self agnt}
-;;           action  ((agnt :program) percept)]
-;;       (if (contains? forbidden action) agnt
-;;           (((agnt :actions) action) agnt)))))
-
-;; (defmethod step ::tagger [env]
-;;   (let [[tagged-agents untagged-agents] 
-;;         (separate :tag (alive-agents (env :agents)))
-
-;;         ;; Агенты с тагом перекидываются в дочернее окружение с таким же тагом,
-;;         ;; если такое окружение не существует -- оно создается.
-;;         updated-tagenvs 
-;;         (loop [agents tagged-agents tag-envs (env :tagenvs)]
-;;           (if-not (seq agents) tag-envs
-;;                   (let [agnt (first agents)
-;;                         tag (agnt :tag)
-;;                         tag-env (or (tag-envs tag)
-;;                                     (agent (make-tagged-environment tag [])))]
-;;                     (send-off tag-env add-agent agnt)
-;;                     (recur (rest agents) (if-not (tag-envs tag) 
-;;                                            (assoc tag-envs tag tag-env)
-;;                                            tag-envs)))))] 
-;;     (assoc env :tagenvs updated-tagenvs
-;;            :agents (execute-agent-actions untagged-agents
-;;                                           {:forbidden [:download]}))))
-
-;; (defmethod step ::tagged [env]
-;;   (assoc env :agents (execute-agent-actions (alive-agents (env :agents)))))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-(defstruct environment :type :agents :walkers)
-
-(defmulti add-agent (fn [env ag] (:type env)))
-(defmulti add-walker (fn [env tag walker] (:type env)))
-(defmulti step :type)
-(defmulti run :type)
+(defmethod termination? :: [env]
+  (or (no-agents env) (all-agents-is-dead? env)))
 
 (defn make-walker [env tag]
-  (if-not tag
+  (letfn [(update-agent
+           [ag]
+           (let [thread
+                 (Thread. #(let [percept {:self @ag}
+                                 action  ((@ag :program) percept)
+                                 result  (act @ag action)]
+                             (dosync (ref-set ag result))))]
+             (.start thread)
+             (.join thread)))]
     (agent
-     (fn []
-       (doseq [ag (@env :agents) :when (not (@ag :tag))]
-         (let [percept {:self @ag}
-               action  ((@ag :program) percept)
-               result  (act @ag action)]
-           (dosync (ref-set ag result))
-           (when-let [ag-tag (@ag :tag)]
-             (send env add-walker ag-tag (make-walker env ag-tag)))))))))
+     (if tag
+       #(doseq [ag (@env :agents) :when (= tag (@ag :tag))]
+          (update-agent ag))
+       #(doseq [ag (@env :agents) :when (not (@ag :tag))]
+          (update-agent ag)
+          (when-let [ag-tag (@ag :tag)]
+            (when-not (contains? (@env :walkers) ag-tag)
+              (send env add-walker ag-tag (make-walker env ag-tag)))))))))
 
-(defn walk [walker]
-  (walker) walker)
+(defn walk [walker] (walker) walker)
 
 (defn make-download-env []
-  (let [env (agent (struct-map environment :type :download :agents '() :walkers {}))]
+  (let [env (agent (struct-map environment :type ::download
+                               :agents '() :walkers {}))]
     (send env add-walker nil (make-walker env nil))
     env))
 
-(defmethod add-agent :download [env ag]
+(defmethod add-agent ::download [env ag]
   (assoc env :agents (push (env :agents) (ref ag))))
 
-(defmethod add-walker :download [env tag walker]
+(defmethod add-walker ::download [env tag walker]
   (assoc env :walkers (assoc (env :walkers) tag walker)))
 
-(defmethod step :download [env]
+(defmethod step ::download [env]
   (doseq [[tag walker] (env :walkers)]
     (send-off walker walk))
   env)
 
-(def e (make-download-env))
-(send e add-agent j1)
-(send e step)
-(send-off ((@e :walkers) nil) walk)
-
-e
-(agent-errors ((@e :walkers) nil))
-
-
-;; (defmethod step :default [env]
-;;   (do (for [[tag walker] @(env :walkers)]
-;;         (send-off walker walk))
-;;       env))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-;; Хосты упорядочены от частного к общему
-(def job-rules
+(def #^{:doc "Хосты упорядочены от частного к общему."}
+     job-rules
      [[#"http://dsv.data.cod.ru/\d{6}"
        {:obtain-link job-datacodru-link-name
         :obtain-tag  (partial job-tag [#"files3?.dsv.data.cod.ru"
@@ -433,3 +355,11 @@ e
             (make-job "gold http://dsv.data.cod.ru/443824" job-rules)]]
   (def j1 (jobs 0))
   (def j2 (jobs 1)))
+
+
+;; (def e (make-download-env))
+;; (send e add-agent j1)
+;; (send e step)
+;; (send-off ((@e :walkers) nil) walk)
+
+;; (let [a @(first (@e :agents))] ((a :program) {:self a}))
