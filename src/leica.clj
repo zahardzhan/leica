@@ -34,6 +34,24 @@
 (defn join-paths [path1 path2]
   (str (File. (File. path1) path2)))
 
+(defn http-error-status-handler [http-agent fatal no-fatal]
+  (match (ha/status http-agent)
+         [[#{400  ;; Bad Request - неправильный запрос
+             403  ;; Forbidden - нет доступа
+             404  ;; Not Found - документ не найден
+             405  ;; Method Not Allowed
+             406  ;; None Acceptable
+             409  ;; Conflict
+             410} ;; Gone
+           fatal]
+          [#{408  ;; Request Timeout
+             500  ;; Internal Server Error - внутренняя ошибка скрипта
+             501  ;; Not Implemented
+             502  ;; Bad Gateway
+             503  ;; Service Unavailable
+             504} ;; Gateway Timeout
+           no-fatal]]))
+
 (defn parse-datacodru-page
   "Парсит текст страницы файла на датакоде."
   [page]
@@ -64,11 +82,14 @@
 
 (defn job-datacodru-link-name [job]
   (when-let [#^URI address (job :address)]
-    (let [page-agent (ha/http-agent address)]
-      (if-not (ha/success? page-agent) job ;; TODO: Проработать коды ошибок
-              (let [parsed (parse-datacodru-page (ha/string page-agent))]
-                (when (and (parsed :name) (parsed :link))
-                  (assoc job :name (parsed :name) :link (parsed :link))))))))
+    (let [page-request (ha/http-agent address)]
+      (if (ha/success? page-request)
+        (let [parsed (parse-datacodru-page (ha/string page-request))]
+          (if (and (parsed :name) (parsed :link))
+            (assoc job :name (parsed :name) :link (parsed :link))
+            (job-die job)))
+        ((http-error-status-handler page-request
+                                    job-die identity) job)))))
 
 (defn job-link [job]
   (when-let [#^URI address (job :address)]
@@ -88,10 +109,12 @@
 
 (defn job-length [job]
   (when-let [#^URI link (job :link)]
-    (let [job-agent (ha/http-agent link)]
-      (if-not (ha/success? job-agent) job
-              (assoc job :length (Integer/parseInt
-                                  (:content-length (ha/headers job-agent))))))))
+    (let [length-request (ha/http-agent link)]
+      (if (ha/success? length-request)
+        (assoc job :length (Integer/parseInt
+                            (:content-length (ha/headers length-request))))
+        ((http-error-status-handler length-request
+                                    job-die identity) job)))))
 
 (defn job-file [dir job]
   (when-let [name (job :name)]
@@ -110,10 +133,11 @@
                                   (fn [remote]
                                     (with-open [local (duck/writer file)]
                                       (duck/copy (ha/stream remote) local))))]
-        (ha/result loader)
-        (if (ha/done? loader)
-          (job-die job)
-          job)))))
+        (if (ha/success? loader)
+          (do (ha/result loader)
+              (if (ha/done? loader) (job-die job) job))
+          ((http-error-status-handler loader
+                                      job-die identity) job))))))
                       
 ;;; RULE
 
@@ -122,6 +146,7 @@
   [rule sample]
   (cond (fn? rule) (rule sample)
         (string? rule) (if (= rule sample) rule)
+        (set? rule) (rule sample)
         (= (type rule) java.util.regex.Pattern) (re-find rule sample)))
 
 (defn match 
