@@ -11,8 +11,8 @@
   (:require [clojure.contrib.http.agent :as ha]
             [clojure.contrib.duck-streams :as duck])
   (:use clojure.contrib.test-is clojure.contrib.seq-utils)
-  (:import (java.io File InputStream ByteArrayOutputStream
-                    ByteArrayInputStream)
+  (:import (java.io File FileOutputStream InputStream
+                    ByteArrayOutputStream ByteArrayInputStream)
            (java.net HttpURLConnection InetAddress URI URL URLEncoder)
            (org.htmlparser Parser)
            (org.htmlparser.util ParserException)
@@ -83,7 +83,8 @@
 (defn job-datacodru-link-name [job]
   (when-let [#^URI address (job :address)]
     (let [page-request (ha/http-agent address)]
-      (if (ha/success? page-request)
+      (ha/result page-request)
+      (if (and (ha/done? page-request) (ha/success? page-request))
         (let [parsed (parse-datacodru-page (ha/string page-request))]
           (if (and (parsed :name) (parsed :link))
             (assoc job :name (parsed :name) :link (parsed :link))
@@ -109,8 +110,9 @@
 
 (defn job-length [job]
   (when-let [#^URI link (job :link)]
-    (let [length-request (ha/http-agent link)]
-      (if (ha/success? length-request)
+    (let [length-request (ha/http-agent link :method "HEAD")]
+      (ha/result length-request)
+      (if (and (ha/done? length-request) (ha/success? length-request))
         (assoc job :length (Integer/parseInt
                             (:content-length (ha/headers length-request))))
         ((http-error-status-handler length-request
@@ -131,23 +133,23 @@
                                   :headers headers
                                   :handler
                                   (fn [remote]
-                                    (with-open [local (duck/writer file)]
+                                    (with-open [local (FileOutputStream. file)]
                                       (duck/copy (ha/stream remote) local))))]
-        (if (ha/success? loader)
-          (do (ha/result loader)
-              (if (ha/done? loader) (job-die job) job))
+        (ha/result loader)
+        (if (and (ha/done? loader) (ha/success? loader))
+          (job-die job)
           ((http-error-status-handler loader
                                       job-die identity) job))))))
-                      
+
 ;;; RULE
 
 (defn default-matcher 
   "Дефолтный сопоставитель с образцом."
   [rule sample]
   (cond (fn? rule) (rule sample)
-        (string? rule) (if (= rule sample) rule)
         (set? rule) (rule sample)
-        (= (type rule) java.util.regex.Pattern) (re-find rule sample)))
+        (string? rule) (if (= rule sample) rule)
+        (instance? java.util.regex.Pattern rule) (re-find rule sample)))
 
 (defn match 
   "Находит среди правил первое правило, которому соответствует образец, и
@@ -277,7 +279,7 @@
 (defn no-agents [env]
   (empty (:agents env)))
 
-(defmethod termination? :: [env]
+(defmethod termination? ::download [env]
   (or (no-agents env) (all-agents-is-dead? env)))
 
 (defn make-walker [env tag]
@@ -292,9 +294,9 @@
              (.join thread)))]
     (agent
      (if tag
-       #(doseq [ag (@env :agents) :when (= tag (@ag :tag))]
+       #(doseq [ag (@env :agents) :when (and (alive? @ag) (= tag (@ag :tag)))]
           (update-agent ag))
-       #(doseq [ag (@env :agents) :when (not (@ag :tag))]
+       #(doseq [ag (@env :agents) :when (and (alive? @ag) (not (@ag :tag)))]
           (update-agent ag)
           (when-let [ag-tag (@ag :tag)]
             (when-not (contains? (@env :walkers) ag-tag)
@@ -379,12 +381,8 @@
 (let [jobs [(make-job "http://dsv.data.cod.ru/441778" job-rules)
             (make-job "gold http://dsv.data.cod.ru/443824" job-rules)]]
   (def j1 (jobs 0))
-  (def j2 (jobs 1)))
-
-
-;; (def e (make-download-env))
-;; (send e add-agent j1)
-;; (send e step)
-;; (send-off ((@e :walkers) nil) walk)
-
-;; (let [a @(first (@e :agents))] ((a :program) {:self a}))
+  (def j2 (jobs 1))
+  (def e (make-download-env))
+  (send e add-agent j1)
+  (send e add-agent j2)
+  (send e step))
