@@ -24,6 +24,36 @@
 
 (def *ping-timeout* 3000)
 
+;;; RULE
+
+(defn default-matcher 
+  "Дефолтный сопоставитель с образцом."
+  [rule sample]
+  (cond (fn? rule) (rule sample)
+        (set? rule) (rule sample)
+        (string? rule) (if (= rule sample) rule)
+        (instance? java.util.regex.Pattern rule) (re-find rule sample)))
+
+(defn match 
+  "Находит среди правил первое правило, которому соответствует образец, и
+   возвращает результат действия над этим правилом.
+   Сопоставитель (matcher) сравнивает паттерн с образцом, и если
+   в результате этого хоть что-то получается, то сравнение считается удачным.
+        
+   Обычно правила представлены в виде списка ((паттерн соответствие), ...)"
+
+  [sample rules &
+   [{:keys [matcher rule-pattern rule-response action]
+     :or   {matcher default-matcher
+            rule-pattern first
+            rule-response second
+            action #(if %1 %2)}}]]
+
+  (some (fn [rule]
+          (when-let [result (matcher (rule-pattern rule) sample)]
+            (action result (rule-response rule))))
+        rules))
+
 ;;; AUX
 
 (defn push [coll x] (concat coll (list x)))
@@ -141,71 +171,10 @@
           ((http-error-status-handler loader
                                       job-die identity) job))))))
 
-;;; RULE
-
-(defn default-matcher 
-  "Дефолтный сопоставитель с образцом."
-  [rule sample]
-  (cond (fn? rule) (rule sample)
-        (set? rule) (rule sample)
-        (string? rule) (if (= rule sample) rule)
-        (instance? java.util.regex.Pattern rule) (re-find rule sample)))
-
-(defn match 
-  "Находит среди правил первое правило, которому соответствует образец, и
-   возвращает результат действия над этим правилом.
-   Сопоставитель (matcher) сравнивает паттерн с образцом, и если
-   в результате этого хоть что-то получается, то сравнение считается удачным.
-        
-   Обычно правила представлены в виде списка ((паттерн соответствие), ...)"
-
-  [sample rules &
-   [{:keys [matcher rule-pattern rule-response action]
-     :or   {matcher default-matcher
-            rule-pattern first
-            rule-response second
-            action #(if %1 %2)}}]]
-
-  (some (fn [rule]
-          (when-let [result (matcher (rule-pattern rule) sample)]
-            (action result (rule-response rule))))
-        rules))
-
 ;;; AGENCY
 
-(defstruct
-  #^{:doc "Агент для скачивания файла.
-
-  Агент это что-то, что воспринимает свое окружение и действует.
-  У агента есть тело, которое хранит состояние, и программа,
-  которая выбирает действие, основываясь на состоянии агента и 
-  восприятии окружения. Действие агента возвращается обратно в окружение
-  для его выполнения. Представление восприятия и действия зависит от конкретного
-  окружения и агента.
-
-  :name    имя агента
-  :program слот программы агента, содержит функцию одного аргумента,
-           результата восприятия окружения, и возвращает действие
-  :actions набор функций-действий агента
-  :percept последнее восприятие
-  :action  последнее действие
-  :alive   определяет жив агент или умер
-
-  :address адрес задания
-  :link    прямая ссылка на файл, который нужно скачать
-  :tag     идентификатор по которому разделяются потоки загрузок
-  :file    файл в который сохраняется скачанное
-  :length  размер файла, что нужно скачать"}
-
-  job 
-  :name :program :actions :percept :action :alive
-  :address :link :tag :file :length)
-
-(defn alive? [agnt] (:alive agnt))
-(def dead? (complement alive?))
-
 (defn reflex-job-program
-  "Простая рефлексная программа для загрузочного агента."
+  "Простая рефлексная программа агента для скачивания."
   [percept]
   (letfn [(out-of-space
            [percept]
@@ -228,98 +197,96 @@
           [out-of-space       :die]
           [otherwise          :download]])))
 
-(defn make-job
-  "Конструктор загрузочного агента из строки с адресом и набора правил."
+(defn download-agent 
+  "Агент для скачивания.
+
+  Агент это что-то, что воспринимает свое окружение и действует.
+  У агента есть тело, которое хранит состояние, и программа,
+  которая выбирает действие, основываясь на состоянии агента и 
+  восприятии окружения. Действие агента возвращается обратно в окружение
+  для его выполнения. Представление восприятия и действия зависит от конкретного
+  окружения и агента.
+
+  :name    имя агента
+  :program слот программы агента, содержит функцию одного аргумента,
+           результата восприятия окружения, и возвращает действие
+  :actions набор функций-действий агента
+  :percept последнее восприятие
+  :action  последнее действие
+  :alive   определяет жив агент или умер
+
+  :address адрес задания
+  :link    прямая ссылка на файл, который нужно скачать
+  :tag     идентификатор по которому разделяются потоки загрузок
+  :file    файл в который сохраняется скачанное
+  :length  размер файла, что нужно скачать"
+  
   [line rules]
   (let [[address actions] (match line rules {:action list})]
     (when (and address actions)
-      (struct-map job :program reflex-job-program :alive true
-                  :address (URI. address) :actions actions))))
+      (agent {:address (URI. address)
+              :link nil :name nil :tag nil :file nil :length nil
+              :actions actions
+              :program reflex-job-program
+              :alive true :percept nil :action nil}))))
 
-(defn act [ag action]
-  (((ag :actions) action) ag))
+(defn alive?
+  "Жив ли агент?"
+  [ag] (:alive @ag))
 
-;;; ENVIRONMENTS
+(defn dead?
+  "Мертв ли агент?"
+  [ag] (not (:alive @ag)))
 
-(defstruct
-    #^{:doc "Окружение.
+(defn tag [ag] (:tag @ag))
 
-  :type    тип окружения, для диспетчирезации мультиметодов
-  :walkers замыкания, координирующие работу агентов
-  :agents  неотмеченные агенты"}
-  environment :type :agents :walkers)
+(defn act
+  "Агент воспринимает окружение и действует."
+  [ag env]
+  (let [tag (:tag ag)]
+    ;; (cond ;;(dead? *agent*) ag
+          
+    ;;       (and tag (tag-locked? env tag))
+    ;;       (do (Thread/sleep 1000)
+    ;;           ;;(send-off *agent* act env)
+    ;;           ag)
 
-(defmulti add-agent
-  "Добавляет агента в окружение."
-  (fn [env ag] (:type env)))
+    (do (when tag (tag-lock env tag))
+        (let [result (atom nil)
+              thread (Thread.
+                      #(let [percept {:self ag} ;; :obtain-tag
+                             action  ((ag :program) percept)
+                             new-ag-state (((ag :actions) action) ag)]
+                         (reset! result new-ag-state)))]
+          (.start thread)
+          (.join thread)
+          (when-let [tag (:tag @result)]
+            (do (dosync (alter env add-tag tag))
+                (tag-unlock env tag)))
+          ;;(send-off *agent* act env)
+          @result))))
 
-(defmulti add-walker
-  "??"
-  (fn [env tag walker] (:type env)))
+(defn environment []
+  (ref {:agents '() :tags {}}))
 
-(defmulti step
-  "Базовый симулятор окружения, в котором окружение проживает один момент.
-   Окружение дает каждому агенту восприятие, получает от него действие и
-   выполняет это действие. В итоге окружение возвращает в себя обновленных агентов."
-  :type)
+(defn add-agent [env ag]
+  (assoc env :agents (push (env :agents) ag)))
 
-(defmulti run
-  "Симулятор окружения."
-  :type)
+(defn add-tag [env tag]
+  (if (contains? (env :tags) tag) env
+      (assoc env :tags (assoc (env :tags) tag (atom false)))))
 
-(defmulti termination? 
-  "Return true if the simulation should end now."
-  :type)
+(defn tag-locked? [env tag]
+  (when (contains? (@env :tags) tag)
+    @((@env :tags) tag)))
 
-(defn alive-agents [agents] (filter alive? agents))
+(defn tag-lock [env tag]
+  (when (contains? (@env :tags) tag)
+    (reset! ((@env :tags) tag) true)))
 
-(defn all-agents-is-dead? [env]
-  (every? dead? (:agents env)))
-
-(defn no-agents [env]
-  (empty (:agents env)))
-
-(defmethod termination? ::download [env]
-  (or (no-agents env) (all-agents-is-dead? env)))
-
-(defn make-walker [env tag]
-  (letfn [(update-agent
-           [ag]
-           (let [thread
-                 (Thread. #(let [percept {:self @ag}
-                                 action  ((@ag :program) percept)
-                                 result  (act @ag action)]
-                             (dosync (ref-set ag result))))]
-             (.start thread)
-             (.join thread)))]
-    (agent
-     (if tag
-       #(doseq [ag (@env :agents) :when (and (alive? @ag) (= tag (@ag :tag)))]
-          (update-agent ag))
-       #(doseq [ag (@env :agents) :when (and (alive? @ag) (not (@ag :tag)))]
-          (update-agent ag)
-          (when-let [ag-tag (@ag :tag)]
-            (when-not (contains? (@env :walkers) ag-tag)
-              (send env add-walker ag-tag (make-walker env ag-tag)))))))))
-
-(defn walk [walker] (walker) walker)
-
-(defn make-download-env []
-  (let [env (agent (struct-map environment :type ::download
-                               :agents '() :walkers {}))]
-    (send env add-walker nil (make-walker env nil))
-    env))
-
-(defmethod add-agent ::download [env ag]
-  (assoc env :agents (push (env :agents) (ref ag))))
-
-(defmethod add-walker ::download [env tag walker]
-  (assoc env :walkers (assoc (env :walkers) tag walker)))
-
-(defmethod step ::download [env]
-  (doseq [[tag walker] (env :walkers)]
-    (send-off walker walk))
-  env)
+(defn tag-unlock [env tag]
+  (when (contains? (@env :tags) tag)
+    (reset! ((@env :tags) tag) false)))
 
 (def #^{:doc "Хосты упорядочены от частного к общему."}
      job-rules
@@ -378,11 +345,10 @@
                 {:rule-response rest})
          '(:MATCH))))
 
-(let [jobs [(make-job "http://dsv.data.cod.ru/441778" job-rules)
-            (make-job "gold http://dsv.data.cod.ru/443824" job-rules)]]
-  (def j1 (jobs 0))
-  (def j2 (jobs 1))
-  (def e (make-download-env))
-  (send e add-agent j1)
-  (send e add-agent j2)
-  (send e step))
+;; (let [jobs [(download-agent "http://dsv.data.cod.ru/441778" job-rules)
+;;             (download-agent "gold http://dsv.data.cod.ru/443824" job-rules)]]
+;;   (def j0 (jobs 0))
+;;   (def j1 (jobs 1))
+;;   (def e (environment))
+;;   (send-off e add-agent j0))
+  ;;(send-off j0 act e))
