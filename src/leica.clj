@@ -278,10 +278,11 @@
   (ref {:agents #{} :tags {}}))
 
 (defn add-agent [env ag]
-  (assoc env :agents (conj (env :agents) ag)))
+  (if-not (instance? clojure.lang.Agent ag) env
+          (assoc env :agents (conj (env :agents) ag))))
 
 (defn add-tag [env tag]
-  (if (contains? (env :tags) tag) env
+  (if (or (nil? tag) (contains? (env :tags) tag)) env
       (assoc env :tags (assoc (env :tags) tag (atom false)))))
 
 (defn add-agents [env agents]
@@ -419,3 +420,7 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
 ;;                     ": http://dsv.data.cod.ru/450025 05.11.2009 03:42"]))
 ;;     (run-environment e))
 
+;; Sindi.Vayt.DVDRip.KiNOFACK.avi http://dsv.data.cod.ru/449107 доступен до: 26.10.2009 12:20 
+;; Kadillak.Rekords.2008.P.HDRip.part1.rar: http://dsv.data.cod.ru/450973 доступен до: 05.11.2009 18:54
+;; Kadillak.Rekords.2008.P.HDRip.part2.rar: http://dsv.data.cod.ru/451400 доступен до: 05.11.2009 23:12
+;; Birds of America[2008]DvDrip[Eng]-FXG.rar: http://dsv.data.cod.ru/451553
