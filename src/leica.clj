@@ -1,6 +1,6 @@
+;;; -*- mode: lisp; coding: utf-8 -*- author: Roman Zaharov zahardzhan@gmail.com
 ;;; leica.clj: многопоточная качалка для data.cod.ru и dsvload.net.
 
-;; Роман Захаров
 ;; октябрь, 2009
 
 ;; Это свободная программа, используйте на свой страх и риск.
@@ -8,9 +8,11 @@
 (ns #^{:doc "Многопоточная качалка для data.cod.ru и dsvload.net."
        :author "Роман Захаров"}
   leica
+  (:gen-class)
   (:require [clojure.contrib.http.agent :as ha]
             [clojure.contrib.duck-streams :as duck])
-  (:use clojure.contrib.test-is clojure.contrib.seq-utils)
+  (:use clojure.contrib.test-is clojure.contrib.seq-utils
+        clojure.contrib.command-line)
   (:import (java.io File FileOutputStream InputStream
                     ByteArrayOutputStream ByteArrayInputStream)
            (java.net HttpURLConnection InetAddress URI URL URLEncoder)
@@ -171,7 +173,36 @@
           ((http-error-status-handler loader
                                       job-die identity) job))))))
 
-;;; AGENCY
+(def #^{:doc "Хосты упорядочены от частного к общему."}
+     *download-rules*
+     [[#"http://dsv.data.cod.ru/\d{6}"
+       {:obtain-link job-datacodru-link-name
+        :obtain-tag  (partial job-tag [#"files3?.dsv.data.cod.ru"
+                                       #"files2.dsv.data.cod.ru"])
+        :obtain-file (partial job-file "/home/haru/inbox/dsv")
+        :obtain-length job-length
+        :download    download
+        :die job-die}]
+      [#"http://[\w\.]*data.cod.ru/\d+"
+       {:obtain-link job-datacodru-link-name
+        :obtain-tag  (partial job-tag nil)
+        :obtain-file (partial job-file "/home/haru/inbox/dsv")
+        :obtain-length job-length
+        :download    download}]
+      [#"http://77.35.112.8[1234]/.+"
+       {:obtain-link job-link
+        :obtain-name job-name
+        :obtain-tag  (partial job-tag nil)
+        :obtain-file (partial job-file "/home/haru/inbox/dsv")
+        :obtain-length job-length
+        :download    download}]
+      [#"http://dsvload.net/ftpupload/.+"
+       {:obtain-link job-link
+        :obtain-name job-name
+        :obtain-tag  (partial job-tag nil)
+        :obtain-file (partial job-file "/home/haru/inbox/dsv")
+        :obtain-length job-length
+        :download    download}]])
 
 (defn reflex-download-program
   "Простая рефлексная программа агента для скачивания."
@@ -221,14 +252,17 @@
   :file    файл в который сохраняется скачанное
   :length  размер файла, что нужно скачать"
   
-  [line rules]
-  (let [[address actions] (match line rules {:action list})]
+  [line]
+  (let [[address actions] (match line *download-rules* {:action list})]
     (when (and address actions)
       (agent {:address (URI. address)
               :link nil :name nil :tag nil :file nil :length nil
               :actions actions
               :program reflex-download-program
               :alive true :percept nil :action nil}))))
+
+(defn download-agents [lines]
+  (map download-agent lines))
 
 (defn alive?
   "Жив ли агент?"
@@ -241,14 +275,21 @@
 (defn tag [ag] (:tag @ag))
 
 (defn environment []
-  (ref {:agents '() :tags {}}))
+  (ref {:agents #{} :tags {}}))
 
 (defn add-agent [env ag]
-  (assoc env :agents (push (env :agents) ag)))
+  (assoc env :agents (conj (env :agents) ag)))
 
 (defn add-tag [env tag]
   (if (contains? (env :tags) tag) env
       (assoc env :tags (assoc (env :tags) tag (atom false)))))
+
+(defn add-agents [env agents]
+  (doseq [ag agents]
+    (dosync (alter env add-agent ag))))
+
+(defn agents [env]
+  (@env :agents))
 
 (defn tag-locked? [env tag]
   (when (contains? (@env :tags) tag)
@@ -265,23 +306,27 @@
 (defn act
   "Агент воспринимает окружение и действует."
   [ag env]
-  (let [tag (:tag ag)]
+  (let [tag (:tag ag)
+        execute-action
+        (fn []
+          (let [result (atom nil)
+                thread (Thread.
+                        #(let [percept {:self ag}
+                               action  ((ag :program) percept)
+                               new-ag-state (((ag :actions) action) ag)]
+                           (reset! result new-ag-state)))]
+            (.start thread)
+            (.join thread)
+            @result))]        
     (cond (dead? *agent*) ag
           
           (not tag)
-          (do (let [result (atom nil)
-                    thread (Thread.
-                            #(let [percept {:self ag}
-                                   action  ((ag :program) percept)
-                                   new-ag-state (((ag :actions) action) ag)]
-                               (reset! result new-ag-state)))]
-                (.start thread)
-                (.join thread)
-                (when-let [tag (:tag @result)]
+          (do (let [result (execute-action)]
+                (when-let [tag (:tag result)]
                   (when-not (contains? (@env :tags) tag)
                     (dosync (alter env add-tag tag))))
                 (send-off *agent* act env)
-                @result))
+                result))
 
           (and tag (tag-locked? env tag))
           (do (Thread/sleep 1000)
@@ -290,48 +335,55 @@
 
           (and tag (not (tag-locked? env tag)))
           (do (tag-lock env tag)
-              (let [result (atom nil)
-                    thread (Thread.
-                            #(let [percept {:self ag} ;; :obtain-tag
-                                   action  ((ag :program) percept)
-                                   new-ag-state (((ag :actions) action) ag)]
-                               (reset! result new-ag-state)))]
-                (.start thread)
-                (.join thread)
+              (let [result (execute-action)]
                 (tag-unlock env tag)
                 (send-off *agent* act env)
-                @result)))))
+                result)))))
 
-(def #^{:doc "Хосты упорядочены от частного к общему."}
-     job-rules
-     [[#"http://dsv.data.cod.ru/\d{6}"
-       {:obtain-link job-datacodru-link-name
-        :obtain-tag  (partial job-tag [#"files3?.dsv.data.cod.ru"
-                                       #"files2.dsv.data.cod.ru"])
-        :obtain-file (partial job-file "/home/haru/inbox/dsv")
-        :obtain-length job-length
-        :download    download
-        :die job-die}]
-      [#"http://[\w\.]*data.cod.ru/\d+"
-       {:obtain-link job-datacodru-link-name
-        :obtain-tag  (partial job-tag nil)
-        :obtain-file (partial job-file "/home/haru/inbox/dsv")
-        :obtain-length job-length
-        :download    download}]
-      [#"http://77.35.112.8[1234]/.+"
-       {:obtain-link job-link
-        :obtain-name job-name
-        :obtain-tag  (partial job-tag nil)
-        :obtain-file (partial job-file "/home/haru/inbox/dsv")
-        :obtain-length job-length
-        :download    download}]
-      [#"http://dsvload.net/ftpupload/.+"
-       {:obtain-link job-link
-        :obtain-name job-name
-        :obtain-tag  (partial job-tag nil)
-        :obtain-file (partial job-file "/home/haru/inbox/dsv")
-        :obtain-length job-length
-        :download    download}]])
+(defn run-environment [env]
+  (doseq [ag (agents env)]
+    (send-off ag act env)))
+
+;;; COMMAND-LINE
+
+(defn valid-path [#^String path]
+  (let [#^File vp (File. (.getCanonicalPath (File. path)))]
+    (when (.exists vp) vp)))
+
+(defn valid-jobs-file [#^String path]
+  (when-let [#^File file (valid-path path)]
+    (when (and (.isFile file) (.canRead file))
+      file)))
+
+(defn valid-output-dir [#^String path]
+  (when-let [#^File dir (valid-path path)]
+    (when (and (.isDirectory dir) (.canWrite dir))
+      dir)))
+ 
+(defn -main [& args]
+  (with-command-line args
+      "Использование:
+leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИРЕКТОРИЯ]
+АДРЕСА | leica [КЛЮЧИ] [ЗАГРУЗОЧНАЯ ДИРЕКТОРИЯ]
+ 
+Качает файлы с датакода. По-умолчанию в текущую директорию.
+
+Пишите о багах на zahardzhan@gmail.com.
+"
+      [[debug d "писать подробные сообщения для отлова багов" 1]
+       [quiet q "вести себя тихо" 2]
+       [boolean? b? "This is a boolean flag."]
+       remaining-args]
+
+    (let [jobs-file (some valid-jobs-file remaining-args)
+          output-dir (or (some valid-output-dir remaining-args)
+                         (valid-output-dir (System/getProperty "user.dir")))]
+      (when (and jobs-file output-dir)
+        (let [lines (duck/read-lines jobs-file)
+              e (environment)]
+          (add-agents e (download-agents lines))
+          (run-environment e)
+          (apply await (agents e)))))))
 
 ;;; TESTS
 
@@ -359,17 +411,12 @@
                 {:rule-response rest})
          '(:MATCH))))
 
-(let [jobs [(download-agent "http://dsv.data.cod.ru/425812" job-rules)
-            (download-agent "gold http://dsv.data.cod.ru/443824" job-rules)
-            (download-agent "http://dsv.data.cod.ru/451185" job-rules)]]
-  (def j0 (jobs 0))
-  (def j1 (jobs 1))
-  (def j2 (jobs 2))
-  (def e (environment))
-  (dosync (alter e add-agent j0)
-          (alter e add-agent j1)
-          (alter e add-agent j2)))
+;; (do (def e (environment))
+;;     (add-agents e (download-agents
+;;                    ["http://dsv.data.cod.ru/450553 05.11.2009 13:18"
+;;                     "http://dsv.data.cod.ru/449743 04.11.2009 23:18"
+;;                     ": http://dsv.data.cod.ru/449846 05.11.2009 00:34"
+;;                     ": http://dsv.data.cod.ru/449944 05.11.2009 02:13"
+;;                     ": http://dsv.data.cod.ru/450025 05.11.2009 03:42"]))
+;;     (run-environment e))
 
-;; (do (send-off j0 act e)
-;;     (send-off j1 act e)
-;;     (send-off j2 act e))
