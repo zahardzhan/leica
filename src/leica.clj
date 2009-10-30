@@ -370,9 +370,8 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
 
 Пишите о багах на zahardzhan@gmail.com.
 "
-      [[debug d "писать подробные сообщения для отлова багов" 1]
-       [quiet q "вести себя тихо" 2]
-       [boolean? b? "This is a boolean flag."]
+      [[debug? d? "писать подробные сообщения для отлова багов"]
+       [quiet? q? "вести себя тихо"]
        remaining-args]
 
     (let [jobs-file (some valid-jobs-file remaining-args)

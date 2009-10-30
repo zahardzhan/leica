@@ -11,28 +11,38 @@
 ## Как установить?
 
 Установка очень простая — нужно распаковать архив с исходниками:
-  # unzip zahardzhan-leica.zip
-  # tar zxf zahardzhan-leica.tar.gz
+
+    # unzip zahardzhan-leica.zip
+    # tar zxf zahardzhan-leica.tar.gz
+
 И собрать программу:
-  # make
+
+    # make
 
 ## Как пользоваться?
 
 Вам нужен текстовый файл с адресами, которые вы хотите скачать, в разумных пределах разбавленный мусором:
-  Местный FTP по протоколу HTTP: http://77.35.112.84/incoming/PersonalFolders/User/Film.avi
-  DSV data.cod: http://dsv.data.cod.ru/666666
-  AMUR data.cod: http://amur.data.cod.ru/4444
-  KHV data.cod (нужна помощь в тестировании): http://khv.data.cod.ru/123
-  Еще какой-нибудь data.cod: http://data.cod.ru/12345
-  Специально для слива свежего Радио-Т: http://dsvload.net/ftpupload/radio-t.mp3
+
+    Местный FTP по протоколу HTTP: http://77.35.112.84/incoming/PersonalFolders/User/Film.avi
+    DSV data.cod: http://dsv.data.cod.ru/666666
+    AMUR data.cod: http://amur.data.cod.ru/4444
+    KHV data.cod (нужна помощь в тестировании): http://khv.data.cod.ru/123
+    Еще какой-нибудь data.cod: http://data.cod.ru/12345
+    Специально для слива свежего Радио-Т: http://dsvload.net/ftpupload/radio-t.mp3
+
 Просто запустите:
-  # ./leica [файл с адресами чего качать] [директория куда всё это качать]
+
+    # ./leica [файл с адресами чего качать] [директория куда всё это качать]
 
 ## Напоследок.
 
-Leica является свободным программным обеспечением и распространяется
+Лейка является свободным программным обеспечением и распространяется
 в надежде на то, что она будет вам полезной, однако я НЕ ПРЕДОСТАВЛЯЮ 
 НА НЕЕ НИКАКИХ ГАРАНТИЙ.
 
 Автор (c) 2009 Роман Захаров
-Лицензия та же самая, что и у языка Clojure.
+
+Лицензия та же самая, что и у языка *Clojure*.
+
+
+
