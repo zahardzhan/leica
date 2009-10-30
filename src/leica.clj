@@ -64,7 +64,7 @@
 (defn join-paths [path1 path2]
   (str (File. (File. path1) path2)))
 
-(defn http-error-status-handler [http-agent fatal no-fatal]
+(defn http-error-status-handler [http-agent fatal not-fatal]
   (match (ha/status http-agent)
          [[#{400  ;; Bad Request - неправильный запрос
              403  ;; Forbidden - нет доступа
@@ -80,7 +80,7 @@
              502  ;; Bad Gateway
              503  ;; Service Unavailable
              504} ;; Gateway Timeout
-           no-fatal]]))
+           not-fatal]]))
 
 (defn parse-datacodru-page
   "Парсит текст страницы файла на датакоде."
@@ -107,8 +107,11 @@
                  (when-let [the-name (.getAttribute tag "title")]
                    (reset! name the-name)))))]
     (try (.visitAllNodesWith parser visitor)
-         {:name @name :link (new URI @link)}
+         {:name @name :link (when @link (new URI @link))}
          (catch ParserException _ nil))))
+
+(defn job-die [job]
+  (assoc job :alive false))
 
 (defn job-datacodru-link-name [job]
   (when-let [#^URI address (job :address)]
@@ -152,9 +155,6 @@
   (when-let [name (job :name)]
     (assoc job :file (new File (join-paths dir name)))))
 
-(defn job-die [job]
-  (assoc job :alive false))
-
 (defn download [job]
   (when-let [#^URI link (job :link)]
     (when-let [#^File file (job :file)]
@@ -173,7 +173,7 @@
 
 ;;; AGENCY
 
-(defn reflex-job-program
+(defn reflex-download-program
   "Простая рефлексная программа агента для скачивания."
   [percept]
   (letfn [(out-of-space
@@ -227,7 +227,7 @@
       (agent {:address (URI. address)
               :link nil :name nil :tag nil :file nil :length nil
               :actions actions
-              :program reflex-job-program
+              :program reflex-download-program
               :alive true :percept nil :action nil}))))
 
 (defn alive?
@@ -239,32 +239,6 @@
   [ag] (not (:alive @ag)))
 
 (defn tag [ag] (:tag @ag))
-
-(defn act
-  "Агент воспринимает окружение и действует."
-  [ag env]
-  (let [tag (:tag ag)]
-    ;; (cond ;;(dead? *agent*) ag
-          
-    ;;       (and tag (tag-locked? env tag))
-    ;;       (do (Thread/sleep 1000)
-    ;;           ;;(send-off *agent* act env)
-    ;;           ag)
-
-    (do (when tag (tag-lock env tag))
-        (let [result (atom nil)
-              thread (Thread.
-                      #(let [percept {:self ag} ;; :obtain-tag
-                             action  ((ag :program) percept)
-                             new-ag-state (((ag :actions) action) ag)]
-                         (reset! result new-ag-state)))]
-          (.start thread)
-          (.join thread)
-          (when-let [tag (:tag @result)]
-            (do (dosync (alter env add-tag tag))
-                (tag-unlock env tag)))
-          ;;(send-off *agent* act env)
-          @result))))
 
 (defn environment []
   (ref {:agents '() :tags {}}))
@@ -287,6 +261,46 @@
 (defn tag-unlock [env tag]
   (when (contains? (@env :tags) tag)
     (reset! ((@env :tags) tag) false)))
+
+(defn act
+  "Агент воспринимает окружение и действует."
+  [ag env]
+  (let [tag (:tag ag)]
+    (cond (dead? *agent*) ag
+          
+          (not tag)
+          (do (let [result (atom nil)
+                    thread (Thread.
+                            #(let [percept {:self ag}
+                                   action  ((ag :program) percept)
+                                   new-ag-state (((ag :actions) action) ag)]
+                               (reset! result new-ag-state)))]
+                (.start thread)
+                (.join thread)
+                (when-let [tag (:tag @result)]
+                  (when-not (contains? (@env :tags) tag)
+                    (dosync (alter env add-tag tag))))
+                (send-off *agent* act env)
+                @result))
+
+          (and tag (tag-locked? env tag))
+          (do (Thread/sleep 1000)
+              (send-off *agent* act env)
+              ag)
+
+          (and tag (not (tag-locked? env tag)))
+          (do (tag-lock env tag)
+              (let [result (atom nil)
+                    thread (Thread.
+                            #(let [percept {:self ag} ;; :obtain-tag
+                                   action  ((ag :program) percept)
+                                   new-ag-state (((ag :actions) action) ag)]
+                               (reset! result new-ag-state)))]
+                (.start thread)
+                (.join thread)
+                (tag-unlock env tag)
+                (send-off *agent* act env)
+                @result)))))
 
 (def #^{:doc "Хосты упорядочены от частного к общему."}
      job-rules
@@ -345,10 +359,17 @@
                 {:rule-response rest})
          '(:MATCH))))
 
-;; (let [jobs [(download-agent "http://dsv.data.cod.ru/441778" job-rules)
-;;             (download-agent "gold http://dsv.data.cod.ru/443824" job-rules)]]
-;;   (def j0 (jobs 0))
-;;   (def j1 (jobs 1))
-;;   (def e (environment))
-;;   (send-off e add-agent j0))
-  ;;(send-off j0 act e))
+(let [jobs [(download-agent "http://dsv.data.cod.ru/425812" job-rules)
+            (download-agent "gold http://dsv.data.cod.ru/443824" job-rules)
+            (download-agent "http://dsv.data.cod.ru/451185" job-rules)]]
+  (def j0 (jobs 0))
+  (def j1 (jobs 1))
+  (def j2 (jobs 2))
+  (def e (environment))
+  (dosync (alter e add-agent j0)
+          (alter e add-agent j1)
+          (alter e add-agent j2)))
+
+;; (do (send-off j0 act e)
+;;     (send-off j1 act e)
+;;     (send-off j2 act e))
