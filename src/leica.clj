@@ -174,7 +174,7 @@
                                   :headers headers
                                   :handler
                                   (fn [remote]
-                                    (with-open [local (FileOutputStream. file)]
+                                    (with-open [local (FileOutputStream. file true)]
                                       (duck/copy (ha/stream remote) local))))]
                                       ;;;java.net.ConnectException: Connection timed out
         (ha/result loader)
@@ -445,9 +445,9 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
                 {:rule-response rest})
          '(:MATCH))))
 
-;; (do (def e (environment))
-;;     (send e add-agent (download-agent "http://dsv.data.cod.ru/450993"))
-
-;;     (send e add-agent (download-agent "Alcohol120_retail_1.9.8.7612.rar: http://dsv.data.cod.ru/450226"))
-;;     (send e add-agent (download-agent "скачать: http://dsv.data.cod.ru/452213"))
+;(do (def e (environment))
+    ;;(send e add-agent (download-agent "http://dsv.data.cod.ru/450993"))
+;    (send e add-agent (download-agent "Alcohol120_retail_1.9.8.7612.rar: http://dsv.data.cod.ru/450226"))
+    ;;(send e add-agent (download-agent "скачать: http://dsv.data.cod.ru/452213")))
+;    )
 ;;     (run-environment e))
