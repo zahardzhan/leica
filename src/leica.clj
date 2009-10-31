@@ -58,7 +58,16 @@
 
 ;;; AUX
 
-(defn push [coll x] (concat coll (list x)))
+(defn agent? [x]
+  (instance? clojure.lang.Agent x))
+
+(defn push [coll x]
+  (concat coll (list x)))
+
+(defn next-after-when [pred? x xs]
+  (when (some pred? xs)
+    (let [[before after] (split-with #(not (= x %)) xs)]
+      (some #(when (pred? %) %) (rest (cycle (concat after before)))))))
 
 (defn file-length [#^File file]
   (if (.exists file) (.length file) 0))
@@ -167,6 +176,7 @@
                                   (fn [remote]
                                     (with-open [local (FileOutputStream. file)]
                                       (duck/copy (ha/stream remote) local))))]
+                                      ;;;java.net.ConnectException: Connection timed out
         (ha/result loader)
         (if (and (ha/done? loader) (ha/success? loader))
           (job-die job)
@@ -255,42 +265,57 @@
   [line]
   (let [[address actions] (match line *download-rules* {:action list})]
     (when (and address actions)
-      (agent {:address (URI. address)
+      (agent {:type ::download
+              :address (URI. address)
               :link nil :name nil :tag nil :file nil :length nil
               :actions actions
               :program reflex-download-program
               :alive true :percept nil :action nil}))))
 
 (defn download-agents [lines]
-  (map download-agent lines))
+  (remove (comp not agent?) (map download-agent lines)))
 
-(defn alive?
-  "Жив ли агент?"
-  [ag] (:alive @ag))
+(defmulti act (fn [ag env] (:type ag)))
 
-(defn dead?
-  "Мертв ли агент?"
-  [ag] (not (:alive @ag)))
+(defmulti alive? #(:type @%))
+(defmulti dead? #(:type @%))
+(defmulti tag #(:type @%))
 
-(defn tag [ag] (:tag @ag))
+(defmethod alive? ::download [ag] (:alive @ag))
+(defmethod dead?  ::download [ag] (not (:alive @ag)))
+(defmethod tag ::download [ag] (:tag @ag))
 
 (defn environment []
-  (ref {:agents #{} :tags {}}))
+  (agent {:type ::download :agents '() :tags {}}))
 
-(defn add-agent [env ag]
-  (if-not (instance? clojure.lang.Agent ag) env
-          (assoc env :agents (conj (env :agents) ag))))
+(defmulti add-agent (fn [env ag] (:type env)))
+(defmulti add-agents (fn [env ags] (:type env)))
+(defmulti add-tag (fn [env tag] (:type env)))
 
-(defn add-tag [env tag]
+(defmulti agents #(:type @%))
+(defmulti tags #(:type @%))
+
+(defmulti received-tag (fn [env ag] (:type env)))
+(defmulti done (fn [env ag] (:type env)))
+
+(defmethod add-agent ::download [env ag]
+  (if-not (agent? ag) env
+          (assoc env :agents (push (env :agents) ag))))
+
+(defmethod add-agents ::download [env agents]
+  (doseq [ag agents]
+    (send *agent* add-agent ag))
+  *agent*)
+
+(defmethod add-tag ::download [env tag]
   (if (or (nil? tag) (contains? (env :tags) tag)) env
       (assoc env :tags (assoc (env :tags) tag (atom false)))))
 
-(defn add-agents [env agents]
-  (doseq [ag agents]
-    (dosync (alter env add-agent ag))))
-
-(defn agents [env]
+(defmethod agents ::download [env]
   (@env :agents))
+
+(defmethod tags ::download [env]
+  (@env :tags))
 
 (defn tag-locked? [env tag]
   (when (contains? (@env :tags) tag)
@@ -304,9 +329,22 @@
   (when (contains? (@env :tags) tag)
     (reset! ((@env :tags) tag) false)))
 
-(defn act
-  "Агент воспринимает окружение и действует."
-  [ag env]
+(defmethod received-tag ::download [env ag]
+  (when-let [next-alive-untagged-agent
+             (next-after-when #(and (alive? %) (not (tag %)))
+                              ag (agents *agent*))]
+    (send-off next-alive-untagged-agent act *agent*))
+  (send-off ag act *agent*)
+  env)
+
+(defmethod done ::download [env ag]
+  (when-let [next-alive-agent-with-same-tag
+             (next-after-when #(and (alive? %) (= (tag ag) (tag %)))
+                              ag (agents *agent*))]
+    (send-off next-alive-agent-with-same-tag act *agent*))
+  env)
+
+(defmethod act ::download [ag env]
   (let [tag (:tag ag)
         execute-action
         (fn []
@@ -319,27 +357,24 @@
             (.start thread)
             (.join thread)
             @result))]        
-    (cond (dead? *agent*) ag
-          
-          (not tag)
-          (do (let [result (execute-action)]
-                (when-let [tag (:tag result)]
-                  (when-not (contains? (@env :tags) tag)
-                    (dosync (alter env add-tag tag))))
-                (send-off *agent* act env)
-                result))
+    (cond (dead? *agent*) ag 
 
-          (and tag (tag-locked? env tag))
-          (do (Thread/sleep 1000)
-              (send-off *agent* act env)
-              ag)
+          (not tag) (do (let [result (execute-action)]
+                          (do (if (:tag result)
+                                (do (send env add-tag (:tag result))
+                                    (send env received-tag *agent*))
+                                (send-off *agent* act env))
+                              result)))
 
-          (and tag (not (tag-locked? env tag)))
-          (do (tag-lock env tag)
-              (let [result (execute-action)]
-                (tag-unlock env tag)
-                (send-off *agent* act env)
-                result)))))
+          tag (if (tag-locked? env tag)
+                ag
+                (do (tag-lock env tag)
+                    (let [result (execute-action)]
+                      (tag-unlock env tag)
+                      (if (:alive result)
+                        (send-off *agent* act env)
+                        (send env done *agent*))
+                      result))))))
 
 (defn run-environment [env]
   (doseq [ag (agents env)]
@@ -382,8 +417,7 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
         (let [lines (duck/read-lines jobs-file)
               e (environment)]
           (add-agents e (download-agents lines))
-          (run-environment e)
-          (apply await (agents e)))))))
+          (run-environment e))))))
 
 ;;; TESTS
 
@@ -412,15 +446,8 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
          '(:MATCH))))
 
 ;; (do (def e (environment))
-;;     (add-agents e (download-agents
-;;                    ["http://dsv.data.cod.ru/450553 05.11.2009 13:18"
-;;                     "http://dsv.data.cod.ru/449743 04.11.2009 23:18"
-;;                     ": http://dsv.data.cod.ru/449846 05.11.2009 00:34"
-;;                     ": http://dsv.data.cod.ru/449944 05.11.2009 02:13"
-;;                     ": http://dsv.data.cod.ru/450025 05.11.2009 03:42"]))
-;;     (run-environment e))
+;;     (send e add-agent (download-agent "http://dsv.data.cod.ru/450993"))
 
-;; Sindi.Vayt.DVDRip.KiNOFACK.avi http://dsv.data.cod.ru/449107 доступен до: 26.10.2009 12:20 
-;; Kadillak.Rekords.2008.P.HDRip.part1.rar: http://dsv.data.cod.ru/450973 доступен до: 05.11.2009 18:54
-;; Kadillak.Rekords.2008.P.HDRip.part2.rar: http://dsv.data.cod.ru/451400 доступен до: 05.11.2009 23:12
-;; Birds of America[2008]DvDrip[Eng]-FXG.rar: http://dsv.data.cod.ru/451553
+;;     (send e add-agent (download-agent "Alcohol120_retail_1.9.8.7612.rar: http://dsv.data.cod.ru/450226"))
+;;     (send e add-agent (download-agent "скачать: http://dsv.data.cod.ru/452213"))
+;;     (run-environment e))
