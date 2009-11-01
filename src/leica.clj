@@ -24,8 +24,6 @@
 
 (in-ns 'leica)
 
-(def *ping-timeout* 3000)
-
 ;;; RULE
 
 (defn default-matcher 
@@ -72,8 +70,13 @@
 (defn file-length [#^File file]
   (if (.exists file) (.length file) 0))
 
-(defn join-paths [path1 path2]
-  (str (File. (File. path1) path2)))
+(defmulti join-paths (fn [p1 p2] [(class p1) (class p2)]))
+
+(defmethod join-paths [java.lang.String java.lang.String] [p1 p2]
+  (str (File. (File. p1) p2)))
+
+(defmethod join-paths [java.io.File java.lang.String] [p1 p2]
+  (str (File. p1 p2)))
 
 (defn http-error-status-handler [http-agent fatal not-fatal]
   (match (ha/status http-agent)
@@ -96,13 +99,8 @@
 (defn parse-datacodru-page
   "Парсит текст страницы файла на датакоде."
   [page]
-  ;; TODO: нужно разобраться с парсером, ибо он необъятный
-  ;; spacep = re.compile('Вам доступно ([\d\.]+) (.+)')
-  ;; value, unit = (match.group(1), match.group(2))
-  ;; self.space = int(float(value) * \
-  ;;                       rule.match(unit, {'ГБ': 1073741824,
-  ;;                                         'МБ': 1048576,
-  ;;                                         'КБ': 1024}))
+  ;; value, unit = 'Вам доступно ([\d\.]+) (.+)'
+  ;; space = int(float(value) * (unit {'ГБ' 1073741824 'МБ' 1048576 'КБ' 1024}))
   (let [name (atom nil)
         link (atom nil)      
         parser (Parser/createParser page nil)
@@ -111,20 +109,23 @@
           (visitTag
            [tag]
            (cond (instance? LinkTag tag)
-                 (when-let [the-link (re-find #"http://files[\d\w\.]*data.cod.ru/.+"
+                 (when-let [parsed-link (re-find #"http://files[\d\w\.]*data.cod.ru/.+"
                                               (.extractLink tag))]
-                   (reset! link the-link))
+                   (reset! link parsed-link))
                  (and (instance? TagNode tag) (= "b" (.getRawTagName tag)))
-                 (when-let [the-name (.getAttribute tag "title")]
-                   (reset! name the-name)))))]
+                 (when-let [parsed-name (.getAttribute tag "title")]
+                   (reset! name parsed-name)))))]
     (try (.visitAllNodesWith parser visitor)
          {:name @name :link (when @link (new URI @link))}
          (catch ParserException _ nil))))
 
-(defn job-die [job]
+(defn job-nop [job env]
+  job)
+
+(defn job-die [job env]
   (assoc job :alive false))
 
-(defn job-datacodru-link-name [job]
+(defn job-datacodru-link-name [job env]
   (when-let [#^URI address (job :address)]
     (let [page-request (ha/http-agent address)]
       (ha/result page-request)
@@ -132,19 +133,19 @@
         (let [parsed (parse-datacodru-page (ha/string page-request))]
           (if (and (parsed :name) (parsed :link))
             (assoc job :name (parsed :name) :link (parsed :link))
-            (job-die job)))
+            (job-die job env)))
         ((http-error-status-handler page-request
-                                    job-die identity) job)))))
+                                    job-die job-nop) job env)))))
 
-(defn job-link [job]
+(defn job-link [job env]
   (when-let [#^URI address (job :address)]
     (assoc job :link (.toASCIIString address))))
 
-(defn job-name [job]
+(defn job-name [job env]
   (when-let [#^URI link (job :link)]
     (assoc job :name (second (re-find #"/([^/]+)$" (.getPath link))))))
 
-(defn job-tag [pattern job]
+(defn job-tag [pattern job env]
   (when-let [#^URI link (job :link)]
     (when-let [tag (or (if pattern 
                          (some (fn [pat] (if (re-find pat (str link)) (str pat)))
@@ -152,7 +153,7 @@
                        (.getHost link))]
       (assoc job :tag tag))))
 
-(defn job-length [job]
+(defn job-length [job env]
   (when-let [#^URI link (job :link)]
     (let [length-request (ha/http-agent link :method "HEAD")]
       (ha/result length-request)
@@ -160,59 +161,62 @@
         (assoc job :length (Integer/parseInt
                             (:content-length (ha/headers length-request))))
         ((http-error-status-handler length-request
-                                    job-die identity) job)))))
+                                    job-die job-nop) job env)))))
 
-(defn job-file [dir job]
+(defn job-file [job env]
   (when-let [name (job :name)]
-    (assoc job :file (new File (join-paths dir name)))))
+    (when-let [#^File working-path (env :working-path)]
+      (assoc job :file (new File (join-paths working-path name))))))
 
-(defn download [job]
+(defn download [job env]
   (when-let [#^URI link (job :link)]
     (when-let [#^File file (job :file)]
-      (let [headers {"Range" (str "bytes=" (file-length file) "-")}
-            loader (ha/http-agent link
-                                  :headers headers
-                                  :handler
-                                  (fn [remote]
-                                    (with-open [local (FileOutputStream. file true)]
-                                      (duck/copy (ha/stream remote) local))))]
-                                      ;;;java.net.ConnectException: Connection timed out
+      (let [loader (ha/http-agent
+                    link
+                    :headers {"Range" (str "bytes=" (file-length file) "-")}
+                    :handler (fn [remote]
+                               (with-open [local (FileOutputStream. file true)]
+                                 (duck/copy (ha/stream remote) local))))]
+        ;; java.net.ConnectException: Connection timed out
         (ha/result loader)
         (if (and (ha/done? loader) (ha/success? loader))
-          (job-die job)
+          (job-die job env)
           ((http-error-status-handler loader
-                                      job-die identity) job))))))
+                                      job-die job-nop) job env))))))
 
 (def #^{:doc "Хосты упорядочены от частного к общему."}
      *download-rules*
      [[#"http://dsv.data.cod.ru/\d{6}"
-       {:obtain-link job-datacodru-link-name
-        :obtain-tag  (partial job-tag [#"files3?.dsv.data.cod.ru"
+       {:obtain-link   job-datacodru-link-name
+        :obtain-tag    (partial job-tag [#"files3?.dsv.data.cod.ru"
                                        #"files2.dsv.data.cod.ru"])
-        :obtain-file (partial job-file "/home/haru/inbox/dsv")
+        :obtain-file   job-file
         :obtain-length job-length
-        :download    download
-        :die job-die}]
+        :download      download
+        :die           job-die}]
       [#"http://[\w\.]*data.cod.ru/\d+"
-       {:obtain-link job-datacodru-link-name
-        :obtain-tag  (partial job-tag nil)
-        :obtain-file (partial job-file "/home/haru/inbox/dsv")
+       {:obtain-link   job-datacodru-link-name
+        :obtain-tag    (partial job-tag nil)
+        :obtain-file   job-file
         :obtain-length job-length
-        :download    download}]
+        :download      download
+        :die           job-die}]
       [#"http://77.35.112.8[1234]/.+"
-       {:obtain-link job-link
-        :obtain-name job-name
-        :obtain-tag  (partial job-tag nil)
-        :obtain-file (partial job-file "/home/haru/inbox/dsv")
+       {:obtain-link   job-link
+        :obtain-name   job-name
+        :obtain-tag    (partial job-tag nil)
+        :obtain-file   job-file
         :obtain-length job-length
-        :download    download}]
+        :download      download
+        :die           job-die}]
       [#"http://dsvload.net/ftpupload/.+"
-       {:obtain-link job-link
-        :obtain-name job-name
-        :obtain-tag  (partial job-tag nil)
-        :obtain-file (partial job-file "/home/haru/inbox/dsv")
+       {:obtain-link   job-link
+        :obtain-name   job-name
+        :obtain-tag    (partial job-tag nil)
+        :obtain-file   job-file
         :obtain-length job-length
-        :download    download}]])
+        :download      download
+        :die           job-die}]])
 
 (defn reflex-download-program
   "Простая рефлексная программа агента для скачивания."
@@ -226,17 +230,17 @@
            (<= ((percept :self) :length) (file-length ((percept :self) :file))))
           (missing [key] (fn [percept] (not ((percept :self) key))))
           (otherwise [_] true)]
-  (match percept
-         [[(missing :address) :die]
-          [(missing :actions) :die]
-          [(missing :link)    :obtain-link]
-          [(missing :tag)     :obtain-tag]
-          [(missing :name)    :obtain-name]
-          [(missing :file)    :obtain-file]
-          [(missing :length)  :obtain-length]
-          [fully-loaded       :die]
-          [out-of-space       :die]
-          [otherwise          :download]])))
+    (match percept
+           [[(missing :address) :die]
+            [(missing :actions) :die]
+            [(missing :link)    :obtain-link]
+            [(missing :tag)     :obtain-tag]
+            [(missing :name)    :obtain-name]
+            [(missing :file)    :obtain-file]
+            [(missing :length)  :obtain-length]
+            [fully-loaded       :die]
+            [out-of-space       :die]
+            [otherwise          :download]])))
 
 (defn download-agent 
   "Агент для скачивания.
@@ -285,9 +289,11 @@
 (defmethod dead?  ::download [ag] (not (:alive @ag)))
 (defmethod tag ::download [ag] (:tag @ag))
 
-(defn environment [& [{:keys [termination]
-                       :or   {termination #()}}]]
-  (agent {:type ::download :agents '() :tags {} :termination termination}))
+(defn environment [& [{:keys [working-path termination]
+                       :or   {working-path nil
+                              termination #()}}]]
+  (agent {:type ::download :agents '() :tags {}
+          :working-path working-path :termination termination}))
 
 (defmulti add-agent (fn [env ag] (:type env)))
 (defmulti add-agents (fn [env ags] (:type env)))
@@ -332,17 +338,19 @@
   (when (contains? (@env :tags) tag)
     @((@env :tags) tag)))
 
+(defn tag-lock [env tag]
+  (when (contains? (@env :tags) tag)
+    (reset! ((@env :tags) tag) true)))
+
+(defn tag-unlock [env tag]
+  (when (contains? (@env :tags) tag)
+    (reset! ((@env :tags) tag) false)))
+
 (defmacro with-lock-env-tag [env tag & body]
-  (letfn [(tag-lock [env tag]
-                    (when (contains? (@env :tags) tag)
-                      (reset! ((@env :tags) tag) true)))
-          (tag-unlock [env tag]
-                      (when (contains? (@env :tags) tag)
-                        (reset! ((@env :tags) tag) false)))]
-    `(do (tag-lock ~env ~tag)
-         (let [result# ~@body]
-           (tag-unlock ~env ~tag)
-           result#))))
+  `(do (tag-lock ~env ~tag)
+       (let [result# ~@body]
+         (tag-unlock ~env ~tag)
+         result#)))
 
 (defmethod received-tag ::download [env ag]
   (when-let [next-alive-untagged-agent
@@ -369,7 +377,7 @@
                 thread (Thread.
                         #(let [percept {:self ag}
                                action  ((ag :program) percept)
-                               new-state (((ag :actions) action) ag)]
+                               new-state (((ag :actions) action) ag @env)]
                            (reset! result new-state)))]
             (.start thread)
             (.join thread)
@@ -393,8 +401,8 @@
 ;;; COMMAND-LINE
 
 (defn valid-path [#^String path]
-  (let [#^File vp (File. (.getCanonicalPath (File. path)))]
-    (when (.exists vp) vp)))
+  (let [#^File the-path (File. (.getCanonicalPath (File. path)))]
+    (when (.exists the-path) the-path)))
 
 (defn valid-jobs-file [#^String path]
   (when-let [#^File file (valid-path path)]
@@ -408,23 +416,28 @@
  
 (defn -main [& args]
   (with-command-line args
-      "Использование:
+
+
+    "Использование:
 leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИРЕКТОРИЯ]
 АДРЕСА | leica [КЛЮЧИ] [ЗАГРУЗОЧНАЯ ДИРЕКТОРИЯ]
  
 Качает файлы с датакода. По-умолчанию в текущую директорию.
 
 Пишите о багах на zahardzhan@gmail.com."
-      [[debug? d? "писать подробные сообщения для отлова багов"]
-       [quiet? q? "вести себя тихо"]
-       remaining-args]
+
+
+    [[debug? d? "писать подробные сообщения для отлова багов"]
+     [quiet? q? "вести себя тихо"]
+     remaining-args]
 
     (let [jobs-file (some valid-jobs-file remaining-args)
-          output-dir (or (some valid-output-dir remaining-args)
-                         (valid-output-dir (System/getProperty "user.dir")))]
-      (when (and jobs-file output-dir)
+          working-path (or (some valid-output-dir remaining-args)
+                           (valid-output-dir (System/getProperty "user.dir")))]
+      (when (and jobs-file working-path)
         (let [lines (duck/read-lines jobs-file)
-              e (environment {:termination #(System/exit 0)})]
+              e (environment {:working-path working-path 
+                              :termination #(System/exit 0)})]
           (send e add-agents (download-agents lines))
           (await e)
           (send e run-environment))))))
@@ -438,15 +451,15 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
           :name "Hayate_the_combat_butler.mkv"
           :address (URI. "http://dsv.data.cod.ru/433148")}]
   (deftest test-tag
-    (is (= (:tag (leica/job-tag nil jj))
+    (is (= (:tag (leica/job-tag nil jj nil))
            "files3.dsv.data.cod.ru"))
-    (is (= (:tag (leica/job-tag #"files3?.dsv.data.cod.ru" jj))
+    (is (= (:tag (leica/job-tag #"files3?.dsv.data.cod.ru" jj nil))
            "files3?.dsv.data.cod.ru"))
     (is (= (:tag (leica/job-tag [#"files3?.dsv.data.cod.ru"
-                                 #"files2.dsv.data.cod.ru"] jj))
+                                 #"files2.dsv.data.cod.ru"] jj nil))
            "files3?.dsv.data.cod.ru"))
     (is (= (:tag (job-tag [#"files3?.dsv.data.cod.ru"
-                           #"files2.dsv.data.cod.ru"] jk))
+                           #"files2.dsv.data.cod.ru"] jk nil))
            "files4.dsv.data.cod.ru"))))
 
 (deftest test-match
@@ -457,9 +470,19 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
 
 (deftest test-run
   (is (nil?
-       (do
-         (def e (environment :termination #(System/exit 0)))
+       (and nil
+            (do
+              (def e (environment {:working-path (File. "/home/haru/")}))
+              (send e add-agents [(download-agent "http://dsv.data.cod.ru/456093")])
+              (await e)
+              (send e run-environment))))))
 
-         (send e add-agents [(download-agent "http://dsv.data.cod.ru/456093")])
-         (await e)
-         (send e run-environment)))))
+(deftest test-run-step
+  (is (nil?
+       (and nil
+            (do
+              (def e (environment {:working-path (File. "/home/haru/")}))
+              (def a (download-agent "http://dsv.data.cod.ru/456093"))
+              (send e add-agent a)
+              (await e)
+              (send a act e))))))
