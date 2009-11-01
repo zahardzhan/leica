@@ -332,13 +332,17 @@
   (when (contains? (@env :tags) tag)
     @((@env :tags) tag)))
 
-(defn tag-lock [env tag]
-  (when (contains? (@env :tags) tag)
-    (reset! ((@env :tags) tag) true)))
-
-(defn tag-unlock [env tag]
-  (when (contains? (@env :tags) tag)
-    (reset! ((@env :tags) tag) false)))
+(defmacro with-lock-env-tag [env tag & body]
+  (letfn [(tag-lock [env tag]
+                    (when (contains? (@env :tags) tag)
+                      (reset! ((@env :tags) tag) true)))
+          (tag-unlock [env tag]
+                      (when (contains? (@env :tags) tag)
+                        (reset! ((@env :tags) tag) false)))]
+    `(do (tag-lock ~env ~tag)
+         (let [result# ~@body]
+           (tag-unlock ~env ~tag)
+           result#))))
 
 (defmethod received-tag ::download [env ag]
   (when-let [next-alive-untagged-agent
@@ -369,24 +373,21 @@
                            (reset! result new-state)))]
             (.start thread)
             (.join thread)
-            @result))]        
+            @result))]
     (cond (dead? *agent*) ag 
 
           (not tag) (do (let [result (execute-action)]
-                          (do (if (:tag result)
-                                (do (send env add-tag (:tag result))
-                                    (send env received-tag *agent*))
-                                (send-off *agent* act env))
+                          (do (cond (not (:alive result)) (send env done *agent*)
+                                    (:tag result) (do (send env add-tag (:tag result))
+                                                      (send env received-tag *agent*))
+                                    :else (send-off *agent* act env))
                               result)))
 
           tag (if (tag-locked? env tag)
                 ag
-                (do (tag-lock env tag)
-                    (let [result (execute-action)]
-                      (tag-unlock env tag)
-                      (if (:alive result)
-                        (send-off *agent* act env)
-                        (send env done *agent*))
+                (do (let [result (with-lock-env-tag env tag (execute-action))]
+                      (cond (not (:alive result)) (send env done *agent*)
+                            :else (send-off *agent* act env))
                       result))))))
 
 ;;; COMMAND-LINE
