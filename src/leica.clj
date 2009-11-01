@@ -285,15 +285,18 @@
 (defmethod dead?  ::download [ag] (not (:alive @ag)))
 (defmethod tag ::download [ag] (:tag @ag))
 
-(defn environment []
-  (agent {:type ::download :agents '() :tags {}}))
+(defn environment [& [{:keys [termination]
+                       :or   {termination #()}}]]
+  (agent {:type ::download :agents '() :tags {} :termination termination}))
 
 (defmulti add-agent (fn [env ag] (:type env)))
 (defmulti add-agents (fn [env ags] (:type env)))
 (defmulti add-tag (fn [env tag] (:type env)))
+(defmulti run-environment :type)
 
 (defmulti agents #(:type @%))
 (defmulti tags #(:type @%))
+(defmulti termination? #(:type @%))
 
 (defmulti received-tag (fn [env ag] (:type env)))
 (defmulti done (fn [env ag] (:type env)))
@@ -305,17 +308,25 @@
 (defmethod add-agents ::download [env agents]
   (doseq [ag agents]
     (send *agent* add-agent ag))
-  *agent*)
+  env)
 
 (defmethod add-tag ::download [env tag]
   (if (or (nil? tag) (contains? (env :tags) tag)) env
       (assoc env :tags (assoc (env :tags) tag (atom false)))))
 
+(defmethod run-environment ::download [env]
+  (doseq [ag (:agents env)]
+    (send-off ag act *agent*))
+  env)
+  
 (defmethod agents ::download [env]
   (@env :agents))
 
 (defmethod tags ::download [env]
   (@env :tags))
+
+(defmethod termination? ::download [env]
+  (or (empty? (@env agents)) (every? dead? (@env :agents))))
 
 (defn tag-locked? [env tag]
   (when (contains? (@env :tags) tag)
@@ -342,6 +353,8 @@
              (next-after-when #(and (alive? %) (= (tag ag) (tag %)))
                               ag (agents *agent*))]
     (send-off next-alive-agent-with-same-tag act *agent*))
+  (when (termination? *agent*)
+    ((env :termination)))
   env)
 
 (defmethod act ::download [ag env]
@@ -352,8 +365,8 @@
                 thread (Thread.
                         #(let [percept {:self ag}
                                action  ((ag :program) percept)
-                               new-ag-state (((ag :actions) action) ag)]
-                           (reset! result new-ag-state)))]
+                               new-state (((ag :actions) action) ag)]
+                           (reset! result new-state)))]
             (.start thread)
             (.join thread)
             @result))]        
@@ -375,10 +388,6 @@
                         (send-off *agent* act env)
                         (send env done *agent*))
                       result))))))
-
-(defn run-environment [env]
-  (doseq [ag (agents env)]
-    (send-off ag act env)))
 
 ;;; COMMAND-LINE
 
@@ -404,8 +413,7 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
  
 Качает файлы с датакода. По-умолчанию в текущую директорию.
 
-Пишите о багах на zahardzhan@gmail.com.
-"
+Пишите о багах на zahardzhan@gmail.com."
       [[debug? d? "писать подробные сообщения для отлова багов"]
        [quiet? q? "вести себя тихо"]
        remaining-args]
@@ -415,9 +423,10 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
                          (valid-output-dir (System/getProperty "user.dir")))]
       (when (and jobs-file output-dir)
         (let [lines (duck/read-lines jobs-file)
-              e (environment)]
-          (add-agents e (download-agents lines))
-          (run-environment e))))))
+              e (environment {:termination #(System/exit 0)})]
+          (send e add-agents (download-agents lines))
+          (await e)
+          (send e run-environment))))))
 
 ;;; TESTS
 
@@ -445,9 +454,11 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
                 {:rule-response rest})
          '(:MATCH))))
 
-;(do (def e (environment))
-    ;;(send e add-agent (download-agent "http://dsv.data.cod.ru/450993"))
-;    (send e add-agent (download-agent "Alcohol120_retail_1.9.8.7612.rar: http://dsv.data.cod.ru/450226"))
-    ;;(send e add-agent (download-agent "скачать: http://dsv.data.cod.ru/452213")))
-;    )
-;;     (run-environment e))
+(deftest test-run
+  (is (nil?
+       (do
+         (def e (environment :termination #(System/exit 0)))
+
+         (send e add-agents [(download-agent "http://dsv.data.cod.ru/456093")])
+         (await e)
+         (send e run-environment)))))
