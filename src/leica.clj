@@ -24,6 +24,15 @@
 
 (in-ns 'leica)
 
+(def *usage* 
+     "Использование:
+leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИРЕКТОРИЯ]
+АДРЕСА | leica [КЛЮЧИ] [ЗАГРУЗОЧНАЯ ДИРЕКТОРИЯ]
+ 
+Качает файлы с датакода. По-умолчанию в текущую директорию.
+
+Пишите о багах на zahardzhan@gmail.com.")
+
 ;;; RULE
 
 (defn default-matcher 
@@ -122,6 +131,9 @@
 (defn job-nop [job env]
   job)
 
+(defn job-fail [job env]
+  (assoc job :fail true))
+
 (defn job-die [job env]
   (assoc job :alive false))
 
@@ -132,18 +144,18 @@
       (if (and (ha/done? page-request) (ha/success? page-request))
         (let [parsed (parse-datacodru-page (ha/string page-request))]
           (if (and (parsed :name) (parsed :link))
-            (assoc job :name (parsed :name) :link (parsed :link))
+            (assoc job :name (parsed :name) :link (parsed :link) :fail false)
             (job-die job env)))
         ((http-error-status-handler page-request
-                                    job-die job-nop) job env)))))
+                                    job-die job-fail) job env)))))
 
 (defn job-link [job env]
   (when-let [#^URI address (job :address)]
-    (assoc job :link (.toASCIIString address))))
+    (assoc job :link (.toASCIIString address) :fail false)))
 
 (defn job-name [job env]
   (when-let [#^URI link (job :link)]
-    (assoc job :name (second (re-find #"/([^/]+)$" (.getPath link))))))
+    (assoc job :name (second (re-find #"/([^/]+)$" (.getPath link))) :fail false)))
 
 (defn job-tag [pattern job env]
   (when-let [#^URI link (job :link)]
@@ -151,22 +163,23 @@
                          (some (fn [pat] (if (re-find pat (str link)) (str pat)))
                                (if (sequential? pattern) pattern [pattern])))
                        (.getHost link))]
-      (assoc job :tag tag))))
+      (assoc job :tag tag :fail false))))
 
 (defn job-length [job env]
   (when-let [#^URI link (job :link)]
     (let [length-request (ha/http-agent link :method "HEAD")]
       (ha/result length-request)
       (if (and (ha/done? length-request) (ha/success? length-request))
-        (assoc job :length (Integer/parseInt
-                            (:content-length (ha/headers length-request))))
+        (if-let [length (:content-length (ha/headers length-request))]
+          (assoc job :length (Integer/parseInt length) :fail false)
+          (job-die job env))
         ((http-error-status-handler length-request
-                                    job-die job-nop) job env)))))
+                                    job-die job-fail) job env)))))
 
 (defn job-file [job env]
   (when-let [name (job :name)]
     (when-let [#^File working-path (env :working-path)]
-      (assoc job :file (new File (join-paths working-path name))))))
+      (assoc job :file (new File (join-paths working-path name)) :fail false))))
 
 (defn download [job env]
   (when-let [#^URI link (job :link)]
@@ -182,7 +195,7 @@
         (if (and (ha/done? loader) (ha/success? loader))
           (job-die job env)
           ((http-error-status-handler loader
-                                      job-die job-nop) job env))))))
+                                      job-die job-fail) job env))))))
 
 (def #^{:doc "Хосты упорядочены от частного к общему."}
      *download-rules*
@@ -274,7 +287,7 @@
               :link nil :name nil :tag nil :file nil :length nil
               :actions actions
               :program reflex-download-program
-              :alive true :percept nil :action nil}))))
+              :alive true :fail false :percept nil :action nil}))))
 
 (defn download-agents [lines]
   (remove (comp not agent?) (map download-agent lines)))
@@ -283,10 +296,12 @@
 
 (defmulti alive? #(:type @%))
 (defmulti dead? #(:type @%))
+(defmulti fail? #(:type @%))
 (defmulti tag #(:type @%))
 
 (defmethod alive? ::download [ag] (:alive @ag))
 (defmethod dead?  ::download [ag] (not (:alive @ag)))
+(defmethod fail? ::download [ag] (:fail @ag))
 (defmethod tag ::download [ag] (:tag @ag))
 
 (defn environment [& [{:keys [working-path termination]
@@ -386,16 +401,19 @@
 
           (not tag) (do (let [result (execute-action)]
                           (do (cond (not (:alive result)) (send env done *agent*)
+                                    ;;(:fail result) (send-off *agent* act env)
                                     (:tag result) (do (send env add-tag (:tag result))
                                                       (send env received-tag *agent*))
-                                    :else (send-off *agent* act env))
+                                    ;;:else (send-off *agent* act env)
+                                    )
                               result)))
-
           tag (if (tag-locked? env tag)
                 ag
                 (do (let [result (with-lock-env-tag env tag (execute-action))]
                       (cond (not (:alive result)) (send env done *agent*)
-                            :else (send-off *agent* act env))
+                            (:fail result) (send env done *agent*)
+                            ;:else (send-off *agent* act env)
+                            )
                       result))))))
 
 ;;; COMMAND-LINE
@@ -415,22 +433,11 @@
       dir)))
  
 (defn -main [& args]
-  (with-command-line args
-
-
-    "Использование:
-leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИРЕКТОРИЯ]
-АДРЕСА | leica [КЛЮЧИ] [ЗАГРУЗОЧНАЯ ДИРЕКТОРИЯ]
- 
-Качает файлы с датакода. По-умолчанию в текущую директорию.
-
-Пишите о багах на zahardzhan@gmail.com."
-
-
+  (with-command-line args *usage*
     [[debug? d? "писать подробные сообщения для отлова багов"]
      [quiet? q? "вести себя тихо"]
      remaining-args]
-
+    
     (let [jobs-file (some valid-jobs-file remaining-args)
           working-path (or (some valid-output-dir remaining-args)
                            (valid-output-dir (System/getProperty "user.dir")))]
@@ -472,8 +479,12 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
   (is (nil?
        (and nil
             (do
-              (def e (environment {:working-path (File. "/home/haru/")}))
-              (send e add-agents [(download-agent "http://dsv.data.cod.ru/456093")])
+              (def e (environment {:working-path (File. "/home/haru/inbox/dsv")}))
+              (send e add-agents (download-agents
+                                  ["voron_2.part01.rar - http://dsv.data.cod.ru/454329"
+                                   ;"voron_2.part02.rar - http://dsv.data.cod.ru/454379"
+                                   ;"voron_2.part03.rar - http://dsv.data.cod.ru/454424"
+                                   ]))
               (await e)
               (send e run-environment))))))
 
@@ -482,7 +493,13 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
        (and nil
             (do
               (def e (environment {:working-path (File. "/home/haru/")}))
-              (def a (download-agent "http://dsv.data.cod.ru/456093"))
+              (def a (download-agent "voron_2.part01.rar - http://dsv.data.cod.ru/454329"))
+              (def b (download-agent "A Hawk in the Heavens.rar http://dsv.data.cod.ru/454677"))
               (send e add-agent a)
+              (send e add-agent b)
               (await e)
-              (send a act e))))))
+              (send a act e)
+              (send b act e)
+              )))))
+
+;; FAIL voron_2.part01.rar http://dsv.data.cod.ru/454329 
