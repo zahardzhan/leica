@@ -10,12 +10,14 @@
   leica
   (:gen-class)
   (:require [clojure.contrib.http.agent :as ha]
-            [clojure.contrib.duck-streams :as duck])
+            [clojure.contrib.duck-streams :as duck]
+            [clojure.contrib.logging :as log])
   (:use clojure.contrib.test-is clojure.contrib.seq-utils
         clojure.contrib.command-line)
   (:import (java.io File FileOutputStream InputStream
                     ByteArrayOutputStream ByteArrayInputStream)
            (java.net HttpURLConnection InetAddress URI URL URLEncoder)
+           (java.util.logging Logger Level)
            (org.htmlparser Parser)
            (org.htmlparser.util ParserException)
            (org.htmlparser.visitors NodeVisitor)
@@ -292,6 +294,18 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
 (defn download-agents [lines]
   (remove (comp not agent?) (map download-agent lines)))
 
+(defn execute-action [ag env]
+  (let [result (atom nil)
+        thread
+        (Thread. #(let [percept {:self @ag}
+                        action  ((@ag :program) percept)]
+                    (log/info (str (or (@ag :name) (@ag :address)) " > " action))
+                    (let [new-state (((@ag :actions) action) @ag @env)]
+                      (reset! result new-state))))]
+    (.start thread)
+    (.join thread)
+    @result))
+
 (defmulti act (fn [ag env] (:type ag)))
 
 (defmulti alive? #(:type @%))
@@ -385,35 +399,24 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
   env)
 
 (defmethod act ::download [ag env]
-  (let [tag (:tag ag)
-        execute-action
-        (fn []
-          (let [result (atom nil)
-                thread (Thread.
-                        #(let [percept {:self ag}
-                               action  ((ag :program) percept)
-                               new-state (((ag :actions) action) ag @env)]
-                           (reset! result new-state)))]
-            (.start thread)
-            (.join thread)
-            @result))]
+  (let [tag (:tag ag)]
     (cond (dead? *agent*) ag 
 
-          (not tag) (do (let [result (execute-action)]
-                          (do (cond (not (:alive result)) (send env done *agent*)
-                                    ;;(:fail result) (send-off *agent* act env)
-                                    (:tag result) (do (send env add-tag (:tag result))
-                                                      (send env received-tag *agent*))
-                                    ;;:else (send-off *agent* act env)
-                                    )
-                              result)))
+          (not tag) (do (let [result (execute-action *agent* env)]
+                          (cond (not (:alive result)) (send env done *agent*)
+                                (:fail result) (send-off *agent* act env)
+                                (:tag result) (do (send env add-tag (:tag result))
+                                                  (send env received-tag *agent*))
+                                :else (send-off *agent* act env))
+                          result))
+
           tag (if (tag-locked? env tag)
                 ag
-                (do (let [result (with-lock-env-tag env tag (execute-action))]
+                (do (let [result (with-lock-env-tag env tag
+                                   (execute-action *agent* env))]
                       (cond (not (:alive result)) (send env done *agent*)
                             (:fail result) (send env done *agent*)
-                            ;:else (send-off *agent* act env)
-                            )
+                            :else (send-off *agent* act env))
                       result))))))
 
 ;;; COMMAND-LINE
@@ -435,8 +438,9 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
 (defn -main [& args]
   (with-command-line args *usage*
     [[debug? d? "писать подробные сообщения для отлова багов"]
-     [quiet? q? "вести себя тихо"]
      remaining-args]
+    
+    (.setLevel (Logger/getLogger "") (if debug? (Level/ALL) (Level/OFF)))
     
     (let [jobs-file (some valid-jobs-file remaining-args)
           working-path (or (some valid-output-dir remaining-args)
@@ -482,6 +486,7 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
               (def e (environment {:working-path (File. "/home/haru/inbox/dsv")}))
               (send e add-agents (download-agents
                                   ["voron_2.part01.rar - http://dsv.data.cod.ru/454329"
+                                   "Jane Air http://dsv.data.cod.ru/454843"
                                    ;"voron_2.part02.rar - http://dsv.data.cod.ru/454379"
                                    ;"voron_2.part03.rar - http://dsv.data.cod.ru/454424"
                                    ]))
@@ -498,8 +503,6 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
               (send e add-agent a)
               (send e add-agent b)
               (await e)
-              (send a act e)
-              (send b act e)
+              (send-off a act e)
+              (send-off b act e)
               )))))
-
-;; FAIL voron_2.part01.rar http://dsv.data.cod.ru/454329 
