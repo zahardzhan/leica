@@ -210,7 +210,7 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
      [[#"http://dsv.data.cod.ru/\d{6}"
        {:obtain-link   job-datacodru-link-name
         :obtain-tag    (partial job-tag [#"files3?.dsv.data.cod.ru"
-                                       #"files2.dsv.data.cod.ru"])
+                                         #"files2.dsv.data.cod.ru"])
         :obtain-file   job-file
         :obtain-length job-length
         :download      download
@@ -370,7 +370,7 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
   (@env :tags))
 
 (defmethod termination? ::download [env]
-  (or (empty? (@env agents)) (every? dead? (@env :agents))))
+  (or (empty? (agents env)) (every? dead? (agents env))))
 
 (defn tag-locked? [env tag]
   (when (contains? (@env :tags) tag)
@@ -518,10 +518,8 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
             (do
               (def e (environment {:working-path (File. "/home/haru/inbox/dsv")}))
               (send e add-agents (download-agents
-                                  ["http://77.35.112.82/upload/Personal_Folders/Peshehod/Chelovek-Slon.mpg"
-                                   "Cencoroll.mkv: http://dsv.data.cod.ru/454515"
-                                   "Cencoroll.rar: http://dsv.data.cod.ru/454521"
-                                   "First Squad - The Moment Of Truth.part1.rar: http://dsv.data.cod.ru/448684"]))
+                                  ["http://dsv.data.cod.ru/458692"
+                                   "http://77.35.112.82/upload/Personal_Folders/Peshehod/Chelovek-Slon.mpg"]))
               (await e)
               (send e run-environment))))))
 
