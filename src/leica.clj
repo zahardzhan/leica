@@ -17,7 +17,8 @@
   (:import (java.io File FileOutputStream InputStream
                     ByteArrayOutputStream ByteArrayInputStream)
            (java.net HttpURLConnection InetAddress URI URL URLEncoder)
-           (java.util.logging Logger Level)
+           (java.util Date)
+           (java.util.logging Logger Level Formatter LogRecord StreamHandler)
            (org.htmlparser Parser)
            (org.htmlparser.util ParserException)
            (org.htmlparser.visitors NodeVisitor)
@@ -153,7 +154,7 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
 
 (defn job-link [job env]
   (when-let [#^URI address (job :address)]
-    (assoc job :link (.toASCIIString address) :fail false)))
+    (assoc job :link (URI. (.toASCIIString address)) :fail false)))
 
 (defn job-name [job env]
   (when-let [#^URI link (job :link)]
@@ -192,12 +193,17 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
                     :handler (fn [remote]
                                (with-open [local (FileOutputStream. file true)]
                                  (duck/copy (ha/stream remote) local))))]
-        ;; java.net.ConnectException: Connection timed out
+        (log/info (str "Начата загрузка " (job :name)))
         (ha/result loader)
         (if (and (ha/done? loader) (ha/success? loader))
-          (job-die job env)
-          ((http-error-status-handler loader
-                                      job-die job-fail) job env))))))
+          (do (log/info (str "Закончена загрузка " (job :name)))
+              (job-die job env))
+          ((http-error-status-handler
+            loader
+            #(do (log/info (str "Загрузка не может быть закончена " (job :name)))
+                 (job-die %1 %2))
+            #(do (log/info (str "Прервана загрузка " (job :name)))
+                 (job-fail %1 %2))) job env))))))
 
 (def #^{:doc "Хосты упорядочены от частного к общему."}
      *download-rules*
@@ -236,13 +242,12 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
 (defn reflex-download-program
   "Простая рефлексная программа агента для скачивания."
   [percept]
-  (letfn [(out-of-space
-           [percept]
-           (when-let [#^File file ((percept :self) :file)]
-             (< (.getUsableSpace file) (file-length file))))
-          (fully-loaded
-           [percept]
-           (<= ((percept :self) :length) (file-length ((percept :self) :file))))
+  (letfn [(out-of-space [percept]
+                        (when-let [#^File file ((percept :self) :file)]
+                          (< (.getUsableSpace file) (file-length file))))
+          (fully-loaded [percept]
+                        (<= ((percept :self) :length) 
+                            (file-length ((percept :self) :file))))
           (missing [key] (fn [percept] (not ((percept :self) key))))
           (otherwise [_] true)]
     (match percept
@@ -294,18 +299,6 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
 (defn download-agents [lines]
   (remove (comp not agent?) (map download-agent lines)))
 
-(defn execute-action [ag env]
-  (let [result (atom nil)
-        thread
-        (Thread. #(let [percept {:self @ag}
-                        action  ((@ag :program) percept)]
-                    (log/info (str (or (@ag :name) (@ag :address)) " > " action))
-                    (let [new-state (((@ag :actions) action) @ag @env)]
-                      (reset! result new-state))))]
-    (.start thread)
-    (.join thread)
-    @result))
-
 (defmulti act (fn [ag env] (:type ag)))
 
 (defmulti alive? #(:type @%))
@@ -317,6 +310,22 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
 (defmethod dead?  ::download [ag] (not (:alive @ag)))
 (defmethod fail? ::download [ag] (:fail @ag))
 (defmethod tag ::download [ag] (:tag @ag))
+
+(defn execute-action [ag env]
+  (let [result (atom nil)
+        thread
+        (Thread. #(let [percept {:self @ag}
+                        action  ((@ag :program) percept)]
+                    (log/debug (str (or (@ag :name) (@ag :address)) " " action))
+                    (let [new-state (((@ag :actions) action) @ag @env)]
+                      (reset! result new-state)
+                      (log/debug (str (or (@ag :name) (@ag :address)) " " action " "
+                                      (cond (:not (:alive new-state)) "агент умер"
+                                            (:fail new-state) "агент провалился"
+                                            :else "успешно"))))))]
+    (.start thread)
+    (.join thread)
+    @result))
 
 (defn environment [& [{:keys [working-path termination]
                        :or   {working-path nil
@@ -436,12 +445,31 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
       dir)))
  
 (defn -main [& args]
-  (with-command-line args *usage*
-    [[debug? d? "писать подробные сообщения для отлова багов"]
-     remaining-args]
-    
-    (.setLevel (Logger/getLogger "") (if debug? (Level/ALL) (Level/OFF)))
-    
+  (with-command-line args
+      *usage*
+      [[quiet? q? "работать молча"]
+       [debug? d? "писать подробные сообщения для отлова багов"]
+       remaining-args]
+
+    (let [root-logger (Logger/getLogger "")
+          console-handler (first (.getHandlers root-logger))
+          basic-formatter (proxy [Formatter] []
+                            (format
+                             [#^LogRecord record]
+                             (let [time (new Date (.getMillis record))
+                                   hour (.getHours time)
+                                   min  (.getMinutes time)
+                                   sec  (.getSeconds time)]
+                               (str hour ":" min ":" sec " " 
+                                    (.getName (.getLevel record)) ": "
+                                    (.getMessage record) "\n"))))
+          log-level (cond quiet? (Level/OFF)
+                          debug? (Level/FINE)
+                          :else  (Level/INFO))]
+      (.setFormatter console-handler basic-formatter)
+      (.setLevel console-handler log-level)
+      (.setLevel root-logger log-level))
+
     (let [jobs-file (some valid-jobs-file remaining-args)
           working-path (or (some valid-output-dir remaining-args)
                            (valid-output-dir (System/getProperty "user.dir")))]
@@ -460,7 +488,10 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
           :address (URI. "http://dsv.data.cod.ru/433148")}
       jk {:link (URI. "http://files4.dsv.data.cod.ru/?WyIyMGI4%3D%3D")
           :name "Hayate_the_combat_butler.mkv"
-          :address (URI. "http://dsv.data.cod.ru/433148")}]
+          :address (URI. "http://dsv.data.cod.ru/433148")}
+      j8 {:link (URI. "http://77.35.112.82/upload/Personal_Folders/Peshehod/Chelovek-Slon.mpg")
+          :name "Chelovek-Slon.mpg"
+          :address (URI. "http://77.35.112.82/upload/Personal_Folders/Peshehod/Chelovek-Slon.mpg")}]
   (deftest test-tag
     (is (= (:tag (leica/job-tag nil jj nil))
            "files3.dsv.data.cod.ru"))
@@ -471,7 +502,9 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
            "files3?.dsv.data.cod.ru"))
     (is (= (:tag (job-tag [#"files3?.dsv.data.cod.ru"
                            #"files2.dsv.data.cod.ru"] jk nil))
-           "files4.dsv.data.cod.ru"))))
+           "files4.dsv.data.cod.ru"))
+    (is (= (:tag (job-tag nil j8 nil))
+           "77.35.112.82"))))
 
 (deftest test-match
   (is (= (match "http://dsv.data.cod.ru/433148"
@@ -485,11 +518,10 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
             (do
               (def e (environment {:working-path (File. "/home/haru/inbox/dsv")}))
               (send e add-agents (download-agents
-                                  ["voron_2.part01.rar - http://dsv.data.cod.ru/454329"
-                                   "Jane Air http://dsv.data.cod.ru/454843"
-                                   ;"voron_2.part02.rar - http://dsv.data.cod.ru/454379"
-                                   ;"voron_2.part03.rar - http://dsv.data.cod.ru/454424"
-                                   ]))
+                                  ["http://77.35.112.82/upload/Personal_Folders/Peshehod/Chelovek-Slon.mpg"
+                                   "Cencoroll.mkv: http://dsv.data.cod.ru/454515"
+                                   "Cencoroll.rar: http://dsv.data.cod.ru/454521"
+                                   "First Squad - The Moment Of Truth.part1.rar: http://dsv.data.cod.ru/448684"]))
               (await e)
               (send e run-environment))))))
 
@@ -497,9 +529,24 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
   (is (nil?
        (and nil
             (do
-              (def e (environment {:working-path (File. "/home/haru/")}))
-              (def a (download-agent "voron_2.part01.rar - http://dsv.data.cod.ru/454329"))
-              (def b (download-agent "A Hawk in the Heavens.rar http://dsv.data.cod.ru/454677"))
+              (let [root-logger (Logger/getLogger "")
+                    console-handler (first (.getHandlers root-logger))
+                    basic-formatter (proxy [Formatter] []
+                                      (format
+                                       [#^LogRecord record]
+                                       (let [time (new Date (.getMillis record))
+                                             hour (.getHours time)
+                                             min  (.getMinutes time)
+                                             sec  (.getSeconds time)]
+                                         (str hour ":" min ":" sec " " 
+                                              (.getName (.getLevel record)) ": "
+                                              (.getMessage record) "\n"))))]
+                (.setFormatter console-handler basic-formatter)
+                (.setLevel console-handler (Level/ALL)))
+              
+              (def e (environment {:working-path (File. "/home/haru/inbox/dsv")}))
+              (def a (download-agent "Goal.Icon.rar http://dsv.data.cod.ru/456136"))
+              (def b (download-agent ""))
               (send e add-agent a)
               (send e add-agent b)
               (await e)
