@@ -76,7 +76,7 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
 
 (defn next-after-when [pred? x xs]
   (when (some pred? xs)
-    (let [[before after] (split-with #(not (= x %)) xs)]
+    (let [[before after] (split-with (partial not= x) xs)]
       (some #(when (pred? %) %) (rest (cycle (concat after before)))))))
 
 (defn file-length [#^File file]
@@ -399,10 +399,19 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
   env)
 
 (defmethod done ::download [env ag]
-  (when-let [next-alive-agent-with-same-tag
-             (next-after-when #(and (alive? %) (= (tag ag) (tag %)))
-                              ag (agents *agent*))]
-    (send-off next-alive-agent-with-same-tag act *agent*))
+  (let [alive-unfailed-with-same-tag
+        (some #(when (and (= (tag ag) (tag %)) (alive? %) (not (fail? %))) %)
+              (agents *agent*))
+        next-alive-with-same-tag
+        (next-after-when #(and (= (tag ag) (tag %)) (alive? %))
+                         ag (agents *agent*))]
+    
+    (cond alive-unfailed-with-same-tag
+          (send-off alive-unfailed-with-same-tag act *agent*)
+
+          next-alive-with-same-tag
+          (send-off next-alive-with-same-tag act *agent*)))
+  
   (when (termination? *agent*)
     ((env :termination)))
   env)
@@ -419,14 +428,14 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
                                 :else (send-off *agent* act env))
                           result))
 
-          tag (if (tag-locked? env tag)
-                ag
-                (do (let [result (with-lock-env-tag env tag
+          (tag-locked? env tag) ag
+
+          :else (do (let [result (with-lock-env-tag env tag
                                    (execute-action *agent* env))]
                       (cond (not (:alive result)) (send env done *agent*)
                             (:fail result) (send env done *agent*)
                             :else (send-off *agent* act env))
-                      result))))))
+                      result)))))
 
 ;;; COMMAND-LINE
 
