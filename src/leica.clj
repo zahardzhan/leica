@@ -13,16 +13,20 @@
             [clojure.contrib.duck-streams :as duck]
             [clojure.contrib.logging :as log])
   (:use clojure.contrib.test-is clojure.contrib.seq-utils
-        clojure.contrib.command-line)
+        clojure.contrib.command-line
+        clojure.contrib.json.write)
   (:import (java.io File FileOutputStream InputStream
                     ByteArrayOutputStream ByteArrayInputStream)
            (java.net HttpURLConnection InetAddress URI URL URLEncoder)
            (java.util Date)
            (java.util.logging Logger Level Formatter LogRecord StreamHandler)
+           (org.apache.commons.httpclient HttpClient)
+           (org.apache.commons.httpclient.methods GetMethod PostMethod)
+           (org.apache.commons.httpclient.util EncodingUtil)
            (org.htmlparser Parser)
            (org.htmlparser.util ParserException)
            (org.htmlparser.visitors NodeVisitor)
-           (org.htmlparser.tags LinkTag)
+           (org.htmlparser.tags Div LinkTag)
            (org.htmlparser.nodes TagNode)))
 
 (in-ns 'leica)
@@ -111,10 +115,9 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
 (defn parse-datacodru-page
   "Парсит текст страницы файла на датакоде."
   [page]
-  ;; value, unit = 'Вам доступно ([\d\.]+) (.+)'
-  ;; space = int(float(value) * (unit {'ГБ' 1073741824 'МБ' 1048576 'КБ' 1024}))
   (let [name (atom nil)
-        link (atom nil)      
+        link (atom nil)
+        space (atom nil)
         parser (Parser/createParser page nil)
         visitor
         (proxy [NodeVisitor] []
@@ -124,11 +127,21 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
                  (when-let [parsed-link (re-find #"http://files[\d\w\.]*data.cod.ru/.+"
                                               (.extractLink tag))]
                    (reset! link parsed-link))
+
                  (and (instance? TagNode tag) (= "b" (.getRawTagName tag)))
                  (when-let [parsed-name (.getAttribute tag "title")]
-                   (reset! name parsed-name)))))]
+                   (reset! name parsed-name))
+
+                 (instance? Div tag)
+                 (let [[_ space-str unit-str]
+                       (re-find #"Вам доступно ([\d\.]+) (\p{javaUpperCase}{2})" 
+                                (.getStringText tag))]
+                   (when (and space-str unit-str)
+                     (let [space-val (Float/parseFloat space-str)
+                           unit-val ({"ГБ" 1073741824 "МБ" 1048576 "КБ" 1024} unit-str)]
+                       (reset! space (int (* space-val unit-val)))))))))]
     (try (.visitAllNodesWith parser visitor)
-         {:name @name :link (when @link (new URI @link))}
+         {:name @name :link (when @link (new URI @link)) :space @space}
          (catch ParserException _ nil))))
 
 (defn job-nop [job env]
@@ -410,10 +423,9 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
           (send-off alive-unfailed-with-same-tag act *agent*)
 
           next-alive-with-same-tag
-          (send-off next-alive-with-same-tag act *agent*)))
-  
-  (when (termination? *agent*)
-    ((env :termination)))
+          (send-off next-alive-with-same-tag act *agent*)
+
+          (termination? *agent*) ((env :termination))))
   env)
 
 (defmethod act ::download [ag env]
@@ -536,21 +548,6 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
   (is (nil?
        (and nil
             (do
-              (let [root-logger (Logger/getLogger "")
-                    console-handler (first (.getHandlers root-logger))
-                    basic-formatter (proxy [Formatter] []
-                                      (format
-                                       [#^LogRecord record]
-                                       (let [time (new Date (.getMillis record))
-                                             hour (.getHours time)
-                                             min  (.getMinutes time)
-                                             sec  (.getSeconds time)]
-                                         (str hour ":" min ":" sec " " 
-                                              (.getName (.getLevel record)) ": "
-                                              (.getMessage record) "\n"))))]
-                (.setFormatter console-handler basic-formatter)
-                (.setLevel console-handler (Level/ALL)))
-              
               (def e (environment {:working-path (File. "/home/haru/inbox/dsv")}))
               (def a (download-agent "Goal.Icon.rar http://dsv.data.cod.ru/456136"))
               (def b (download-agent ""))
@@ -560,3 +557,29 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
               (send-off a act e)
               (send-off b act e)
               )))))
+
+;; ACCOUNT
+
+(defn user-agent []
+  (str "Leica by Zahardzhan & GO1d ("
+       (System/getProperty "os.name") " "
+       (System/getProperty "os.version") " "
+       (System/getProperty "os.arch") ")"))
+
+(defmacro with-datacod-auth
+  [#^HttpClient client email password  & body]
+  `(let [#^PostMethod post# (new PostMethod "http://nvwh.cod.ru/link/auth/")]
+     (doto post#
+       (.addParameter "refURL" "http://dsv.data.cod.ru")
+       (.addParameter "email" ~email)
+       (.addParameter "password" ~password))
+    (let [post-status# (.executeMethod ~client post#)]
+      ~@body)))
+
+(let [#^HttpClient client (new HttpClient)]
+  (with-datacod-auth client "zahardzhan@gmail.com" "zzzzzz"
+    (let [#^GetMethod get (new GetMethod "http://dsv.data.cod.ru")]
+      (let [get-status (.executeMethod client get)
+            get-response (.getResponseBody get)]
+        [get-status (parse-datacodru-page 
+                     (EncodingUtil/getString get-response "UTF-8"))]))))
