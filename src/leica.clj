@@ -1,28 +1,32 @@
-;;; -*- mode: lisp; coding: utf-8 -*- author: Roman Zaharov zahardzhan@gmail.com
+;;; -*- mode: lisp; coding: utf-8 -*-
+;;; authors: Roman Zaharov zahardzhan@gmail.com, Alexander Zolotov goldifit@gmail.com
 ;;; leica.clj: многопоточная качалка для data.cod.ru и dsvload.net.
+;;; октябрь, 2009
 
-;; октябрь, 2009
-
-;; Это свободная программа, используйте на свой страх и риск.
+;;; Это свободная программа, используйте на свой страх и риск.
 
 (ns #^{:doc "Многопоточная качалка для data.cod.ru и dsvload.net."
-       :author "Роман Захаров"}
+       :author "Роман Захаров, Александр Золотов"}
   leica
   (:gen-class)
   (:require [clojure.contrib.http.agent :as ha]
             [clojure.contrib.duck-streams :as duck]
             [clojure.contrib.logging :as log])
   (:use clojure.contrib.test-is clojure.contrib.seq-utils
-        clojure.contrib.command-line
-        clojure.contrib.json.write)
+        clojure.contrib.command-line)
   (:import (java.io File FileOutputStream InputStream
                     ByteArrayOutputStream ByteArrayInputStream)
            (java.net HttpURLConnection InetAddress URI URL URLEncoder)
            (java.util Date)
            (java.util.logging Logger Level Formatter LogRecord StreamHandler)
-           (org.apache.commons.httpclient HttpClient)
+
+           (org.apache.commons.httpclient HttpClient HttpStatus)
            (org.apache.commons.httpclient.methods GetMethod PostMethod)
+           (org.apache.commons.httpclient.methods.multipart
+            FilePart MultipartRequestEntity Part StringPart)
+           (org.apache.commons.httpclient.params.HttpMethodParams)
            (org.apache.commons.httpclient.util EncodingUtil)
+
            (org.htmlparser Parser)
            (org.htmlparser.util ParserException)
            (org.htmlparser.visitors NodeVisitor)
@@ -32,15 +36,18 @@
 (in-ns 'leica)
 
 (def *usage* 
-     "Использование:
-leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИРЕКТОРИЯ]
-АДРЕСА | leica [КЛЮЧИ] [ЗАГРУЗОЧНАЯ ДИРЕКТОРИЯ]
- 
-Качает файлы с датакода. По-умолчанию в текущую директорию.
+     "Клиент для датакода.
 
-Пишите о багах на zahardzhan@gmail.com.")
+Пишите о багах на zahardzhan@gmail.com.
 
-;;; RULE
+Скачать файлы с датакода:
+leica [Ключи] [Файл с адресами на скачивание] [Директория для скачанных файлов]
+
+Закачать файлы на датакод:
+leica [Ключи] -a почтовый@адрес:пароль [Файлы и директории для закачивания]
+")
+
+;;;; RULES
 
 (defn default-matcher 
   "Дефолтный сопоставитель с образцом."
@@ -70,7 +77,7 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
             (action result (rule-response rule))))
         rules))
 
-;;; AUX
+;;;; AUX
 
 (defn agent? [x]
   (instance? clojure.lang.Agent x))
@@ -94,6 +101,30 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
 (defmethod join-paths [java.io.File java.lang.String] [p1 p2]
   (str (File. p1 p2)))
 
+(defn transliterate [s]
+  (apply str 
+         (map #(or ({"а" "a"  "б" "b"  "в" "v"  "г" "g"  "д" "d"
+                     "е" "e"  "ё" "yo"  "ж" "zh"  "з" "z"  "и" "i"
+                     "й" "y"  "к" "k"  "л" "l"  "м" "m"  "н" "n"
+                     "о" "o"  "п" "p"  "р" "r"  "с" "s"  "т" "t"
+                     "у" "u"  "ф" "f"  "х" "h"  "ц" "c"  "ч" "ch"
+                     "ш" "sh"  "щ" "sh"  "ъ" "'"  "ы" "y"  "ь" "'"
+                     "э" "e"  "ю" "yu"  "я" " ya"  "А" "A"  "Б" "B"
+                     "В" "V"  "Г" "G"  "Д" "D"  "Е" "E"  "Ё" "YO"
+                     "Ж" "ZH"  "З" "Z"  "И" "I"  "Й" "Y"  "К" "K"
+                     "Л" "L"  "М" "M"  "Н" "N"  "О" "O"  "П" "P"
+                     "Р" "R"  "С" "S"  "Т" "T"  "У" "U"  "Ф" "F"
+                     "Х" "H"  "Ц" "C"  "Ч" "CH"  "Ш" "SH"  "Щ" "SH"
+                     "Ъ" "'"  "Ы" "Y"  "Ь" "'"  "Э" "E"  "Ю" "YU"
+                     "Я" " YA"} (str %)) %)
+              s)))
+
+(defn user-agent [] ;; TODO: Сделать юзер-агента в соответствии со стандартом
+  (str "Leica by Zahardzhan & GO1d ("
+       (System/getProperty "os.name") " "
+       (System/getProperty "os.version") " "
+       (System/getProperty "os.arch") ")"))
+
 (defn http-error-status-handler [http-agent fatal not-fatal]
   (match (ha/status http-agent)
          [[#{400  ;; Bad Request - неправильный запрос
@@ -112,8 +143,37 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
              504} ;; Gateway Timeout
            not-fatal]]))
 
+(defn datacod-account
+  "Аккаунт на датакоде."
+  [login password]
+  (when (and login password)
+    {:login login :password password}))
+
+(defmacro with-datacod-auth
+  "Авторизация http-клиента на датакоде."
+  [#^HttpClient client account & body]
+  `(let [#^PostMethod post# (new PostMethod "http://nvwh.cod.ru/link/auth/")]
+     (doto post#
+       (.addParameter "refURL" "http://dsv.data.cod.ru")
+       (.addParameter "email" (~account :login))
+       (.addParameter "password" (~account :password)))
+     (try (when (= HttpStatus/SC_OK (.executeMethod ~client post#))
+            (.releaseConnection post#)
+            ~@body)
+          (catch Exception exc# nil)
+          (finally (.releaseConnection post#)))))
+  ;; } catch (HttpException e) {
+  ;;     System.err.println("Fatal protocol violation: " + e.getMessage());
+  ;;     e.printStackTrace();
+  ;;   } catch (IOException e) {
+  ;;     System.err.println("Fatal transport error: " + e.getMessage());
+  ;;     e.printStackTrace();
+  ;;   } finally {
+  ;;     // Release the connection.
+  ;;     method.releaseConnection();
+
 (defn parse-datacodru-page
-  "Парсит текст страницы файла на датакоде."
+  "Парсит текст страницы датакода."
   [page]
   (let [name (atom nil)
         link (atom nil)
@@ -143,6 +203,21 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
     (try (.visitAllNodesWith parser visitor)
          {:name @name :link (when @link (new URI @link)) :space @space}
          (catch ParserException _ nil))))
+
+(defn datacod-account-free-space
+  "Свободное место на датакод-аккаунте.
+   Использовать после авторизации на датакоде."
+  [#^HttpClient client]
+  (try
+   (let [#^GetMethod get (GetMethod. "http://dsv.data.cod.ru")]
+     (when (= HttpStatus/SC_OK (.executeMethod client get))
+       (:space (parse-datacodru-page
+                (EncodingUtil/getString
+                 (duck/slurp* (.getResponseBodyAsStream get)) "UTF-8")))))
+   (catch Exception exc nil)
+   (finally (.releaseConnection get))))
+
+;;;; ACTIONS
 
 (defn job-nop [job env]
   job)
@@ -218,7 +293,44 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
             #(do (log/info (str "Прервана загрузка " (job :name)))
                  (job-fail %1 %2))) job env))))))
 
-(def #^{:doc "Хосты упорядочены от частного к общему."}
+(defn upload [job env]
+  (let [#^HttpClient client (new HttpClient)
+        #^PostMethod post (PostMethod. "http://dsv.data.cod.ru/cabinet/upload/")
+        parts (into-array Part
+                          [(StringPart. "action" "file_upload")
+                           (FilePart.   "sfile"  (transliterate (job :name))
+                                        (job :file))
+                           (StringPart. "agree"  "1")
+                           (StringPart. "password"    (job :password))
+                           (StringPart. "description" (job :description))])]
+    (with-datacod-auth client (env :account)
+      (.addRequestHeader post "Referer" "http://dsv.data.cod.ru/cabinet/upload/")
+      (try (.setRequestEntity
+            post (MultipartRequestEntity. parts (.getParams post)))
+           (log/info (str "Начата загрузка " (job :name)))
+           (if (= HttpStatus/SC_MOVED_TEMPORARILY (.executeMethod client post))
+             (if-let [location (.getName 
+                                (first (.getElements 
+                                        (.getResponseHeader post "Location"))))]
+               (do (log/info (str "Закончена загрузка " (job :name)))
+                   (assoc job :address (str "http://dsv.data.cod.ru" location)
+                          :fail false :alive false))
+               (do (log/info (str "Загрузка не может быть закончена " (job :name)))
+                   (job-die job env)))
+             (do (log/info (str "Прервана загрузка " (job :name)))
+                 (job-fail job env)))
+           (catch Exception exc
+             (do (log/info (str "Прервана загрузка " (job :name)))
+                 (job-fail job env)))
+           (finally (.releaseConnection post))))))
+
+(def #^{:doc "Действия агента для закачивания."}
+     *default-upload-actions* 
+     {:upload upload
+      :die    job-die})
+
+(def #^{:doc "Таблица действий агентов для скачивания для конкретных адресов.
+  Хосты упорядочены от частного к общему."}
      *download-rules*
      [[#"http://dsv.data.cod.ru/\d{6}"
        {:obtain-link   job-datacodru-link-name
@@ -319,15 +431,15 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
 (defmulti fail? #(:type @%))
 (defmulti tag #(:type @%))
 
-(defmethod alive? ::download [ag] (:alive @ag))
-(defmethod dead?  ::download [ag] (not (:alive @ag)))
-(defmethod fail? ::download [ag] (:fail @ag))
+(defmethod alive? :default [ag] (:alive @ag))
+(defmethod dead?  :default [ag] (not (:alive @ag)))
+(defmethod fail? :default [ag] (:fail @ag))
 (defmethod tag ::download [ag] (:tag @ag))
 
 (defn execute-action [ag env]
   (let [result (atom nil)
         thread
-        (Thread. #(let [percept {:self @ag}
+        (Thread. #(let [percept {:self @ag :env @env}
                         action  ((@ag :program) percept)]
                     (log/debug (str (or (@ag :name) (@ag :address)) " " action))
                     (let [new-state (((@ag :actions) action) @ag @env)]
@@ -358,11 +470,11 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
 (defmulti received-tag (fn [env ag] (:type env)))
 (defmulti done (fn [env ag] (:type env)))
 
-(defmethod add-agent ::download [env ag]
+(defmethod add-agent :default [env ag]
   (if-not (agent? ag) env
           (assoc env :agents (push (env :agents) ag))))
 
-(defmethod add-agents ::download [env agents]
+(defmethod add-agents :default [env agents]
   (doseq [ag agents]
     (send *agent* add-agent ag))
   env)
@@ -376,13 +488,13 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
     (send-off ag act *agent*))
   env)
   
-(defmethod agents ::download [env]
+(defmethod agents :default [env]
   (@env :agents))
 
-(defmethod tags ::download [env]
+(defmethod tags :default [env]
   (@env :tags))
 
-(defmethod termination? ::download [env]
+(defmethod termination? :default [env]
   (or (empty? (agents env)) (every? dead? (agents env))))
 
 (defn tag-locked? [env tag]
@@ -449,7 +561,88 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
                             :else (send-off *agent* act env))
                       result)))))
 
-;;; COMMAND-LINE
+;;;; UPLOAD AGENT & ENVIRONMENT
+
+(defn reflex-upload-program
+  "Простая рефлексная программа агента для заливки."
+  [percept]
+  (letfn [(out-of-space ;; недостаточно места на сервере
+           [percept] 
+           (let [client (new HttpClient)]
+             (with-datacod-auth client ((percept :env) :account)
+               (let [free-space (datacod-account-free-space client)]
+                 (if free-space
+                   (< free-space ((percept :self) :length))
+                   true)))))
+          (missing [key] (fn [percept] (not ((percept :self) key))))
+          (has [key] (fn [percept] ((percept :self) key)))
+          (otherwise [_] true)]
+    (match percept
+           [[(missing :actions) :die]
+            [(missing :file)    :die]
+            [(missing :name)    :die]
+            [(missing :length)  :die]
+            [(has     :address) :die]
+            [out-of-space       :die]
+            [otherwise          :upload]])))
+
+(defn upload-agent 
+  "Агент для закачивания.
+
+  :file     файл для закачки на сервер
+  :address  ссылка на файл на сервере
+  :length   размер файла, что нужно закачать
+  :password пароль на файл
+  :description описание файла"
+  
+  [#^File file]
+  (when (and (.isFile file) (.canRead file) (> (file-length file) 0))
+    (agent {:type ::upload
+            :name (.getName file) :file file :length (file-length file)
+            :address nil
+            :password "" :description "uploaded with secret alien technology"
+            :actions *default-upload-actions*
+            :program reflex-upload-program
+            :alive true :fail false :percept nil :action nil})))
+
+(defn upload-agents [files]
+  (remove (comp not agent?) (map upload-agent files)))
+
+(defn upload-environment [account & [{:keys [termination]
+                               :or   {termination #()}}]]
+  (agent {:type ::upload :agents '() :account account
+          :termination termination}))
+
+(defmethod run-environment ::upload [env]
+  (when-let [alive-ag (some #(when (alive? %) %) (:agents env))]
+    (send-off alive-ag act *agent*))
+  env)
+
+(defmethod done ::upload [env ag]
+  (let [alive-unfailed
+        (some #(when (and (alive? %) (not (fail? %))) %)
+              (agents *agent*))
+        next-alive
+        (next-after-when #(and (alive? %)) ag (agents *agent*))]
+    
+    (cond alive-unfailed
+          (send-off alive-unfailed act *agent*)
+
+          next-alive
+          (send-off next-alive act *agent*)
+
+          (termination? *agent*) ((env :termination))))
+  env)
+
+(defmethod act ::upload [ag env]
+  (cond (dead? *agent*) ag
+
+        :else (do (let [result (execute-action *agent* env)]
+                    (cond (not (:alive result)) (send env done *agent*)
+                          (:fail result) (send env done *agent*))
+                    result))))
+
+;;;; COMMAND-LINE
 
 (defn valid-path [#^String path]
   (let [#^File the-path (File. (.getCanonicalPath (File. path)))]
@@ -464,11 +657,39 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
   (when-let [#^File dir (valid-path path)]
     (when (and (.isDirectory dir) (.canWrite dir))
       dir)))
- 
+
+(defn valid-upload-file [#^String path]
+  (when-let [#^File file (valid-path path)]
+    (when (and (.isFile file) (.canRead file)
+               (> (file-length file) 0))
+      file)))
+
+(defn valid-upload-dir [#^String path]
+  (when-let [#^File dir (valid-path path)]
+    (when (and (.isDirectory dir) (.canRead dir))
+      dir)))
+
+(defn files-for-upload [paths]
+  (loop [up '()
+         ps (flatten (map #(or (valid-upload-file %)
+                               (sort (seq (.listFiles (valid-upload-dir %)))))
+                          paths))]
+    (if-not (seq ps) up
+            (let [p (first ps)]
+              (recur (if (includes? up p) up (push up p))
+                     (rest ps))))))
+
+(defn login-and-password [line]
+  (let [[_ login password]
+        (re-find #"([^@]+@[^:]+):(.+)" line)]
+    (when (and login password)
+      [login password])))
+
 (defn -main [& args]
   (with-command-line args
       *usage*
-      [[quiet? q? "работать молча"]
+      [[account a "почтовый@адрес:пароль аккаунта на датакоде для закачивания"]
+       [quiet? q? "работать молча"]
        [debug? d? "писать подробные сообщения для отлова багов"]
        remaining-args]
 
@@ -482,7 +703,6 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
                                    min  (.getMinutes time)
                                    sec  (.getSeconds time)]
                                (str hour ":" min ":" sec " " 
-                                    (.getName (.getLevel record)) ": "
                                     (.getMessage record) "\n"))))
           log-level (cond quiet? (Level/OFF)
                           debug? (Level/FINE)
@@ -491,18 +711,28 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
       (.setLevel console-handler log-level)
       (.setLevel root-logger log-level))
 
-    (let [jobs-file (some valid-jobs-file remaining-args)
-          working-path (or (some valid-output-dir remaining-args)
-                           (valid-output-dir (System/getProperty "user.dir")))]
-      (when (and jobs-file working-path)
-        (let [lines (duck/read-lines jobs-file)
-              e (environment {:working-path working-path 
-                              :termination #(System/exit 0)})]
-          (send e add-agents (download-agents lines))
-          (await e)
-          (send e run-environment))))))
+    (cond account
+          (let [[login pass] (login-and-password account)
+                acc (datacod-account login pass)
+                files (files-for-upload remaining-args)]
+            (when (and acc files)
+              (let [e (upload-environment acc {:termination #(System/exit 0)})]
+                (send e add-agents (upload-agents files))
+                (await e)
+                (send e run-environment))))
+          :else
+          (let [jobs-file (some valid-jobs-file remaining-args)
+                working-path (or (some valid-output-dir remaining-args)
+                                 (valid-output-dir (System/getProperty "user.dir")))]
+            (when (and jobs-file working-path)
+              (let [lines (duck/read-lines jobs-file)
+                    e (environment {:working-path working-path 
+                                    :termination #(System/exit 0)})]
+                (send e add-agents (download-agents lines))
+                (await e)
+                (send e run-environment)))))))
 
-;;; TESTS
+;;;; TESTS
 
 (let [jj {:link (URI. "http://files3.dsv.data.cod.ru/?WyIyMGI4%3D%3D")
           :name "Hayate_the_combat_butler.mkv"
@@ -533,6 +763,12 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
                 {:rule-response rest})
          '(:MATCH))))
 
+(deftest test-login-and-password
+  (is (= ["zahardzhan@gmail.com" "zxcvbn"]
+         (login-and-password "zahardzhan@gmail.com:zxcvbn")))
+  (is (= ["mail@gmail.com" "password"]
+         (login-and-password "mail@gmail.com:password"))))
+
 (deftest test-run
   (is (nil?
        (and nil
@@ -558,28 +794,21 @@ leica [КЛЮЧИ] [ФАЙЛ С АДРЕСАМИ] [ЗАГРУЗОЧНАЯ ДИР
               (send-off b act e)
               )))))
 
-;; ACCOUNT
+(deftest test-upload
+  (is (nil?
+       (and nil
+            (do
+              (def e (upload-environment
+                      (datacod-account "zahardzhan@gmail.com" "zscxadw")))
+              (def b (upload-agent (File. "/home/haru/inbox/issue27-ru.pdf")))
+              (def d (upload-agent (File. "/home/haru/inbox/sicp.pdf")))
+              (def f (upload-agent (File. "/home/haru/inbox/pcl.pdf")))
+              (send e add-agent b)
+              (send e add-agent d)
+              (send e add-agent f)
 
-(defn user-agent []
-  (str "Leica by Zahardzhan & GO1d ("
-       (System/getProperty "os.name") " "
-       (System/getProperty "os.version") " "
-       (System/getProperty "os.arch") ")"))
+              ;;(send-off b act e)
+              (send e run-environment)
 
-(defmacro with-datacod-auth
-  [#^HttpClient client email password  & body]
-  `(let [#^PostMethod post# (new PostMethod "http://nvwh.cod.ru/link/auth/")]
-     (doto post#
-       (.addParameter "refURL" "http://dsv.data.cod.ru")
-       (.addParameter "email" ~email)
-       (.addParameter "password" ~password))
-    (let [post-status# (.executeMethod ~client post#)]
-      ~@body)))
-
-(let [#^HttpClient client (new HttpClient)]
-  (with-datacod-auth client "zahardzhan@gmail.com" "zzzzzz"
-    (let [#^GetMethod get (new GetMethod "http://dsv.data.cod.ru")]
-      (let [get-status (.executeMethod client get)
-            get-response (.getResponseBody get)]
-        [get-status (parse-datacodru-page 
-                     (EncodingUtil/getString get-response "UTF-8"))]))))
+              (termination? e)
+              )))))

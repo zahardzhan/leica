@@ -9,7 +9,10 @@ clear:
 	rm -f leica.jar
 	rm -rf classes/*
 
-compile: 
+compile:
+	unzip -u -o lib/commons-codec-1.3.jar -d classes
+	unzip -u -o lib/commons-httpclient-3.1.jar -d classes
+	unzip -u -o lib/commons-logging-1.1.1.jar -d classes
 	unzip -u -o lib/clojure.jar -d classes
 	unzip -u -o lib/clojure-contrib.jar -d classes
 	unzip -u -o lib/libhtmlparser.jar -d classes
