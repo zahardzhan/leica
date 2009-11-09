@@ -9,37 +9,49 @@
 ####################################################
 ####################################################
 
+[img=right]http://distrib.dsv.data.cod.ru/photos/b/8/e/ed5cdb253266a0cb236aced9e0889e8b.jpg[/img]
+
 [color=#880000][b][size=6]Лейка.[/size][/b][/color]
 [i]разработчик: zahardzhan[/i]
 
 [color=#880000][b][size=4]Что это?[/size][/b][/color]
 
-Программа для многопоточной закачки всяческого добра с датакода и файлообменников местного dsvload.net.
+Программа для многопоточной закачки и скачивания всяческого добра с датакода.
 
 [color=#880000][b][size=4]На чём это работает?[/size][/b][/color]
 
-Эта программа работает на любых [color=#880000][b]UNIX[/b][/color]–системах с установленным [color=#880000][b]Python 2.6[/b][/color]. То есть, практически на любом достаточно свежем Linux'е или BSD.
+Эта программа работает на всём — [color=#880000][b]Windows[/b][/color] 7/XP/Vista/2000/2003/2008, [color=#880000][b]Linux[/b][/color],
+[color=#880000][b]Mac OS X[/b][/color] и [color=#880000][b]Solaris[/b][/color], где установлена виртуальная машина [color=#880000][b]Java[/b][/color].
 
 [color=#880000][b][size=4]Где взять?[/size][/b][/color]
 
-Свежая версия с моего репозитория, упакованная в [b][url=http://github.com/zahardzhan/leica-py/zipball/master][color=#880000]zip–архив[/color][/url][/b] и [b][url=http://github.com/zahardzhan/leica-py/tarball/master][color=#880000]tar–архив[/color][/url][/b], на выбор.
+На моём репозитории всегда можно найти [b][url=http://cloud.github.com/downloads/zahardzhan/leica/leica.jar][color=#880000]свежую сборку[/color][/url][/b] лейки. Виртуальную машину Java,
+также известную как Java Runtime Environment, можно взять с [b][url=http://java.com/ru/download/index.jsp][color=#880000]официального сайта[/color][/url][/b].
 
 [color=#880000][b][size=4]Как установить?[/size][/b][/color]
 
-Установка очень простая — нужно распаковать архив с исходниками:
-[code]# unzip zahardzhan-leica.zip
-# tar zxf zahardzhan-leica.tar.gz[/code]
+Единственное, что нужно устанавливать — это Java, но тут в каждой системе по-своему.
+Сама же лейка распространяется в виде готового к работе бинарника и установки не требует.
+
 [color=#880000][b][size=4]Как пользоваться?[/size][/b][/color]
 
-Вам нужен текстовый файл с адресами, которые вы хотите скачать, в разумных пределах разбавленный мусором:
+Для скачивания с датакода вам нужен текстовый файл с адресами,
+которые вы хотите скачать, в разумных пределах разбавленный мусором:
 [code]Местный FTP по протоколу HTTP: http://77.35.112.84/incoming/PersonalFolders/User/Film.avi
-DSV data.cod: http://dsv.data.cod.ru/666666
+DSV data.cod:  http://dsv.data.cod.ru/666666
 AMUR data.cod: http://amur.data.cod.ru/4444
-KHV data.cod (нужна помощь в тестировании): http://khv.data.cod.ru/123
+KHV data.cod:  http://khv.data.cod.ru/123
 Еще какой-нибудь data.cod: http://data.cod.ru/12345
 Специально для слива свежего Радио-Т: http://dsvload.net/ftpupload/radio-t.mp3[/code]
-Просто запустите:
-[code]# ./leica.py [файл с адресами чего качать] [директория куда всё это качать][/code]
+Для скачивания запустите:
+[code]# java -jar leica.jar [файл с адресами чего качать] [директория куда всё это качать][/code]
+Для заливки на датакод запускайте с указанием аккаунта на датакоде:
+[code]# java -jar leica.jar -a почтовый@адрес:пароль [Файлы и директории для закачивания][/code]
+[color=#880000][b][size=4]Старая добрая лейка.[/size][/b][/color]
+
+Доступна старая версия лейки, написанная на питоне, но она больше не поддерживается.
+Если очень надо — качайте [b][url=http://github.com/zahardzhan/leica-py/zipball/master][color=#880000]архив с исходниками[/color][/url][/b].
+
 [color=#880000][b][size=4]Напоследок.[/size][/b][/color]
 
-Качайте, пользуйте, пишите о багах и пожеланиях мне на zahardzhan@gmail.com, в личку и в комменты. Благодарность за помощь в разработке и тестировании zed'у и g01d'у. Кто хочет помочь в развитии программы добро пожаловать на [url=http://github.com/zahardzhan/leica]http://github.com/zahardzhan/leica-py[/url].
+Качайте, пользуйте, пишите о багах и пожеланиях мне на zahardzhan@gmail.com, в личку и в комменты. Благодарность за помощь в разработке и тестировании zed'у и g01d'у. Кто хочет помочь в развитии программы добро пожаловать на [url=http://github.com/zahardzhan/leica]http://github.com/zahardzhan/leica[/url].
