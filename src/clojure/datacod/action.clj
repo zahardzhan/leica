@@ -10,9 +10,7 @@
             [clojure.contrib.logging :as log])
   (:use aux)
   (:import (java.io File)
-           (java.net URI)
-
-           (org.apache.commons.httpclient HttpClient HttpStatus)
+           (org.apache.commons.httpclient URI HttpClient HttpStatus)
            (org.apache.commons.httpclient.methods GetMethod PostMethod)
            (org.apache.commons.httpclient.methods.multipart
             FilePart MultipartRequestEntity Part StringPart)

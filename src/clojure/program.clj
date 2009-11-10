@@ -24,11 +24,11 @@
     (match percept
            [[(missing :address) :die]
             [(missing :actions) :die]
-            [(missing :link)    :obtain-link]
-            [(missing :tag)     :obtain-tag]
-            [(missing :name)    :obtain-name]
-            [(missing :file)    :obtain-file]
-            [(missing :length)  :obtain-length]
+            [(missing :link)    :get-link]
+            [(missing :tag)     :get-tag]
+            [(missing :name)    :get-name]
+            [(missing :file)    :get-file]
+            [(missing :length)  :get-length]
             [fully-loaded       :die]
             [out-of-space-here  :die]
             [otherwise          :download]])))

@@ -9,9 +9,7 @@
             [clojure.contrib.logging :as log])
   (:use aux match)
   (:import (java.io File FileOutputStream)
-           (java.net URI URLEncoder)
-
-           (org.apache.commons.httpclient HttpClient HttpStatus)
+           (org.apache.commons.httpclient URI HttpClient HttpStatus)
            (org.apache.commons.httpclient.methods GetMethod)
            (org.apache.commons.httpclient.params.HttpMethodParams)
            (org.apache.commons.httpclient.util EncodingUtil)))
@@ -27,7 +25,7 @@
  
 (defn get-link [ag env]
   (when-let [#^URI address (ag :address)]
-    (assoc ag :link (URI. (.toASCIIString address)) :fail false)))
+    (assoc ag :link address :fail false)))
  
 (defn get-name [ag env]
   (when-let [#^URI link (ag :link)]

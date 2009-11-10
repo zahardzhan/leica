@@ -9,14 +9,16 @@
        :author "Роман Захаров"}
   leica
   (:gen-class)
-  (:require :reload env env.download env.upload action datacod.action
+  (:use :reload aux match env
+        [clojure.contrib command-line seq-utils test-is])
+  (:require :reload env.download env.upload action datacod.action program
             [clojure.contrib.duck-streams :as duck]
             [clojure.contrib.logging :as log])
-  (:use aux match
-        [clojure.contrib command-line seq-utils test-is])
   (:import (java.io File)
            (java.util Date)
            (java.util.logging Logger Level Formatter LogRecord StreamHandler)))
+
+(in-ns 'leica)
 
 (def *usage* 
      "Клиент для датакода.
@@ -150,9 +152,9 @@ leica [ключи] -a почтовый@адрес:пароль [файлы и д
                 files (files-for-upload remaining-args)]
             (when (and acc files)
               (let [e (env.upload/upload-environment acc {:termination #(System/exit 0)})]
-                (send e env/add-agents (env.upload/upload-agents files))
+                (add-agents e (env.upload/upload-agents files))
                 (await e)
-                (send e env/run-env))))
+                (run-env e))))
           :else
           (let [jobs-file (some valid-jobs-file remaining-args)
                 working-path (or (some valid-output-dir remaining-args)
@@ -161,9 +163,9 @@ leica [ключи] -a почтовый@адрес:пароль [файлы и д
               (let [lines (duck/read-lines jobs-file)
                     e (env.download/download-environment {:working-path working-path 
                                                           :termination #(System/exit 0)})]
-                (send e env/add-agents (env.download/download-agents lines *download-rules*))
+                (add-agents e (env.download/download-agents lines *download-rules*))
                 (await e)
-                (send e env/run-env)))))))
+                (run-env e)))))))
 
 ;;;; TESTS
 
@@ -213,20 +215,6 @@ leica [ключи] -a почтовый@адрес:пароль [файлы и д
 ;;               (await e)
 ;;               (send e run-environment))))))
 
-;; (deftest test-run-step
-;;   (is (nil?
-;;        (and nil
-;;             (do
-;;               (def e (environment {:working-path (File. "/home/haru/inbox/dsv")}))
-;;               (def a (download-agent "Goal.Icon.rar http://dsv.data.cod.ru/456136"))
-;;               (def b (download-agent ""))
-;;               (send e add-agent a)
-;;               (send e add-agent b)
-;;               (await e)
-;;               (send-off a act e)
-;;               (send-off b act e)
-;;               )))))
-
 ;; (deftest test-upload
 ;;   (is (nil?
 ;;        (and nil
@@ -245,3 +233,36 @@ leica [ключи] -a почтовый@адрес:пароль [файлы и д
 
 ;;               (termination? e)
 ;;               )))))
+
+;; java.net.URISyntaxException: Illegal character in path at index 83: http://77.35.112.83/upload/PersonalFolders/F-r-e-e
+;; -m-a-n/Die_Hard_1_720p_DVD5_HDRG_[f-r-e-e-m-a-n].p
+;; art01.rar
+
+(deftest test-run-step
+  (is (nil?
+       (and nil
+            (do
+              (def e (env.download/download-environment {:working-path (File. "/home/haru/inbox/dsv")}))
+              (def a (env.download/download-agent "http://dsv.data.cod.ru/466510" *download-rules*))
+              (add-agent e a)
+              (run-agent a e)
+              ;;(send e env/run-env)
+              ((@a :program) {:self @a :env @e})
+              (def a3 (execute-action (execute-action (execute-action @a @e) @e) @e))
+              (execute-action (execute-action (execute-action (execute-action @a @e) @e) @e) @e)
+
+              (require ['clojure.contrib.http.agent :as 'ha])
+              (ha/headers (ha/http-agent (a3 :link) :method "HEAD"))
+              (ha/success? (ha/http-agent (a3 :link) :method "HEAD"))
+
+              (when-let [#^URI link (ag :link)]
+                  (let [length-request (ha/http-agent link :method "HEAD")]
+                    (ha/result length-request)
+                    (if (and (ha/done? length-request) (ha/success? length-request))
+                      (if-let [length (:content-length (ha/headers length-request))]
+                        (assoc ag :length (Integer/parseInt length) :fail false)
+                        (die ag env))
+                      ((http-error-status-handler length-request
+                                                  die fail) ag env))))
+              )))))
+

@@ -4,8 +4,8 @@
 (ns #^{:doc "doc"
        :author "Роман Захаров"}
   env.upload
-  (:require :reload action env program datacod.action datacod.program)
-  (:use :reload env aux match)
+  (:use env aux match)
+  (:require :reload action program datacod.action datacod.program)
   (:import [java.io File]))
 
 ;;;; Агент
@@ -21,7 +21,7 @@
   
   [#^File file]
   (when (and (.isFile file) (.canRead file) (> (file-length file) 0))
-    (agent {:type ::upload
+    (agent {:type :upload
             :name (.getName file) :file file :length (file-length file)
             :address nil
             :password "" :description "uploaded with secret alien technology"
@@ -33,38 +33,38 @@
 (defn upload-agents [files]
   (remove (comp not agent?) (map upload-agent files)))
 
-(defmethod run-agent ::upload [ag env]
-  (cond (dead? *agent*) ag
+(defmethod run-agent- :upload [ag-state env]
+  (cond (dead?- ag-state) ag-state
 
-        :else (do (let [result (execute-action *agent* env)]
-                    (cond (not (:alive result)) (send env done *agent*)
-                          (:fail result) (send env done *agent*))
-                    result))))
+        :else (let [new-state (execute-action ag-state @env)]
+                (cond (dead?- new-state) (done env *agent*)
+                      (fail?- new-state) (done env *agent*))
+                new-state)))
 
 ;;;; Окружение
 
 (defn upload-environment [account & [{:keys [termination]
                                       :or   {termination #()}}]]
-  (agent {:type ::upload :agents '() :account account
+  (agent {:type :upload :agents '() :account account
           :termination termination}))
 
-(defmethod run-env ::upload [env]
-  (when-let [alive-ag (some #(when (alive? %) %) (:agents env))]
-    (send-off alive-ag run-agent *agent*))
-  env)
+(defmethod run-env- :upload [env-state]
+  (when-let [alive-ag (some #(when (alive? %) %) (:agents env-state))]
+    (run-agent alive-ag *agent*))
+  env-state)
 
-(defmethod done ::upload [env ag]
+(defmethod done- :upload [env-state ag]
   (let [alive-unfailed
         (some #(when (and (alive? %) (not (fail? %))) %)
-              (agents *agent*))
+              (:agents env-state))
         next-alive
-        (next-after-when #(and (alive? %)) ag (agents *agent*))]
+        (next-after-when #(and (alive? %)) ag (:agents env-state))]
     
     (cond alive-unfailed
-          (send-off alive-unfailed run-agent *agent*)
+          (run-agent alive-unfailed *agent*)
 
           next-alive
-          (send-off next-alive run-agent *agent*)
+          (run-agent next-alive *agent*)
 
-          (termination? *agent*) ((env :termination))))
-  env)
+          (termination?- env-state) ((env-state :termination))))
+  env-state)

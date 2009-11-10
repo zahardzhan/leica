@@ -8,9 +8,8 @@
             [clojure.contrib.logging :as log])
   (:use aux match clojure.contrib.seq-utils)
   (:import (java.io File FileOutputStream)
-           (java.net URI)
 
-           (org.apache.commons.httpclient HttpClient HttpStatus)
+           (org.apache.commons.httpclient URI HttpClient HttpStatus)
            (org.apache.commons.httpclient.methods GetMethod PostMethod)
            (org.apache.commons.httpclient.methods.multipart
             FilePart MultipartRequestEntity Part StringPart)
