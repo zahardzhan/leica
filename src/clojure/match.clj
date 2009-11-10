@@ -1,10 +1,11 @@
 ;;; -*- mode: clojure; coding: utf-8 -*-
-;;; authors: Roman Zaharov zahardzhan@gmail.com
+;;; author: Roman Zaharov <zahardzhan@gmail.com>
 
-;;; match.clj: сопоставление с образцом.
-
-(ns #^{:doc "Многопоточная качалка для data.cod.ru и dsvload.net."
-       :author "Роман Захаров, Александр Золотов"}
+(ns #^{:doc
+       "Сопоставление с образцом.
+  Подробнее можно глянуть в книге 'Paradigms of the artificial intelligence
+  programming: case studies in common lisp'"
+       :author "Роман Захаров"}
   match)
 
 (defn default-matcher 

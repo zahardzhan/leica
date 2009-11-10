@@ -1,14 +1,12 @@
 ;;; -*- mode: clojure; coding: utf-8 -*-
-;;; authors: Roman Zaharov zahardzhan@gmail.com
-
-;;; leica.clj: многопоточная качалка для data.cod.ru и dsvload.net.
+;;; author: Roman Zaharov <zahardzhan@gmail.com>
 
 ;;; октябрь, 2009
 
 ;;; Это свободная программа, используйте на свой страх и риск.
 
 (ns #^{:doc "Многопоточная качалка для data.cod.ru и dsvload.net."
-       :author "Роман Захаров, Александр Золотов"}
+       :author "Роман Захаров"}
   leica
   (:gen-class)
   (:require :reload env env.download env.upload action datacod.action
@@ -26,10 +24,10 @@
 Пишите о багах на zahardzhan@gmail.com.
 
 Скачать файлы с датакода:
-leica [Ключи] [Файл с адресами на скачивание] [Директория для скачанных файлов]
+leica [ключи] [файл с адресами на скачивание] [директория для скачанных файлов]
 
 Закачать файлы на датакод:
-leica [Ключи] -a почтовый@адрес:пароль [Файлы и директории для закачивания]
+leica [ключи] -a почтовый@адрес:пароль [файлы и директории для закачивания]
 ")
 
 (defn user-agent [] ;; TODO: Сделать юзер-агента в соответствии со стандартом
@@ -38,17 +36,11 @@ leica [Ключи] -a почтовый@адрес:пароль [Файлы и д
        (System/getProperty "os.version") " "
        (System/getProperty "os.arch") ")"))
 
-(defn datacod-account
-  "Аккаунт на датакоде."
-  [login password]
-  (when (and login password)
-    {:login login :password password}))
-
 (def #^{:doc "Таблица действий агентов для скачивания для конкретных адресов.
   Хосты упорядочены от частного к общему."}
      *download-rules*
      [[#"http://dsv.data.cod.ru/\d{6}"
-       {:get-link   datacod.action/get-link-name
+       {:get-link   datacod.action/get-link-and-name
         :get-tag    (partial action/get-tag [#"files3?.dsv.data.cod.ru"
                                          #"files2.dsv.data.cod.ru"])
         :get-file   action/get-file
@@ -56,7 +48,7 @@ leica [Ключи] -a почтовый@адрес:пароль [Файлы и д
         :download   action/download
         :die        action/die}]
       [#"http://[\w\.]*data.cod.ru/\d+"
-       {:get-link   datacod.action/get-link-name
+       {:get-link   datacod.action/get-link-and-name
         :get-tag    (partial action/get-tag nil)
         :get-file   action/get-file
         :get-length action/get-length
@@ -121,6 +113,10 @@ leica [Ключи] -a почтовый@адрес:пароль [Файлы и д
         (re-find #"([^@]+@[^:]+):(.+)" line)]
     (when (and login password)
       [login password])))
+
+(defn datacod-account [login password]
+  (when (and login password)
+    {:login login :password password}))
 
 (defn -main [& args]
   (with-command-line args

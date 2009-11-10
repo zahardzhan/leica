@@ -1,35 +1,20 @@
 ;;; -*- mode: clojure; coding: utf-8 -*-
-;;; authors: Roman Zaharov zahardzhan@gmail.com
+;;; authors: Roman Zaharov <zahardzhan@gmail.com>
 
-(ns #^{:doc "Многопоточная качалка для data.cod.ru и dsvload.net."
-       :author "Роман Захаров, Александр Золотов"}
+(ns #^{:doc "Базовые действия агентов."
+       :author "Роман Захаров"}
   action
   (:require [clojure.contrib.http.agent :as ha]
             [clojure.contrib.duck-streams :as duck]
             [clojure.contrib.logging :as log])
-  (:use aux
-        match
-        clojure.contrib.test-is
-        clojure.contrib.seq-utils
-        clojure.contrib.command-line)
-  (:import (java.io File FileOutputStream InputStream
-                    ByteArrayOutputStream ByteArrayInputStream)
-           (java.net HttpURLConnection InetAddress URI URL URLEncoder)
-           (java.util Date)
-           (java.util.logging Logger Level Formatter LogRecord StreamHandler)
+  (:use aux match)
+  (:import (java.io File FileOutputStream)
+           (java.net URI URLEncoder)
 
            (org.apache.commons.httpclient HttpClient HttpStatus)
-           (org.apache.commons.httpclient.methods GetMethod PostMethod)
-           (org.apache.commons.httpclient.methods.multipart
-            FilePart MultipartRequestEntity Part StringPart)
+           (org.apache.commons.httpclient.methods GetMethod)
            (org.apache.commons.httpclient.params.HttpMethodParams)
-           (org.apache.commons.httpclient.util EncodingUtil)
-
-           (org.htmlparser Parser)
-           (org.htmlparser.util ParserException)
-           (org.htmlparser.visitors NodeVisitor)
-           (org.htmlparser.tags Div LinkTag)
-           (org.htmlparser.nodes TagNode)))
+           (org.apache.commons.httpclient.util EncodingUtil)))
 
 (defn pass [ag env]
   ag)

@@ -1,17 +1,10 @@
 ;;; -*- mode: clojure; coding: utf-8 -*-
 ;;; authors: Roman Zaharov <zahardzhan@gmail.com>
 
-;;; aux.clj: вспомогательные функции.
-
-;;; ноябрь, 2009
-
-(ns #^{:doc "Многопоточная качалка для data.cod.ru и dsvload.net."
-       :author "Роман Захаров, Александр Золотов"}
+(ns #^{:doc "Вспомогательные функции."
+       :author "Роман Захаров"}
   aux
-  (:gen-class)
-  (:use match
-        clojure.contrib.test-is
-        clojure.contrib.seq-utils)
+  (:use match [clojure.contrib seq-utils])
   (:import (java.io File)))
 
 (in-ns 'aux)
@@ -32,10 +25,10 @@
 
 (defmulti join-paths (fn [p1 p2] [(class p1) (class p2)]))
 
-(defmethod join-paths [java.lang.String java.lang.String] [p1 p2]
+(defmethod join-paths [String String] [p1 p2]
   (str (File. (File. p1) p2)))
 
-(defmethod join-paths [java.io.File java.lang.String] [p1 p2]
+(defmethod join-paths [File String] [p1 p2]
   (str (File. p1 p2)))
 
 (defn transliterate [line]
@@ -71,4 +64,3 @@
              503  ;; Service Unavailable
              504} ;; Gateway Timeout
            not-fatal]]))
-

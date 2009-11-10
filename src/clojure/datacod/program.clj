@@ -1,23 +1,12 @@
 ;;; -*- mode: clojure; coding: utf-8 -*-
-;;; authors: Roman Zaharov zahardzhan@gmail.com
+;;; author: Roman Zaharov <zahardzhan@gmail.com>
 
-(ns #^{:doc "Многопоточная качалка для data.cod.ru и dsvload.net."
-       :author "Роман Захаров, Александр Золотов"}
+(ns #^{:doc "Программа агента, работающего с data.cod.ru."
+       :author "Роман Захаров"}
   datacod.program
   (:require :reload datacod.account)
   (:use aux match)
-  (:import (org.apache.commons.httpclient HttpClient HttpStatus)
-           (org.apache.commons.httpclient.methods GetMethod PostMethod)
-           (org.apache.commons.httpclient.methods.multipart
-            FilePart MultipartRequestEntity Part StringPart)
-           (org.apache.commons.httpclient.params.HttpMethodParams)
-           (org.apache.commons.httpclient.util EncodingUtil)
-
-           (org.htmlparser Parser)
-           (org.htmlparser.util ParserException)
-           (org.htmlparser.visitors NodeVisitor)
-           (org.htmlparser.tags Div LinkTag)
-           (org.htmlparser.nodes TagNode)))
+  (:import (org.apache.commons.httpclient HttpClient)))
 
 (defn reflex-upload
   "Простая рефлексная программа агента для заливки."

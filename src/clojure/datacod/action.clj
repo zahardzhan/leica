@@ -1,17 +1,16 @@
 ;;; -*- mode: clojure; coding: utf-8 -*-
-;;; authors: Roman Zaharov zahardzhan@gmail.com
+;;; author: Roman Zaharov <zahardzhan@gmail.com>
 
-(ns #^{:doc "Многопоточная качалка для data.cod.ru и dsvload.net."
-       :author "Роман Захаров, Александр Золотов"}
+(ns #^{:doc "Действия агента, работающего с data.cod."
+       :author "Роман Захаров"}
   datacod.action
   (:require datacod.account
             [clojure.contrib.http.agent :as ha]
             [clojure.contrib.duck-streams :as duck]
             [clojure.contrib.logging :as log])
   (:use aux)
-  (:import (java.io File FileOutputStream InputStream
-                    ByteArrayOutputStream ByteArrayInputStream)
-           (java.net HttpURLConnection InetAddress URI URL URLEncoder)
+  (:import (java.io File)
+           (java.net URI)
 
            (org.apache.commons.httpclient HttpClient HttpStatus)
            (org.apache.commons.httpclient.methods GetMethod PostMethod)
@@ -20,7 +19,7 @@
            (org.apache.commons.httpclient.params.HttpMethodParams)
            (org.apache.commons.httpclient.util EncodingUtil)))
 
-(defn get-link-name [ag env]
+(defn get-link-and-name [ag env]
   (when-let [#^URI address (ag :address)]
     (let [page-request (ha/http-agent address)]
       (ha/result page-request)

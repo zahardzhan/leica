@@ -1,22 +1,14 @@
 ;;; -*- mode: clojure; coding: utf-8 -*-
-;;; authors: Roman Zaharov zahardzhan@gmail.com
+;;; author: Roman Zaharov <zahardzhan@gmail.com>
 
-(ns #^{:doc "Многопоточная качалка для data.cod.ru и dsvload.net."
-       :author "Роман Захаров, Александр Золотов"}
+(ns #^{:doc "Работа с аккаунтом data.cod.ru."
+       :author "Роман Захаров"}
   datacod.account
-  (:require [clojure.contrib.http.agent :as ha]
-            [clojure.contrib.duck-streams :as duck]
+  (:require [clojure.contrib.duck-streams :as duck]
             [clojure.contrib.logging :as log])
-  (:use aux
-        match
-        clojure.contrib.test-is
-        clojure.contrib.seq-utils
-        clojure.contrib.command-line)
-  (:import (java.io File FileOutputStream InputStream
-                    ByteArrayOutputStream ByteArrayInputStream)
-           (java.net HttpURLConnection InetAddress URI URL URLEncoder)
-           (java.util Date)
-           (java.util.logging Logger Level Formatter LogRecord StreamHandler)
+  (:use aux match clojure.contrib.seq-utils)
+  (:import (java.io File FileOutputStream)
+           (java.net URI)
 
            (org.apache.commons.httpclient HttpClient HttpStatus)
            (org.apache.commons.httpclient.methods GetMethod PostMethod)
