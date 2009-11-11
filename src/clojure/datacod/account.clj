@@ -22,6 +22,10 @@
            (org.htmlparser.tags Div LinkTag)
            (org.htmlparser.nodes TagNode)))
 
+(defn datacod-account [login password]
+  (when (and login password)
+    {:login login :password password}))
+
 (defmacro with-auth
   "Авторизация http-клиента на датакоде."
   [#^HttpClient client account & body]
@@ -35,15 +39,6 @@
             ~@body)
           (catch Exception exc# nil)
           (finally (.releaseConnection post#)))))
-  ;; } catch (HttpException e) {
-  ;;     System.err.println("Fatal protocol violation: " + e.getMessage());
-  ;;     e.printStackTrace();
-  ;;   } catch (IOException e) {
-  ;;     System.err.println("Fatal transport error: " + e.getMessage());
-  ;;     e.printStackTrace();
-  ;;   } finally {
-  ;;     // Release the connection.
-  ;;     method.releaseConnection();
 
 (defn parse-page
   "Парсит текст страницы датакода."

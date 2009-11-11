@@ -10,9 +10,11 @@
   (:use aux match)
   (:import (java.io File FileOutputStream)
            (org.apache.commons.httpclient URI HttpClient HttpStatus)
-           (org.apache.commons.httpclient.methods GetMethod)
+           (org.apache.commons.httpclient.methods GetMethod HeadMethod)
            (org.apache.commons.httpclient.params.HttpMethodParams)
            (org.apache.commons.httpclient.util EncodingUtil)))
+
+(in-ns 'action)
 
 (defn pass [ag env]
   ag)
@@ -41,15 +43,19 @@
  
 (defn get-length [ag env]
   (when-let [#^URI link (ag :link)]
-    (let [length-request (ha/http-agent link :method "HEAD")]
-      (ha/result length-request)
-      (if (and (ha/done? length-request) (ha/success? length-request))
-        (if-let [length (:content-length (ha/headers length-request))]
-          (assoc ag :length (Integer/parseInt length) :fail false)
-          (die ag env))
-        ((http-error-status-handler length-request
-                                    die fail) ag env)))))
- 
+    (let [#^HttpClient client (new HttpClient)
+          #^HeadMethod head (HeadMethod. (str link))]
+      (try (let [status (.executeMethod client head)]
+             (if (= status HttpStatus/SC_OK)
+               (if-let [length (.getName (first (.getElements 
+                                                 (.getResponseHeader head "Content-Length"))))]
+                 (assoc ag :length (Integer/parseInt length) :fail false)
+                 (die ag env))
+               ((http-error-status-handler status die fail) ag env)))
+           (catch java.net.ConnectException e (die ag env))
+           (catch Exception e (fail ag env))
+           (finally (.releaseConnection head))))))
+
 (defn get-file [ag env]
   (when-let [name (ag :name)]
     (when-let [#^File working-path (env :working-path)]
@@ -70,7 +76,7 @@
           (do (log/info (str "Закончена загрузка " (ag :name)))
               (die ag env))
           ((http-error-status-handler
-            loader
+            (ha/status loader)
             #(do (log/info (str "Загрузка не может быть закончена " (ag :name)))
                  (die %1 %2))
             #(do (log/info (str "Прервана загрузка " (ag :name)))

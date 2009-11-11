@@ -11,7 +11,8 @@
   (:gen-class)
   (:use :reload aux match env
         [clojure.contrib command-line seq-utils test-is])
-  (:require :reload env.download env.upload action datacod.action program
+  (:require :reload env.download env.upload action program
+            datacod.account datacod.action 
             [clojure.contrib.duck-streams :as duck]
             [clojure.contrib.logging :as log])
   (:import (java.io File)
@@ -116,10 +117,6 @@ leica [ключи] -a почтовый@адрес:пароль [файлы и д
     (when (and login password)
       [login password])))
 
-(defn datacod-account [login password]
-  (when (and login password)
-    {:login login :password password}))
-
 (defn -main [& args]
   (with-command-line args
       *usage*
@@ -148,7 +145,7 @@ leica [ключи] -a почтовый@адрес:пароль [файлы и д
 
     (cond account
           (let [[login pass] (login-and-password account)
-                acc (datacod-account login pass)
+                acc (datacod.account/datacod-account login pass)
                 files (files-for-upload remaining-args)]
             (when (and acc files)
               (let [e (env.upload/upload-environment acc {:termination #(System/exit 0)})]
@@ -243,26 +240,11 @@ leica [ключи] -a почтовый@адрес:пароль [файлы и д
        (and nil
             (do
               (def e (env.download/download-environment {:working-path (File. "/home/haru/inbox/dsv")}))
-              (def a (env.download/download-agent "http://dsv.data.cod.ru/466510" *download-rules*))
+              (def a (env.download/download-agent "Energy.rar: http://dsv.data.cod.ru/470723" *download-rules*))
               (add-agent e a)
               (run-agent a e)
               ;;(send e env/run-env)
               ((@a :program) {:self @a :env @e})
+              (((@a :actions) :get-link) @a @e)
               (def a3 (execute-action (execute-action (execute-action @a @e) @e) @e))
-              (execute-action (execute-action (execute-action (execute-action @a @e) @e) @e) @e)
-
-              (require ['clojure.contrib.http.agent :as 'ha])
-              (ha/headers (ha/http-agent (a3 :link) :method "HEAD"))
-              (ha/success? (ha/http-agent (a3 :link) :method "HEAD"))
-
-              (when-let [#^URI link (ag :link)]
-                  (let [length-request (ha/http-agent link :method "HEAD")]
-                    (ha/result length-request)
-                    (if (and (ha/done? length-request) (ha/success? length-request))
-                      (if-let [length (:content-length (ha/headers length-request))]
-                        (assoc ag :length (Integer/parseInt length) :fail false)
-                        (die ag env))
-                      ((http-error-status-handler length-request
-                                                  die fail) ag env))))
               )))))
-

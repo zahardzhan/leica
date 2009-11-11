@@ -17,17 +17,24 @@
            (org.apache.commons.httpclient.params.HttpMethodParams)
            (org.apache.commons.httpclient.util EncodingUtil)))
 
+(in-ns 'datacod.action)
+
 (defn get-link-and-name [ag env]
   (when-let [#^URI address (ag :address)]
-    (let [page-request (ha/http-agent address)]
-      (ha/result page-request)
-      (if (and (ha/done? page-request) (ha/success? page-request))
-        (let [parsed (datacod.account/parse-page (ha/string page-request))]
-          (if (and (parsed :name) (parsed :link))
-            (assoc ag :name (parsed :name) :link (parsed :link) :fail false)
-            (action/die ag env)))
-        ((http-error-status-handler (ha/status page-request)
-                                    action/die action/fail) ag env)))))
+    (let [#^HttpClient client (new HttpClient)
+          #^GetMethod get (GetMethod. (str address))]
+      ;; Use HttpConnectionParams.setConnectionTimeout(int), HttpConnectionManager.getParams().
+      (try (let [status (.executeMethod client get)]
+             (if (= status HttpStatus/SC_OK)
+               (let [parsed (datacod.account/parse-page
+                             (duck/slurp* (.getResponseBodyAsStream get)))]
+                 (if (and (parsed :name) (parsed :link))
+                   (assoc ag :name (parsed :name) :link (parsed :link) :fail false)
+                   (action/die ag env)))
+               ((http-error-status-handler status action/die action/fail) ag env)))
+           (catch java.net.ConnectException e (action/die ag env))
+           (catch Exception e (action/fail ag env))
+           (finally (.releaseConnection get))))))
 
 (defn upload [ag env]
   (let [#^HttpClient client (new HttpClient)
