@@ -69,7 +69,7 @@
                            unit-val ({"ГБ" 1073741824 "МБ" 1048576 "КБ" 1024} unit-str)]
                        (reset! space (int (* space-val unit-val)))))))))]
     (try (.visitAllNodesWith parser visitor)
-         {:name @name :link (when @link (new URI @link)) :space @space}
+         {:name @name :link (when @link (new URI @link true)) :space @space}
          (catch ParserException _ nil))))
 
 (defn free-space

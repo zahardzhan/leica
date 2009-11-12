@@ -11,7 +11,8 @@
   (:gen-class)
   (:use :reload aux match env
         [clojure.contrib command-line seq-utils test-is])
-  (:require :reload env.download env.upload action program
+  (:require :reload action program
+            env.download env.upload
             datacod.account datacod.action 
             [clojure.contrib.duck-streams :as duck]
             [clojure.contrib.logging :as log])
@@ -163,88 +164,3 @@ leica [ключи] -a почтовый@адрес:пароль [файлы и д
                 (add-agents e (env.download/download-agents lines *download-rules*))
                 (await e)
                 (run-env e)))))))
-
-;;;; TESTS
-
-;; (let [jj {:link (URI. "http://files3.dsv.data.cod.ru/?WyIyMGI4%3D%3D")
-;;           :name "Hayate_the_combat_butler.mkv"
-;;           :address (URI. "http://dsv.data.cod.ru/433148")}
-;;       jk {:link (URI. "http://files4.dsv.data.cod.ru/?WyIyMGI4%3D%3D")
-;;           :name "Hayate_the_combat_butler.mkv"
-;;           :address (URI. "http://dsv.data.cod.ru/433148")}
-;;       j8 {:link (URI. "http://77.35.112.82/upload/Personal_Folders/Peshehod/Chelovek-Slon.mpg")
-;;           :name "Chelovek-Slon.mpg"
-;;           :address (URI. "http://77.35.112.82/upload/Personal_Folders/Peshehod/Chelovek-Slon.mpg")}]
-;;   (deftest test-tag
-;;     (is (= (:tag (leica/job-tag nil jj nil))
-;;            "files3.dsv.data.cod.ru"))
-;;     (is (= (:tag (leica/job-tag #"files3?.dsv.data.cod.ru" jj nil))
-;;            "files3?.dsv.data.cod.ru"))
-;;     (is (= (:tag (leica/job-tag [#"files3?.dsv.data.cod.ru"
-;;                                  #"files2.dsv.data.cod.ru"] jj nil))
-;;            "files3?.dsv.data.cod.ru"))
-;;     (is (= (:tag (job-tag [#"files3?.dsv.data.cod.ru"
-;;                            #"files2.dsv.data.cod.ru"] jk nil))
-;;            "files4.dsv.data.cod.ru"))
-;;     (is (= (:tag (job-tag nil j8 nil))
-;;            "77.35.112.82"))))
-
-;; (deftest test-match
-;;   (is (= (match "http://dsv.data.cod.ru/433148"
-;;                 '((#"http://dsv.data.cod.ru/\d{6}" :MATCH))
-;;                 {:rule-response rest})
-;;          '(:MATCH))))
-
-;; (deftest test-login-and-password
-;;   (is (= ["zahardzhan@gmail.com" "zxcvbn"]
-;;          (login-and-password "zahardzhan@gmail.com:zxcvbn")))
-;;   (is (= ["mail@gmail.com" "password"]
-;;          (login-and-password "mail@gmail.com:password"))))
-
-;; (deftest test-run
-;;   (is (nil?
-;;        (and nil
-;;             (do
-;;               (def e (environment {:working-path (File. "/home/haru/inbox/dsv")}))
-;;               (send e add-agents (download-agents
-;;                                   ["http://dsv.data.cod.ru/458692"
-;;                                    "http://77.35.112.82/upload/Personal_Folders/Peshehod/Chelovek-Slon.mpg"]))
-;;               (await e)
-;;               (send e run-environment))))))
-
-;; (deftest test-upload
-;;   (is (nil?
-;;        (and nil
-;;             (do
-;;               (def e (upload-environment
-;;                       (datacod-account "zahardzhan@gmail.com" "zscxadw")))
-;;               (def b (upload-agent (File. "/home/haru/inbox/issue27-ru.pdf")))
-;;               (def d (upload-agent (File. "/home/haru/inbox/sicp.pdf")))
-;;               (def f (upload-agent (File. "/home/haru/inbox/pcl.pdf")))
-;;               (send e add-agent b)
-;;               (send e add-agent d)
-;;               (send e add-agent f)
-
-;;               ;;(send-off b act e)
-;;               (send e run-environment)
-
-;;               (termination? e)
-;;               )))))
-
-;; java.net.URISyntaxException: Illegal character in path at index 83: http://77.35.112.83/upload/PersonalFolders/F-r-e-e
-;; -m-a-n/Die_Hard_1_720p_DVD5_HDRG_[f-r-e-e-m-a-n].p
-;; art01.rar
-
-(deftest test-run-step
-  (is (nil?
-       (and nil
-            (do
-              (def e (env.download/download-environment {:working-path (File. "/home/haru/inbox/dsv")}))
-              (def a (env.download/download-agent "Energy.rar: http://dsv.data.cod.ru/470723" *download-rules*))
-              (add-agent e a)
-              (run-agent a e)
-              ;;(send e env/run-env)
-              ((@a :program) {:self @a :env @e})
-              (((@a :actions) :get-link) @a @e)
-              (def a3 (execute-action (execute-action (execute-action @a @e) @e) @e))
-              )))))

@@ -46,11 +46,10 @@
 
           (not tag) (let [new-state (execute-action ag-state @env)]
                       (cond (dead?- new-state) (done env *agent*)
-                            ;(fail?- new-state) (run-agent *agent* env)
+                            (fail?- new-state) (run-agent *agent* env)
                             (:tag new-state) (do (add-tag env (:tag new-state))
                                                  (received-tag env *agent*))
-                            ;:else (run-agent *agent* env)
-                            )
+                            :else (run-agent *agent* env))
                       new-state)
 
           (tag-locked? env tag) ag-state
@@ -59,8 +58,7 @@
                                   (execute-action ag-state @env))]
                   (cond (dead?- new-state) (done env *agent*)
                         (fail?- new-state) (done env *agent*)
-                        ;:else (run-agent *agent* env)
-                        )
+                        :else (run-agent *agent* env))
                   new-state))))
 
 ;;;; Окружение

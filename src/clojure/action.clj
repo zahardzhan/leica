@@ -46,12 +46,13 @@
     (let [#^HttpClient client (new HttpClient)
           #^HeadMethod head (HeadMethod. (str link))]
       (try (let [status (.executeMethod client head)]
+             ;;(.releaseConnection head)
              (if (= status HttpStatus/SC_OK)
-               (if-let [length (.getName (first (.getElements 
-                                                 (.getResponseHeader head "Content-Length"))))]
+               (if-let [length (.. head (getResponseHeader "Content-Length") (getValue))]
                  (assoc ag :length (Integer/parseInt length) :fail false)
                  (die ag env))
                ((http-error-status-handler status die fail) ag env)))
+           ;; I/O exception (java.net.ConnectException) caught when processing request: Connection timed out
            (catch java.net.ConnectException e (die ag env))
            (catch Exception e (fail ag env))
            (finally (.releaseConnection head))))))
@@ -65,7 +66,7 @@
   (when-let [#^URI link (ag :link)]
     (when-let [#^File file (ag :file)]
       (let [loader (ha/http-agent
-                    link
+                    (str link)
                     :headers {"Range" (str "bytes=" (file-length file) "-")}
                     :handler (fn [remote]
                                (with-open [local (FileOutputStream. file true)]
