@@ -63,11 +63,14 @@
 
 ;;;; Окружение
 
-(defn download-environment [& [{:keys [working-path termination]
+(defn download-environment [& [{:keys [working-path done-path termination]
                        :or   {working-path nil
+                              done-path nil
                               termination #()}}]]
   (agent {:type :download :agents '() :tags {}
-          :working-path working-path :termination termination}))
+          :working-path working-path
+          :done-path done-path
+          :termination termination}))
 
 (defmethod run-env- :download [env-state]
   (doseq [ag (:agents env-state)] (run-agent ag *agent*))

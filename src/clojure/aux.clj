@@ -31,6 +31,11 @@
 (defmethod join-paths [File String] [p1 p2]
   (str (File. p1 p2)))
 
+(defn move-file [#^File source-file #^File dest-dir]
+  (let [#^File dest-file (File. dest-dir (.getName source-file))]
+    (when (. source-file renameTo dest-file)
+      dest-file)))
+
 (defn transliterate [line]
   (let [table {"а" "a"  "б" "b"  "в" "v"  "г" "g"  "д" "d"
                "е" "e"  "ё" "yo"  "ж" "zh"  "з" "z"  "и" "i"

@@ -49,37 +49,44 @@ leica [ключи] -a почтовый@адрес:пароль [файлы и д
                                          #"files2.dsv.data.cod.ru"])
         :get-file   action/get-file
         :get-length action/get-length
+        :move-to-done-path action/move-to-done-path
         :download   action/download
-        :die        action/die}]
+        :die        action/die
+        :pass       action/pass}]
       [#"http://[\w\.]*data.cod.ru/\d+"
        {:get-link   datacod.action/get-link-and-name
         :get-tag    (partial action/get-tag nil)
         :get-file   action/get-file
         :get-length action/get-length
+        :move-to-done-path action/move-to-done-path
         :download   action/download
-        :die        action/die}]
+        :die        action/die
+        :pass       action/pass}]
       [#"http://77.35.112.8[1234]/.+"
        {:get-link   action/get-link
         :get-name   action/get-name
         :get-tag    (partial action/get-tag nil)
         :get-file   action/get-file
         :get-length action/get-length
+        :move-to-done-path action/move-to-done-path
         :download   action/download
-        :die        action/die}]
+        :die        action/die
+        :pass       action/pass}]
       [#"http://dsvload.net/ftpupload/.+"
        {:get-link   action/get-link
         :get-name   action/get-name
         :get-tag    (partial action/get-tag nil)
         :get-file   action/get-file
         :get-length action/get-length
+        :move-to-done-path action/move-to-done-path
         :download   action/download
-        :die        action/die}]])
-
-;;;; COMMAND-LINE
+        :die        action/die
+        :pass       action/pass}]])
 
 (defn valid-path [#^String path]
-  (let [#^File the-path (File. (.getCanonicalPath (File. path)))]
-    (when (.exists the-path) the-path)))
+  (when (string? path)
+    (let [#^File the-path (File. (.getCanonicalPath (File. path)))]
+      (when (.exists the-path) the-path))))
 
 (defn valid-jobs-file [#^String path]
   (when-let [#^File file (valid-path path)]
@@ -122,6 +129,7 @@ leica [ключи] -a почтовый@адрес:пароль [файлы и д
   (with-command-line args
       *usage*
       [[account a "почтовый@адрес:пароль аккаунта на датакоде для закачивания"]
+       [move-done-to m "директория, в которую перемещать полностью загруженные файлы"]
        [quiet? q? "работать молча"]
        [debug? d? "писать подробные сообщения для отлова багов"]
        remaining-args]
@@ -130,10 +138,10 @@ leica [ключи] -a почтовый@адрес:пароль [файлы и д
           console-handler (first (.getHandlers root-logger))
           date-formatter (java.text.SimpleDateFormat. "HH:mm:ss")
           log-formatter (proxy [Formatter] []
-                            (format 
-                             [#^LogRecord record]
-                             (str (.format date-formatter (Date. (.getMillis record))) " "
-                                  (.getMessage record) "\n")))
+                          (format 
+                           [#^LogRecord record]
+                           (str (.format date-formatter (Date. (.getMillis record))) " "
+                                (.getMessage record) "\n")))
           log-level (cond quiet? (Level/OFF)
                           debug? (Level/FINE)
                           :else  (Level/INFO))]
@@ -153,11 +161,14 @@ leica [ключи] -a почтовый@адрес:пароль [файлы и д
           :else
           (let [jobs-file (some valid-jobs-file remaining-args)
                 working-path (or (some valid-output-dir remaining-args)
-                                 (valid-output-dir (System/getProperty "user.dir")))]
+                                 (valid-output-dir (System/getProperty "user.dir")))
+                done-path (valid-output-dir move-done-to)]
             (when (and jobs-file working-path)
               (let [lines (duck/read-lines jobs-file)
-                    e (env.download/download-environment {:working-path working-path 
-                                                          :termination #(System/exit 0)})]
+                    e (env.download/download-environment
+                       {:working-path working-path 
+                        :done-path (when (not= working-path done-path) done-path)
+                        :termination #(System/exit 0)})]
                 (add-agents e (env.download/download-agents lines *download-rules*))
                 (await e)
                 (run-env e)))))))

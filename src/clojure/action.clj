@@ -32,7 +32,14 @@
 (defn get-name [ag env]
   (when-let [#^URI link (ag :link)]
     (assoc ag :name (second (re-find #"/([^/]+)$" (.getPath link))) :fail false)))
- 
+
+(defn move-to-done-path [ag env]
+  (when-let [#^File done-path (env :done-path)]
+    (when-let [#^File file (ag :file)]
+      (if-let [#^File moved (move-file file done-path)]
+        (assoc ag :file moved :fail false)
+        (die ag env)))))
+
 (defn get-tag [pattern ag env]
   (when-let [#^URI link (ag :link)]
     (when-let [tag (or (if pattern
@@ -75,7 +82,7 @@
         (ha/result loader)
         (if (and (ha/done? loader) (ha/success? loader))
           (do (log/info (str "Закончена загрузка " (ag :name)))
-              (die ag env))
+              (assoc ag :fail false))
           ((http-error-status-handler
             (ha/status loader)
             #(do (log/info (str "Загрузка не может быть закончена " (ag :name)))
