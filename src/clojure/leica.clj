@@ -128,12 +128,12 @@ leica [ключи] -a почтовый@адрес:пароль [файлы и д
 
     (let [root-logger (Logger/getLogger "")
           console-handler (first (.getHandlers root-logger))
+          date-formatter (java.text.SimpleDateFormat. "HH:mm:ss")
           log-formatter (proxy [Formatter] []
                             (format 
                              [#^LogRecord record]
-                             (let [date-formatter (java.text.SimpleDateFormat. "HH:mm:ss")]
-                               (str (.format date-formatter (Date. (.getMillis record))) " "
-                                    (.getMessage record) "\n"))))
+                             (str (.format date-formatter (Date. (.getMillis record))) " "
+                                  (.getMessage record) "\n")))
           log-level (cond quiet? (Level/OFF)
                           debug? (Level/FINE)
                           :else  (Level/INFO))]
