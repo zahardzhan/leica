@@ -52,7 +52,7 @@
             post (MultipartRequestEntity. parts (.getParams post)))
            (log/info (str "Начата загрузка " (ag :name)))
            (if (= HttpStatus/SC_MOVED_TEMPORARILY (.executeMethod client post))
-             (if-let [location (.. head (getResponseHeader "Location") (getValue))]
+             (if-let [location (.. post (getResponseHeader "Location") (getValue))]
                (do (log/info (str "Закончена загрузка " (ag :name)))
                    (assoc ag :address (str "http://dsv.data.cod.ru" location)
                           :fail false :alive false))

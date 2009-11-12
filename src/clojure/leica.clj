@@ -128,19 +128,16 @@ leica [ключи] -a почтовый@адрес:пароль [файлы и д
 
     (let [root-logger (Logger/getLogger "")
           console-handler (first (.getHandlers root-logger))
-          basic-formatter (proxy [Formatter] []
-                            (format
+          log-formatter (proxy [Formatter] []
+                            (format 
                              [#^LogRecord record]
-                             (let [time (new Date (.getMillis record))
-                                   hour (.getHours time)
-                                   min  (.getMinutes time)
-                                   sec  (.getSeconds time)]
-                               (str hour ":" min ":" sec " " 
+                             (let [date-formatter (java.text.SimpleDateFormat. "HH:mm:ss")]
+                               (str (.format date-formatter (Date. (.getMillis record))) " "
                                     (.getMessage record) "\n"))))
           log-level (cond quiet? (Level/OFF)
                           debug? (Level/FINE)
                           :else  (Level/INFO))]
-      (.setFormatter console-handler basic-formatter)
+      (.setFormatter console-handler log-formatter)
       (.setLevel console-handler log-level)
       (.setLevel root-logger log-level))
 
