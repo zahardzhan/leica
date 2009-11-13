@@ -83,52 +83,52 @@ leica [ключи] -a почтовый@адрес:пароль [файлы и д
         :die        action/die
         :pass       action/pass}]])
 
-(defn valid-path [#^String path]
+(defn verified-path [#^String path]
   (when (string? path)
     (let [#^File the-path (File. (.getCanonicalPath (File. path)))]
       (when (.exists the-path) the-path))))
 
-(defn valid-jobs-file [#^String path]
-  (when-let [#^File file (valid-path path)]
+(defn verified-jobs-file [#^String path]
+  (when-let [#^File file (verified-path path)]
     (when (and (.isFile file) (.canRead file))
       file)))
 
-(defn valid-output-dir [#^String path]
-  (when-let [#^File dir (valid-path path)]
+(defn verified-output-dir [#^String path]
+  (when-let [#^File dir (verified-path path)]
     (when (and (.isDirectory dir) (.canWrite dir))
       dir)))
 
-(defn valid-upload-file [#^String path]
-  (when-let [#^File file (valid-path path)]
+(defn verified-upload-file [#^String path]
+  (when-let [#^File file (verified-path path)]
     (when (and (.isFile file) (.canRead file)
                (> (file-length file) 0))
       file)))
 
-(defn valid-upload-dir [#^String path]
-  (when-let [#^File dir (valid-path path)]
+(defn verified-upload-dir [#^String path]
+  (when-let [#^File dir (verified-path path)]
     (when (and (.isDirectory dir) (.canRead dir))
       dir)))
 
 (defn files-for-upload [paths]
   (loop [up '()
-         ps (flatten (map #(or (valid-upload-file %)
-                               (sort (seq (.listFiles (valid-upload-dir %)))))
+         ps (flatten (map #(or (verified-upload-file %)
+                               (sort (seq (.listFiles (verified-upload-dir %)))))
                           paths))]
     (if-not (seq ps) up
             (let [p (first ps)]
               (recur (if (includes? up p) up (push up p))
                      (rest ps))))))
 
-(defn login-and-password [line]
-  (let [[_ login password]
-        (re-find #"([^@]+@[^:]+):(.+)" line)]
+(defn account-attribs [line]
+  (let [[_ domain login password]
+        (re-find #"([^:]+):([^@]+@[^:]+):(.+)" line)]
     (when (and login password)
-      [login password])))
+      [domain login password])))
 
 (defn -main [& args]
   (with-command-line args
       *usage*
-      [[account a "почтовый@адрес:пароль аккаунта на датакоде для закачивания"]
+      [[account a "домен:имя@аккаунта:пароль для закачивания на датакод"]
        [move-done-to m "директория, в которую перемещать полностью загруженные файлы"]
        [quiet? q? "работать молча"]
        [debug? d? "писать подробные сообщения для отлова багов"]
@@ -150,8 +150,8 @@ leica [ключи] -a почтовый@адрес:пароль [файлы и д
       (.setLevel root-logger log-level))
 
     (cond account
-          (let [[login pass] (login-and-password account)
-                acc (datacod.account/datacod-account login pass)
+          (let [[domain login pass] (account-attribs account)
+                acc (datacod.account/datacod-account domain login pass)
                 files (files-for-upload remaining-args)]
             (when (and acc files)
               (let [e (env.upload/upload-environment acc {:termination #(System/exit 0)})]
@@ -159,10 +159,10 @@ leica [ключи] -a почтовый@адрес:пароль [файлы и д
                 (await e)
                 (run-env e))))
           :else
-          (let [jobs-file (some valid-jobs-file remaining-args)
-                working-path (or (some valid-output-dir remaining-args)
-                                 (valid-output-dir (System/getProperty "user.dir")))
-                done-path (valid-output-dir move-done-to)]
+          (let [jobs-file (some verified-jobs-file remaining-args)
+                working-path (or (some verified-output-dir remaining-args)
+                                 (verified-output-dir (System/getProperty "user.dir")))
+                done-path (verified-output-dir move-done-to)]
             (when (and jobs-file working-path)
               (let [lines (duck/read-lines jobs-file)
                     e (env.download/download-environment

@@ -15,7 +15,7 @@
            [percept] 
            (let [client (new HttpClient)]
              (datacod.account/with-auth client ((percept :env) :account)
-               (let [free-space (datacod.account/free-space client)]
+               (let [free-space (datacod.account/free-space client ((percept :env) :account))]
                  (if free-space
                    (< free-space ((percept :self) :length))
                    true)))))

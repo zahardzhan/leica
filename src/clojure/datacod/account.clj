@@ -22,16 +22,17 @@
            (org.htmlparser.tags Div LinkTag)
            (org.htmlparser.nodes TagNode)))
 
-(defn datacod-account [login password]
+(defn datacod-account [domain login password]
   (when (and login password)
-    {:login login :password password}))
+    {:domain (str (when domain (str domain ".")) "data.cod.ru")
+     :login login :password password}))
 
 (defmacro with-auth
   "Авторизация http-клиента на датакоде."
   [#^HttpClient client account & body]
   `(let [#^PostMethod post# (new PostMethod "http://nvwh.cod.ru/link/auth/")]
      (doto post#
-       (.addParameter "refURL" "http://dsv.data.cod.ru")
+       (.addParameter "refURL" (str "http://" (~account :domain)))
        (.addParameter "email" (~account :login))
        (.addParameter "password" (~account :password)))
      (try (when (= HttpStatus/SC_OK (.executeMethod ~client post#))
@@ -75,9 +76,9 @@
 (defn free-space
   "Свободное место на датакод-аккаунте.
    Использовать после авторизации на датакоде."
-  [#^HttpClient client]
+  [#^HttpClient client account]
   (try
-   (let [#^GetMethod get (GetMethod. "http://dsv.data.cod.ru")]
+   (let [#^GetMethod get (GetMethod. (str "http://" (account :domain)))]
      (when (= HttpStatus/SC_OK (.executeMethod client get))
        (:space (parse-page
                 (EncodingUtil/getString

@@ -37,8 +37,10 @@
            (finally (.releaseConnection get))))))
 
 (defn upload [ag env]
-  (let [#^HttpClient client (new HttpClient)
-        #^PostMethod post (PostMethod. "http://dsv.data.cod.ru/cabinet/upload/")
+  (let [domain ((env :account) :domain)
+        referer (str "http://" domain "/cabinet/upload/")
+        #^HttpClient client (new HttpClient)
+        #^PostMethod post (PostMethod. referer)
         parts (into-array Part
                           [(StringPart. "action" "file_upload")
                            (FilePart.   "sfile"  (transliterate (ag :name))
@@ -47,14 +49,14 @@
                            (StringPart. "password"    (ag :password))
                            (StringPart. "description" (ag :description))])]
     (datacod.account/with-auth client (env :account)
-      (.addRequestHeader post "Referer" "http://dsv.data.cod.ru/cabinet/upload/")
+      (.addRequestHeader post "Referer" referer)
       (try (.setRequestEntity
             post (MultipartRequestEntity. parts (.getParams post)))
            (log/info (str "Начата загрузка " (ag :name)))
            (if (= HttpStatus/SC_MOVED_TEMPORARILY (.executeMethod client post))
              (if-let [location (.. post (getResponseHeader "Location") (getValue))]
                (do (log/info (str "Закончена загрузка " (ag :name)))
-                   (assoc ag :address (str "http://dsv.data.cod.ru" location)
+                   (assoc ag :address (str "http://" domain location)
                           :fail false :alive false))
                (do (log/info (str "Загрузка не может быть закончена " (ag :name)))
                    (action/die ag env)))
