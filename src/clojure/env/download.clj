@@ -98,5 +98,5 @@
           next-alive-with-same-tag
           (run-agent next-alive-with-same-tag *agent*)
 
-          (termination?- env-state) ((env-state :termination))))
+          (termination?- env-state) ((env-state :termination) env-state)))
   env-state)

@@ -125,6 +125,15 @@ leica [ключи] -a почтовый@адрес:пароль [файлы и д
     (when (and login password)
       [domain login password])))
 
+(defn print-succesfully-uploaded [agents]
+  (log/info
+   (apply str "Загруженные файлы:\n"
+          (seq (map (fn [ag] (when-let [address (@ag :address)]
+                               (let [name (@ag :name)]
+                                 (str "[b]" name "[/b]: [url=" address "]" 
+                                      address "[/url]\n"))))
+                    agents)))))
+
 (defn -main [& args]
   (with-command-line args
       *usage*
@@ -154,7 +163,10 @@ leica [ключи] -a почтовый@адрес:пароль [файлы и д
                 acc (datacod.account/datacod-account domain login pass)
                 files (files-for-upload remaining-args)]
             (when (and acc files)
-              (let [e (env.upload/upload-environment acc {:termination #(System/exit 0)})]
+              (let [e (env.upload/upload-environment
+                       acc {:termination (fn [env]
+                                           (do (print-succesfully-uploaded (env :agents))
+                                               (System/exit 0)))})]
                 (add-agents e (env.upload/upload-agents files))
                 (await e)
                 (run-env e))))

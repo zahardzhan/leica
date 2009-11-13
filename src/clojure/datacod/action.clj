@@ -46,8 +46,8 @@
                            (FilePart.   "sfile"  (transliterate (ag :name))
                                         (ag :file))
                            (StringPart. "agree"  "1")
-                           (StringPart. "password"    (ag :password))
-                           (StringPart. "description" (ag :description))])]
+                           (StringPart. "password" (or (ag :password) ""))
+                           (StringPart. "description" (or (ag :description) ""))])]
     (datacod.account/with-auth client (env :account)
       (.addRequestHeader post "Referer" referer)
       (try (.setRequestEntity

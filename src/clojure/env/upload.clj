@@ -8,6 +8,8 @@
   (:require :reload action program datacod.action datacod.program)
   (:import [java.io File]))
 
+(def *slogan* "uploaded with secret alien technology")
+
 ;;;; Агент
 
 (defn upload-agent 
@@ -24,7 +26,7 @@
     (agent {:type :upload
             :name (.getName file) :file file :length (file-length file)
             :address nil
-            :password "" :description "uploaded with secret alien technology"
+            :password nil :description *slogan*
             :actions {:upload datacod.action/upload
                       :die    action/die}
             :program datacod.program/reflex-upload
@@ -66,5 +68,5 @@
           next-alive
           (run-agent next-alive *agent*)
 
-          (termination?- env-state) ((env-state :termination))))
+          (termination?- env-state) ((env-state :termination) env-state)))
   env-state)
