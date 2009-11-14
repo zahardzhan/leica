@@ -53,13 +53,12 @@
     (let [#^HttpClient client (new HttpClient)
           #^HeadMethod head (HeadMethod. (str link))]
       (try (let [status (.executeMethod client head)]
-             ;;(.releaseConnection head)
+             (.releaseConnection head)
              (if (= status HttpStatus/SC_OK)
                (if-let [length (.. head (getResponseHeader "Content-Length") (getValue))]
                  (assoc ag :length (Integer/parseInt length) :fail false)
                  (die ag env))
                ((http-error-status-handler status die fail) ag env)))
-           ;; I/O exception (java.net.ConnectException) caught when processing request: Connection timed out
            (catch java.net.ConnectException e (die ag env))
            (catch Exception e (fail ag env))
            (finally (.releaseConnection head))))))
@@ -68,24 +67,28 @@
   (when-let [name (ag :name)]
     (when-let [#^File working-path (env :working-path)]
       (assoc ag :file (new File (join-paths working-path name)) :fail false))))
- 
+
 (defn download [ag env]
   (when-let [#^URI link (ag :link)]
     (when-let [#^File file (ag :file)]
-      (let [loader (ha/http-agent
-                    (str link)
-                    :headers {"Range" (str "bytes=" (file-length file) "-")}
-                    :handler (fn [remote]
-                               (with-open [local (FileOutputStream. file true)]
-                                 (duck/copy (ha/stream remote) local))))]
-        (log/info (str "Начата загрузка " (ag :name)))
-        (ha/result loader)
-        (if (and (ha/done? loader) (ha/success? loader))
-          (do (log/info (str "Закончена загрузка " (ag :name)))
-              (assoc ag :fail false))
-          ((http-error-status-handler
-            (ha/status loader)
-            #(do (log/info (str "Загрузка не может быть закончена " (ag :name)))
-                 (die %1 %2))
-            #(do (log/info (str "Прервана загрузка " (ag :name)))
-                 (fail %1 %2))) ag env))))))
+      (try
+       (let [loader (ha/http-agent
+                     (str link)
+                     :headers {"Range" (str "bytes=" (file-length file) "-")}
+                     :handler (fn [remote]
+                                (with-open [local (FileOutputStream. file true)]
+                                  (duck/copy (ha/stream remote) local))))]
+         (log/info (str "Начата загрузка " (ag :name)))
+         (ha/result loader)
+         (if (and (ha/done? loader) (ha/success? loader))
+           (do (log/info (str "Закончена загрузка " (ag :name)))
+               (assoc ag :fail false))
+           ((http-error-status-handler
+             (ha/status loader)
+             #(do (log/info (str "Загрузка не может быть закончена " (ag :name)))
+                  (die %1 %2))
+             #(do (log/info (str "Прервана загрузка " (ag :name)))
+                  (fail %1 %2))) ag env)))
+       (catch java.net.SocketException e (die ag env))
+       (catch java.net.ConnectException e (die ag env))
+       (catch Exception e (fail ag env))))))

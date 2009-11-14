@@ -28,6 +28,7 @@
             :address nil
             :password nil :description *slogan*
             :actions {:upload datacod.action/upload
+                      :report-and-die datacod.action/report-and-die
                       :die    action/die}
             :program datacod.program/reflex-upload
             :alive true :fail false :percept nil :action nil})))

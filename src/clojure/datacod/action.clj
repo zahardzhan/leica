@@ -36,6 +36,13 @@
            (catch Exception e (action/fail ag env))
            (finally (.releaseConnection get))))))
 
+(defn report-and-die [ag env]
+  (if-let [#^File report-file (env :report-file)]
+    (do (duck/with-out-append-writer report-file
+          (print (format-link-for-forum (ag :name) (ag :address))))
+        (action/die ag env))
+    (action/die ag env)))
+
 (defn upload [ag env]
   (let [domain ((env :account) :domain)
         referer (str "http://" domain "/cabinet/upload/")

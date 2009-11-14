@@ -93,6 +93,11 @@ leica [ключи] -a почтовый@адрес:пароль [файлы и д
     (when (and (.isFile file) (.canRead file))
       file)))
 
+(defn verified-log-file [#^String path]
+  (when-let [#^File file (verified-path path)]
+    (when (and (.isFile file) (.canWrite file))
+      file)))
+
 (defn verified-output-dir [#^String path]
   (when-let [#^File dir (verified-path path)]
     (when (and (.isDirectory dir) (.canWrite dir))
@@ -129,18 +134,17 @@ leica [ключи] -a почтовый@адрес:пароль [файлы и д
   (log/info
    (apply str "Загруженные файлы:\n"
           (seq (map (fn [ag] (when-let [address (@ag :address)]
-                               (let [name (@ag :name)]
-                                 (str "[b]" name "[/b]: [url=" address "]" 
-                                      address "[/url]\n"))))
+                               (format-link-for-forum (@ag :name) address)))
                     agents)))))
 
 (defn -main [& args]
   (with-command-line args
       *usage*
-      [[account a "домен:имя@аккаунта:пароль для закачивания на датакод"]
-       [move-done-to m "директория, в которую перемещать полностью загруженные файлы"]
-       [quiet? q? "работать молча"]
-       [debug? d? "писать подробные сообщения для отлова багов"]
+      [[account a  "домен:имя@аккаунта:пароль для закачивания на датакод"]
+       [move    m  "директория, в которую перемещать полностью загруженные файлы"]
+       [report  r  "файл для отчета о залитых"]
+       [quiet?  q? "работать молча"]
+       [debug?  d? "писать подробные сообщения для отлова багов"]
        remaining-args]
 
     (let [root-logger (Logger/getLogger "")
@@ -161,10 +165,12 @@ leica [ключи] -a почтовый@адрес:пароль [файлы и д
     (cond account
           (let [[domain login pass] (account-attribs account)
                 acc (datacod.account/datacod-account domain login pass)
-                files (files-for-upload remaining-args)]
+                files (files-for-upload remaining-args)
+                report-file (verified-log-file report)]
             (when (and acc files)
               (let [e (env.upload/upload-environment
-                       acc {:termination (fn [env]
+                       acc {:report-file report-file
+                            :termination (fn [env]
                                            (do (print-succesfully-uploaded (env :agents))
                                                (System/exit 0)))})]
                 (add-agents e (env.upload/upload-agents files))
@@ -174,13 +180,13 @@ leica [ключи] -a почтовый@адрес:пароль [файлы и д
           (let [jobs-file (some verified-jobs-file remaining-args)
                 working-path (or (some verified-output-dir remaining-args)
                                  (verified-output-dir (System/getProperty "user.dir")))
-                done-path (verified-output-dir move-done-to)]
+                done-path (verified-output-dir move)]
             (when (and jobs-file working-path)
               (let [lines (duck/read-lines jobs-file)
                     e (env.download/download-environment
                        {:working-path working-path 
                         :done-path (when (not= working-path done-path) done-path)
-                        :termination #(System/exit 0)})]
+                        :termination (fn [env] (System/exit 0))})]
                 (add-agents e (env.download/download-agents lines *download-rules*))
                 (await e)
                 (run-env e)))))))

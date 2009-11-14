@@ -27,6 +27,6 @@
             [(missing :file)    :die]
             [(missing :name)    :die]
             [(missing :length)  :die]
-            [(has     :address) :die]
+            [(has     :address) :report-and-die]
             [out-of-space       :die]
             [otherwise          :upload]])))
