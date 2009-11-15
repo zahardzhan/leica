@@ -37,13 +37,14 @@
            (finally (.releaseConnection get))))))
 
 (defn report-and-die [ag env]
-  (if-let [#^File report-file (env :report-file)]
-    (do (duck/with-out-append-writer report-file
-          (print (format-link-for-forum (ag :name) (ag :address))))
-        (action/die ag env))
-    (action/die ag env)))
+  (when-let [#^File report-file (env :report-file)]
+    (duck/with-out-append-writer report-file
+      (print (format-link-for-forum (ag :name) (ag :address)))))
+  (action/die ag env))
 
 (defn upload [ag env]
+  ;; 14:37:30 I/O exception (java.net.ConnectException) caught when processing request: Connection timed out
+  ;; 14:37:30 Retrying request
   (let [domain ((env :account) :domain)
         referer (str "http://" domain "/cabinet/upload/")
         #^HttpClient client (new HttpClient)
@@ -63,8 +64,7 @@
            (if (= HttpStatus/SC_MOVED_TEMPORARILY (.executeMethod client post))
              (if-let [location (.. post (getResponseHeader "Location") (getValue))]
                (do (log/info (str "Закончена загрузка " (ag :name)))
-                   (assoc ag :address (str "http://" domain location)
-                          :fail false :alive false))
+                   (assoc ag :address (str "http://" domain location) :fail false :alive false))
                (do (log/info (str "Загрузка не может быть закончена " (ag :name)))
                    (action/die ag env)))
              (do (log/info (str "Прервана загрузка " (ag :name)))
@@ -73,6 +73,4 @@
              (do (log/info (str "Прервана загрузка " (ag :name)))
                  (action/fail ag env)))
            (finally (.releaseConnection post))))))
-
-
 

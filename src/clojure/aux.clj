@@ -53,7 +53,7 @@
     (apply str (map (fn [char] (or (table (str char)) char)) line))))
 
 (defn format-link-for-forum [name address]
-  (str "[b]" name "[/b]: [url=" address "]" address "[/url]\n"))
+  (str "[b]" name "[/b]: [url=" address "]" address "[/url]" \newline))
 
 (defn http-error-status-handler [status fatal not-fatal]
   (match status

@@ -16,8 +16,8 @@
 
 (in-ns 'action)
 
-(def *default-head-request-timeout* 30000)
-(def *default-connection-timeout* 25000)
+(def *default-head-request-timeout* 60000)
+(def *default-connection-timeout* 50000)
 
 (defn pass [ag env]
   ag)

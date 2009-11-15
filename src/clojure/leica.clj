@@ -94,9 +94,12 @@ leica [ключи] -a почтовый@адрес:пароль [файлы и д
       file)))
 
 (defn verified-log-file [#^String path]
-  (when-let [#^File file (verified-path path)]
-    (when (and (.isFile file) (.canWrite file))
-      file)))
+  (when (string? path)
+    (let [#^File file (File. (.getCanonicalPath (File. path)))
+          #^File dir (File. (.getParent file))]
+      (when (and (.exists dir) (.canWrite dir))
+        (when-not (.exists file) (.createNewFile file))
+        file))))
 
 (defn verified-output-dir [#^String path]
   (when-let [#^File dir (verified-path path)]
@@ -141,8 +144,8 @@ leica [ключи] -a почтовый@адрес:пароль [файлы и д
   (with-command-line args
       *usage*
       [[account a  "домен:имя@аккаунта:пароль для закачивания на датакод"]
-       [move    m  "директория, в которую перемещать полностью загруженные файлы"]
-       [report  r  "файл для отчета о залитых"]
+       [move    m  "директория, в которую перемещать полностью скачанные файлы"]
+       ;;[report  r  "файл для отчета о закачанных"]
        [quiet?  q? "работать молча"]
        [debug?  d? "писать подробные сообщения для отлова багов"]
        remaining-args]

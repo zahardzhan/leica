@@ -46,9 +46,12 @@
 
 ;;;; Окружение
 
-(defn upload-environment [account & [{:keys [termination]
-                                      :or   {termination #()}}]]
+(defn upload-environment [account & [{:keys [report-file
+                                             termination]
+                                      :or   {report-file nil
+                                             termination #()}}]]
   (agent {:type :upload :agents '() :account account
+          :report-file report-file
           :termination termination}))
 
 (defmethod run-env- :upload [env-state]
