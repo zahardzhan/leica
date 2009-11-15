@@ -16,6 +16,9 @@
 
 (in-ns 'action)
 
+(def *default-head-request-timeout* 30000)
+(def *default-connection-timeout* 25000)
+
 (defn pass [ag env]
   ag)
  
@@ -52,6 +55,11 @@
   (when-let [#^URI link (ag :link)]
     (let [#^HttpClient client (new HttpClient)
           #^HeadMethod head (HeadMethod. (str link))]
+      ;; Sets the timeout until a connection is etablished.
+      (.. client getHttpConnectionManager getParams 
+          (setConnectionTimeout *default-connection-timeout*))
+      ;; Sets the default socket timeout which is the timeout for waiting for data.
+      (.. head getParams (setSoTimeout *default-head-request-timeout*))
       (try (let [status (.executeMethod client head)]
              (.releaseConnection head)
              (if (= status HttpStatus/SC_OK)
@@ -59,8 +67,11 @@
                  (assoc ag :length (Integer/parseInt length) :fail false)
                  (die ag env))
                ((http-error-status-handler status die fail) ag env)))
+           (catch java.io.InterruptedIOException e ;; SocketTimeout
+             (do (log/info (str "Время ожидания ответа сервера истекло для " (ag :name)))
+                 (fail ag env)))
            (catch java.net.ConnectException e (die ag env))
-           (catch Exception e (fail ag env))
+           (catch Exception e (die ag env))
            (finally (.releaseConnection head))))))
 
 (defn get-file [ag env]
