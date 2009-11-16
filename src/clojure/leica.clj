@@ -30,8 +30,8 @@
 Скачать файлы с датакода:
 leica [ключи] [файл с адресами на скачивание] [директория для скачанных файлов]
 
-Закачать файлы на датакод:
-leica [ключи] -a почтовый@адрес:пароль [файлы и директории для закачивания]
+Закачать файлы на датакод в домене [dsv|amur|khv|avangard|...]:
+leica [ключи] -a домен:почтовый@адрес:пароль [файлы и директории для закачивания]
 ")
 
 (defn user-agent [] ;; TODO: Сделать юзер-агента в соответствии со стандартом
@@ -83,17 +83,20 @@ leica [ключи] -a почтовый@адрес:пароль [файлы и д
         :die        action/die
         :pass       action/pass}]])
 
-(defn verified-path [#^String path]
-  (when (string? path)
-    (let [#^File the-path (File. (.getCanonicalPath (File. path)))]
-      (when (.exists the-path) the-path))))
+(defn verified-path [path]
+  (cond (string? path)
+        (let [#^File the-path (File. (.getCanonicalPath (File. path)))]
+          (when (.exists the-path) the-path))
 
-(defn verified-jobs-file [#^String path]
+        (file? path)
+        (when (.exists path) path)))
+
+(defn verified-jobs-file [path]
   (when-let [#^File file (verified-path path)]
     (when (and (.isFile file) (.canRead file))
       file)))
 
-(defn verified-log-file [#^String path]
+(defn verified-log-file [path]
   (when (string? path)
     (let [#^File file (File. (.getCanonicalPath (File. path)))
           #^File dir (File. (.getParent file))]
@@ -101,31 +104,36 @@ leica [ключи] -a почтовый@адрес:пароль [файлы и д
         (when-not (.exists file) (.createNewFile file))
         file))))
 
-(defn verified-output-dir [#^String path]
+(defn verified-output-dir [path]
   (when-let [#^File dir (verified-path path)]
     (when (and (.isDirectory dir) (.canWrite dir))
       dir)))
 
-(defn verified-upload-file [#^String path]
+(defn verified-upload-file [path]
   (when-let [#^File file (verified-path path)]
     (when (and (.isFile file) (.canRead file)
                (> (file-length file) 0))
       file)))
 
-(defn verified-upload-dir [#^String path]
+(defn verified-upload-dir [path]
   (when-let [#^File dir (verified-path path)]
     (when (and (.isDirectory dir) (.canRead dir))
       dir)))
 
-(defn files-for-upload [paths]
-  (loop [up '()
-         ps (flatten (map #(or (verified-upload-file %)
-                               (sort (seq (.listFiles (verified-upload-dir %)))))
-                          paths))]
-    (if-not (seq ps) up
-            (let [p (first ps)]
-              (recur (if (includes? up p) up (push up p))
-                     (rest ps))))))
+(defn files-for-upload [upload-paths]
+  (loop [unique '()
+         paths  (flatten
+                 (filter identity
+                         (map (fn [path]
+                                (or (verified-upload-file path)
+                                    (when-let [dir (verified-upload-dir path)]
+                                      (filter verified-upload-file
+                                              (sort (seq (.listFiles dir)))))))
+                              upload-paths)))]
+    (if-not (seq paths) unique
+            (let [path (first paths)]
+              (recur (if (includes? unique path) unique (push unique path))
+                     (rest paths))))))
 
 (defn account-attribs [line]
   (let [[_ domain login password]
@@ -145,7 +153,7 @@ leica [ключи] -a почтовый@адрес:пароль [файлы и д
       *usage*
       [[account a  "домен:имя@аккаунта:пароль для закачивания на датакод"]
        [move    m  "директория, в которую перемещать полностью скачанные файлы"]
-       ;;[report  r  "файл для отчета о закачанных"]
+       [report  r  "файл для отчета о закачанных"]
        [quiet?  q? "работать молча"]
        [debug?  d? "писать подробные сообщения для отлова багов"]
        remaining-args]
@@ -170,7 +178,7 @@ leica [ключи] -a почтовый@адрес:пароль [файлы и д
                 acc (datacod.account/datacod-account domain login pass)
                 files (files-for-upload remaining-args)
                 report-file (verified-log-file report)]
-            (when (and acc files)
+            (when (and acc (seq files))
               (let [e (env.upload/upload-environment
                        acc {:report-file report-file
                             :termination (fn [env]

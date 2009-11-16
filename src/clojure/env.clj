@@ -17,7 +17,7 @@
 
 ;;;; Агент
 
-(defstruct agent-body :type :name :alive :program :actions)
+(defstruct agent-body :type :name :alive :program :actions :action)
 
 (defn- agent-state-type-dispatch
   ([ag] (:type ag))

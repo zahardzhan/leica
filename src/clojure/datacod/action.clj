@@ -4,7 +4,8 @@
 (ns #^{:doc "Действия агента, работающего с data.cod."
        :author "Роман Захаров"}
   datacod.action
-  (:require datacod.account
+  (:require action
+            datacod.account
             [clojure.contrib.http.agent :as ha]
             [clojure.contrib.duck-streams :as duck]
             [clojure.contrib.logging :as log])
@@ -36,41 +37,43 @@
            (catch Exception e (action/fail ag env))
            (finally (.releaseConnection get))))))
 
-(defn report-and-die [ag env]
-  (when-let [#^File report-file (env :report-file)]
-    (duck/with-out-append-writer report-file
-      (print (format-link-for-forum (ag :name) (ag :address)))))
-  (action/die ag env))
+(defn report [ag env]
+  (action/with-action :report
+    (when-let [#^File report-file (env :report-file)]
+      (duck/with-out-append-writer report-file
+        (print (format-link-for-forum (ag :name) (ag :address)))))
+    ag))
 
 (defn upload [ag env]
   ;; 14:37:30 I/O exception (java.net.ConnectException) caught when processing request: Connection timed out
   ;; 14:37:30 Retrying request
-  (let [domain ((env :account) :domain)
-        referer (str "http://" domain "/cabinet/upload/")
-        #^HttpClient client (new HttpClient)
-        #^PostMethod post (PostMethod. referer)
-        parts (into-array Part
-                          [(StringPart. "action" "file_upload")
-                           (FilePart.   "sfile"  (transliterate (ag :name))
-                                        (ag :file))
-                           (StringPart. "agree"  "1")
-                           (StringPart. "password" (or (ag :password) ""))
-                           (StringPart. "description" (or (ag :description) ""))])]
-    (datacod.account/with-auth client (env :account)
-      (.addRequestHeader post "Referer" referer)
-      (try (.setRequestEntity
-            post (MultipartRequestEntity. parts (.getParams post)))
-           (log/info (str "Начата загрузка " (ag :name)))
-           (if (= HttpStatus/SC_MOVED_TEMPORARILY (.executeMethod client post))
-             (if-let [location (.. post (getResponseHeader "Location") (getValue))]
-               (do (log/info (str "Закончена загрузка " (ag :name)))
-                   (assoc ag :address (str "http://" domain location) :fail false :alive false))
-               (do (log/info (str "Загрузка не может быть закончена " (ag :name)))
-                   (action/die ag env)))
-             (do (log/info (str "Прервана загрузка " (ag :name)))
-                 (action/fail ag env)))
-           (catch Exception exc
-             (do (log/info (str "Прервана загрузка " (ag :name)))
-                 (action/fail ag env)))
-           (finally (.releaseConnection post))))))
+  (action/with-action :upload
+    (let [domain ((env :account) :domain)
+          referer (str "http://" domain "/cabinet/upload/")
+          #^HttpClient client (new HttpClient)
+          #^PostMethod post (PostMethod. referer)
+          parts (into-array Part
+                            [(StringPart. "action" "file_upload")
+                             (FilePart.   "sfile"  (transliterate (ag :name))
+                                          (ag :file))
+                             (StringPart. "agree"  "1")
+                             (StringPart. "password" (or (ag :password) ""))
+                             (StringPart. "description" (or (ag :description) ""))])]
+      (datacod.account/with-auth client (env :account)
+        (.addRequestHeader post "Referer" referer)
+        (try (.setRequestEntity
+              post (MultipartRequestEntity. parts (.getParams post)))
+             (log/info (str "Начата загрузка " (ag :name)))
+             (if (= HttpStatus/SC_MOVED_TEMPORARILY (.executeMethod client post))
+               (if-let [location (.. post (getResponseHeader "Location") (getValue))]
+                 (do (log/info (str "Закончена загрузка " (ag :name)))
+                     (assoc ag :address (str "http://" domain location) :fail false))
+                 (do (log/info (str "Загрузка не может быть закончена " (ag :name)))
+                     (action/die ag env)))
+               (do (log/info (str "Прервана загрузка " (ag :name)))
+                   (action/fail ag env)))
+             (catch Exception exc
+               (do (log/info (str "Прервана загрузка " (ag :name)))
+                   (action/fail ag env)))
+             (finally (.releaseConnection post)))))))
 

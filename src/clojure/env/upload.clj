@@ -28,20 +28,22 @@
             :address nil
             :password nil :description *slogan*
             :actions {:upload datacod.action/upload
-                      :report-and-die datacod.action/report-and-die
+                      :report datacod.action/report
+                      :pass   action/pass
                       :die    action/die}
             :program datacod.program/reflex-upload
-            :alive true :fail false :percept nil :action nil})))
+            :alive true :fail false :percept nil :action :creation})))
 
 (defn upload-agents [files]
   (remove (comp not agent?) (map upload-agent files)))
 
 (defmethod run-agent- :upload [ag-state env]
   (cond (dead?- ag-state) ag-state
-
+ 
         :else (let [new-state (execute-action ag-state @env)]
                 (cond (dead?- new-state) (done env *agent*)
-                      (fail?- new-state) (done env *agent*))
+                      (fail?- new-state) (done env *agent*)
+                      :else (run-agent *agent* env))
                 new-state)))
 
 ;;;; Окружение
@@ -49,7 +51,7 @@
 (defn upload-environment [account & [{:keys [report-file
                                              termination]
                                       :or   {report-file nil
-                                             termination #()}}]]
+                                             termination empty-fn}}]]
   (agent {:type :upload :agents '() :account account
           :report-file report-file
           :termination termination}))

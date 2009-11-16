@@ -19,6 +19,10 @@
 (def *default-head-request-timeout* 60000)
 (def *default-connection-timeout* 50000)
 
+(defmacro with-action [action-name & body]
+  `(let [action-result# (do ~@body)]
+     (assoc action-result# :action ~action-name)))
+
 (defn pass [ag env]
   ag)
  

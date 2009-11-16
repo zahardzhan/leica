@@ -9,8 +9,17 @@
 
 (in-ns 'aux)
 
+(defn empty-fn 
+  ([] nil)
+  ([x] nil)
+  ([x y] nil)
+  ([x y & z] nil))
+
 (defn agent? [x]
   (instance? clojure.lang.Agent x))
+
+(defn file? [x]
+  (instance? java.io.File x))
 
 (defn push [coll x]
   (concat coll (list x)))

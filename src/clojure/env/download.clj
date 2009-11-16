@@ -66,7 +66,7 @@
 (defn download-environment [& [{:keys [working-path done-path termination]
                                 :or   {working-path nil
                                        done-path nil
-                                       termination #()}}]]
+                                       termination empty-fn}}]]
   (agent {:type :download :agents '() :tags {}
           :working-path working-path
           :done-path done-path
