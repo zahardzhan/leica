@@ -8,8 +8,8 @@
             [clojure.contrib.duck-streams :as duck]
             [clojure.contrib.logging :as log])
   (:use aux match)
-  (:import (java.io File FileOutputStream)
-           (org.apache.commons.httpclient URI HttpClient HttpStatus)
+  (:import (java.io File FileOutputStream InputStream InterruptedIOException)
+           (org.apache.commons.httpclient URI HttpClient HttpStatus ConnectTimeoutException)
            (org.apache.commons.httpclient.methods GetMethod HeadMethod)
            (org.apache.commons.httpclient.params.HttpMethodParams)
            (org.apache.commons.httpclient.util EncodingUtil)))
@@ -17,6 +17,7 @@
 (in-ns 'action)
 
 (def *default-head-request-timeout* 60000)
+(def *default-get-request-timeout* 60000)
 (def *default-connection-timeout* 50000)
 
 (defmacro with-action [action-name & body]
@@ -71,7 +72,7 @@
                  (assoc ag :length (Integer/parseInt length) :fail false)
                  (die ag env))
                ((http-error-status-handler status die fail) ag env)))
-           (catch java.io.InterruptedIOException e ;; SocketTimeout
+           (catch java.io.InterruptedIOException e
              (do (log/info (str "Время ожидания ответа сервера истекло для " (ag :name)))
                  (fail ag env)))
            (catch java.net.ConnectException e (die ag env))
@@ -84,26 +85,44 @@
       (assoc ag :file (new File (join-paths working-path name)) :fail false))))
 
 (defn download [ag env]
-  (when-let [#^URI link (ag :link)]
-    (when-let [#^File file (ag :file)]
-      (try
-       (let [loader (ha/http-agent
-                     (str link)
-                     :headers {"Range" (str "bytes=" (file-length file) "-")}
-                     :handler (fn [remote]
-                                (with-open [local (FileOutputStream. file true)]
-                                  (duck/copy (ha/stream remote) local))))]
-         (log/info (str "Начата загрузка " (ag :name)))
-         (ha/result loader)
-         (if (and (ha/done? loader) (ha/success? loader))
-           (do (log/info (str "Закончена загрузка " (ag :name)))
-               (assoc ag :fail false))
-           ((http-error-status-handler
-             (ha/status loader)
-             #(do (log/info (str "Загрузка не может быть закончена " (ag :name)))
-                  (die %1 %2))
-             #(do (log/info (str "Прервана загрузка " (ag :name)))
-                  (fail %1 %2))) ag env)))
-       (catch java.net.SocketException e (die ag env))
-       (catch java.net.ConnectException e (die ag env))
-       (catch Exception e (fail ag env))))))
+  (let [#^URI link (:link ag)
+        #^File file (:file ag)
+        #^HttpClient client (new HttpClient)
+        #^GetMethod get (GetMethod. (str link))]
+    (when (and link file)
+      (.. client getHttpConnectionManager getParams 
+          (setConnectionTimeout action/*default-connection-timeout*))
+      (.. get getParams (setSoTimeout action/*default-get-request-timeout*))
+		(.setRequestHeader get "Range" (str "bytes=" (file-length file) "-"))
+      (try (.executeMethod client get)
+           (let [content-length (.getResponseContentLength get)]
+             (cond (not content-length)
+                   (do (log/info (str "Невозможно проверить файл перед загрузкой " (ag :name)))
+                       (fail ag env))
+
+                   (not= content-length (- (ag :length) (file-length file)))
+                   (do (log/info (str "Длина получаемого файла не совпадает с ожидаемой " (ag :name)))
+                       (fail ag env))
+
+                   :else
+                   (with-open [#^InputStream input (.getResponseBodyAsStream get)
+                               #^FileOutputStream output (FileOutputStream. file true)]
+                     (log/info (str "Начата загрузка " (ag :name)))
+                     (let [buffer (make-array Byte/TYPE 4096)]
+                       (loop [] (let [size (.read input buffer)]
+                                  (when (pos? size)
+                                    (do (.write output buffer 0 size)
+                                        (recur)))))
+                       (.flush output)
+                       (log/info (str "Закончена загрузка " (ag :name)))
+                       (assoc ag :fail false)))))
+           (catch ConnectTimeoutException e
+             (do (log/info (str "Время ожидания ответа сервера перед загрузкой истекло для " (ag :name)))
+                 (fail ag env)))
+           (catch InterruptedIOException e
+             (do (log/info (str "Прервана загрузка. Время ожидания ответа сервера истекло для " (ag :name)))
+                 (fail ag env)))
+           (catch Exception e 
+             (do (log/info (str "Загрузка не может быть закончена " (ag :name)))
+                 (die ag env)))
+           (finally (.releaseConnection get))))))
