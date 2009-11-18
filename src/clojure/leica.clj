@@ -13,7 +13,8 @@
         [clojure.contrib command-line seq-utils test-is])
   (:require :reload action program
             env.download env.upload
-            datacod.account datacod.action 
+            datacod.account datacod.action
+            progress
             [clojure.contrib.duck-streams :as duck]
             [clojure.contrib.logging :as log])
   (:import (java.io File)
@@ -164,7 +165,8 @@ leica [ключи] -a домен:почтовый@адрес:пароль [фа�
           log-formatter (proxy [Formatter] []
                           (format 
                            [#^LogRecord record]
-                           (str (.format date-formatter (Date. (.getMillis record))) " "
+                           (str "\r" 
+                                (.format date-formatter (Date. (.getMillis record))) " "
                                 (.getMessage record) "\n")))
           log-level (cond quiet? (Level/OFF)
                           debug? (Level/FINE)
@@ -172,7 +174,7 @@ leica [ключи] -a домен:почтовый@адрес:пароль [фа�
       (.setFormatter console-handler log-formatter)
       (.setLevel console-handler log-level)
       (.setLevel root-logger log-level))
-
+    
     (cond account
           (let [[domain login pass] (account-attribs account)
                 acc (datacod.account/datacod-account domain login pass)
@@ -191,12 +193,14 @@ leica [ключи] -a домен:почтовый@адрес:пароль [фа�
           (let [jobs-file (some verified-jobs-file remaining-args)
                 working-path (or (some verified-output-dir remaining-args)
                                  (verified-output-dir (System/getProperty "user.dir")))
-                done-path (verified-output-dir move)]
+                done-path (verified-output-dir move)
+                progress-agent (progress/console-progress-agent)]
             (when (and jobs-file working-path)
               (let [lines (duck/read-lines jobs-file)
                     e (env.download/download-environment
                        {:working-path working-path 
                         :done-path (when (not= working-path done-path) done-path)
+                        :progress-agent progress-agent
                         :termination (fn [env] (System/exit 0))})]
                 (add-agents e (env.download/download-agents lines *download-rules*))
                 (await e)

@@ -4,7 +4,8 @@
 (ns #^{:doc "Базовые действия агентов."
        :author "Роман Захаров"}
   action
-  (:require [clojure.contrib.http.agent :as ha]
+  (:require progress
+            [clojure.contrib.http.agent :as ha]
             [clojure.contrib.duck-streams :as duck]
             [clojure.contrib.logging :as log])
   (:use aux match)
@@ -84,8 +85,11 @@
     (when-let [#^File working-path (env :working-path)]
       (assoc ag :file (new File (join-paths working-path name)) :fail false))))
 
+(def *buffer-size* 4096)
+
 (defn download [ag env]
-  (let [#^URI link (:link ag)
+  (let [progress-agent (:progress-agent env)
+        #^URI link (:link ag)
         #^File file (:file ag)
         #^HttpClient client (new HttpClient)
         #^GetMethod get (GetMethod. (str link))]
@@ -108,12 +112,19 @@
                    (with-open [#^InputStream input (.getResponseBodyAsStream get)
                                #^FileOutputStream output (FileOutputStream. file true)]
                      (log/info (str "Начата загрузка " (ag :name)))
-                     (let [buffer (make-array Byte/TYPE 4096)]
-                       (loop [] (let [size (.read input buffer)]
-                                  (when (pos? size)
-                                    (do (.write output buffer 0 size)
-                                        (recur)))))
+                     (let [buffer (make-array Byte/TYPE *buffer-size*)]
+                       (loop [progress (file-length file)]
+                         (let [size (.read input buffer)]
+                           (when (pos? size)
+                             (do (.write output buffer 0 size)
+                                 (when progress-agent
+                                   (send progress-agent progress/show-progress
+                                         {:tag (:tag ag) :name (:name ag) 
+                                          :progress progress :total (:length ag)
+                                          :time nil}))
+                                 (recur (+ progress size))))))
                        (.flush output)
+                       (send progress-agent progress/hide-progress (:tag ag))
                        (log/info (str "Закончена загрузка " (ag :name)))
                        (assoc ag :fail false)))))
            (catch ConnectTimeoutException e
