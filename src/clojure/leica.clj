@@ -41,48 +41,30 @@ leica [ключи] -a домен:почтовый@адрес:пароль [фа�
        (System/getProperty "os.version") " "
        (System/getProperty "os.arch") ")"))
 
+(def *default-download-rule*
+     {:get-link          action/get-link
+      :get-name          action/get-name
+      :get-tag           action/get-tag
+      :get-file          action/get-file
+      :get-length        action/get-length
+      :move-to-done-path action/move-to-done-path
+      :download          action/download
+      :die               action/die
+      :pass              action/pass})
+
 (def #^{:doc "Таблица действий агентов для скачивания для конкретных адресов.
   Хосты упорядочены от частного к общему."}
      *download-rules*
      [[#"http://dsv.data.cod.ru/\d{6}"
-       {:get-link   datacod.action/get-link-and-name
-        :get-tag    (partial action/get-tag [#"files3?.dsv.data.cod.ru"
-                                         #"files2.dsv.data.cod.ru"])
-        :get-file   action/get-file
-        :get-length action/get-length
-        :move-to-done-path action/move-to-done-path
-        :download   action/download
-        :die        action/die
-        :pass       action/pass}]
+       (merge *default-download-rule*
+              {:get-link   datacod.action/get-link-and-name
+               :get-tag    (action/get-tag [#"files3?.dsv.data.cod.ru"
+                                            #"files2.dsv.data.cod.ru"])})]
       [#"http://[\w\.]*data.cod.ru/\d+"
-       {:get-link   datacod.action/get-link-and-name
-        :get-tag    (partial action/get-tag nil)
-        :get-file   action/get-file
-        :get-length action/get-length
-        :move-to-done-path action/move-to-done-path
-        :download   action/download
-        :die        action/die
-        :pass       action/pass}]
-      [#"http://77.35.112.8[1234]/.+"
-       {:get-link   action/get-link
-        :get-name   action/get-name
-        :get-tag    (partial action/get-tag nil)
-        :get-file   action/get-file
-        :get-length action/get-length
-        :move-to-done-path action/move-to-done-path
-        :download   action/download
-        :die        action/die
-        :pass       action/pass}]
-      [#"http://dsvload.net/ftpupload/.+"
-       {:get-link   action/get-link
-        :get-name   action/get-name
-        :get-tag    (partial action/get-tag nil)
-        :get-file   action/get-file
-        :get-length action/get-length
-        :move-to-done-path action/move-to-done-path
-        :download   action/download
-        :die        action/die
-        :pass       action/pass}]])
+       (merge *default-download-rule*
+              {:get-link   datacod.action/get-link-and-name})]
+      [#"http://77.35.112.8[1234]/.+" *default-download-rule*]
+      [#"http://dsvload.net/ftpupload/.+" *default-download-rule*]])
 
 (defn verified-path [path]
   (cond (string? path)
@@ -193,14 +175,13 @@ leica [ключи] -a домен:почтовый@адрес:пароль [фа�
           (let [jobs-file (some verified-jobs-file remaining-args)
                 working-path (or (some verified-output-dir remaining-args)
                                  (verified-output-dir (System/getProperty "user.dir")))
-                done-path (verified-output-dir move)
-                progress-agent (progress/console-progress-agent)]
+                done-path (verified-output-dir move)]
             (when (and jobs-file working-path)
               (let [lines (duck/read-lines jobs-file)
                     e (env.download/download-environment
                        {:working-path working-path 
                         :done-path (when (not= working-path done-path) done-path)
-                        :progress-agent progress-agent
+                        :progress-agent (progress/console-progress-agent)
                         :termination (fn [env] (System/exit 0))})]
                 (add-agents e (env.download/download-agents lines *download-rules*))
                 (await e)

@@ -49,14 +49,17 @@
         (assoc ag :file moved :fail false)
         (die ag env)))))
 
-(defn get-tag [pattern ag env]
-  (when-let [#^URI link (ag :link)]
-    (when-let [tag (or (if pattern
-                         (some (fn [pat] (if (re-find pat (str link)) (str pat)))
-                               (if (sequential? pattern) pattern [pattern])))
-                       (.getHost link))]
-      (assoc ag :tag tag :fail false))))
- 
+(defn get-tag 
+  ([pattern] (fn [ag env] (get-tag pattern ag env)))
+  ([ag env]  (get-tag nil ag env))
+  ([pattern ag env]
+     (when-let [#^URI link (ag :link)]
+       (when-let [tag (or (if pattern
+                            (some (fn [pat] (if (re-find pat (str link)) (str pat)))
+                                  (if (sequential? pattern) pattern [pattern])))
+                          (.getHost link))]
+         (assoc ag :tag tag :fail false)))))
+
 (defn get-length [ag env]
   (when-let [#^URI link (ag :link)]
     (let [#^HttpClient client (new HttpClient)
@@ -105,7 +108,7 @@
                        (fail ag env))
 
                    (not= content-length (- (ag :length) (file-length file)))
-                   (do (log/info (str "Длина получаемого файла не совпадает с ожидаемой " (ag :name)))
+                   (do (log/info (str "Размер получаемого файла не совпадает с ожидаемым " (ag :name)))
                        (fail ag env))
 
                    :else
@@ -124,16 +127,16 @@
                                           :time nil}))
                                  (recur (+ progress size))))))
                        (.flush output)
-                       (send progress-agent progress/hide-progress (:tag ag))
                        (log/info (str "Закончена загрузка " (ag :name)))
                        (assoc ag :fail false)))))
            (catch ConnectTimeoutException e
-             (do (log/info (str "Время ожидания ответа сервера перед загрузкой истекло для " (ag :name)))
+             (do (log/info (str "Время ожидания соединения с сервером истекло для " (ag :name)))
                  (fail ag env)))
            (catch InterruptedIOException e
-             (do (log/info (str "Прервана загрузка. Время ожидания ответа сервера истекло для " (ag :name)))
+             (do (log/info (str "Время ожидания ответа сервера истекло для " (ag :name)))
                  (fail ag env)))
            (catch Exception e 
              (do (log/info (str "Загрузка не может быть закончена " (ag :name)))
                  (die ag env)))
-           (finally (.releaseConnection get))))))
+           (finally (send progress-agent progress/hide-progress (:tag ag))
+                    (.releaseConnection get))))))
