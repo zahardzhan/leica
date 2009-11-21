@@ -1,7 +1,7 @@
 ;;; -*- mode: clojure; coding: utf-8 -*-
 ;;; authors: Roman Zaharov zahardzhan@gmail.com
 
-(ns #^{:doc "doc"
+(ns #^{:doc "Агент и окружение для закачивания."
        :author "Роман Захаров"}
   env.upload
   (:use env aux match)
@@ -10,9 +10,10 @@
 
 (def *slogan* "uploaded with secret alien technology")
 
-;;;; Агент
-
 (derive ::upload-agent :env/default-agent)
+(derive ::upload-env   :env/default-env)
+
+;;;; Агент
 
 (defn upload-agent 
   "Агент для закачивания.
@@ -40,11 +41,11 @@
   (remove (comp not agent?) (map upload-agent files)))
 
 (defmethod run-agent [::upload-agent :state] [ag-state env]
-  (cond (dead?- ag-state) ag-state
+  (cond (dead? ag-state) ag-state
  
         :else (let [new-state (execute-action ag-state @env)]
-                (cond (dead?- new-state) (done env *agent*)
-                      (fail?- new-state) (done env *agent*)
+                (cond (dead? new-state) (done env *agent*)
+                      (fail? new-state) (done env *agent*)
                       :else (run-agent *agent* env))
                 new-state)))
 
@@ -54,16 +55,16 @@
                                              termination]
                                       :or   {report-file nil
                                              termination empty-fn}}]]
-  (agent {:type :upload :agents '() :account account
+  (agent {:type ::upload-env :agents '() :account account
           :report-file report-file
           :termination termination}))
 
-(defmethod run-env- :upload [env-state]
+(defmethod run-env [::upload-env :state] [env-state]
   (when-let [alive-ag (some #(when (alive? %) %) (:agents env-state))]
     (run-agent alive-ag *agent*))
   env-state)
 
-(defmethod done- :upload [env-state ag]
+(defmethod done [::upload-env :state] [env-state ag]
   (let [alive-unfailed
         (some #(when (and (alive? %) (not (fail? %))) %)
               (:agents env-state))
@@ -76,5 +77,5 @@
           next-alive
           (run-agent next-alive *agent*)
 
-          (termination?- env-state) ((env-state :termination) env-state)))
+          (termination? env-state) ((env-state :termination) env-state)))
   env-state)

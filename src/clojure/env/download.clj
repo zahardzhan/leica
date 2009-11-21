@@ -8,20 +8,13 @@
   (:require :reload program)
   (:import (org.apache.commons.httpclient URI)))
 
-;;;; Агент
-
 (derive ::download-agent :env/default-agent)
+(derive ::download-env   :env/default-env)
+
+;;;; Агент
 
 (defn download-agent 
   "Агент для скачивания.
-
-  :name    имя агента
-  :program слот программы агента, содержит функцию одного аргумента,
-           результата восприятия окружения, и возвращает действие
-  :actions набор функций-действий агента
-  :percept последнее восприятие
-  :action  последнее действие
-  :alive   определяет жив агент или умер
 
   :address адрес задания
   :link    прямая ссылка на файл, который нужно скачать
@@ -44,11 +37,11 @@
 
 (defmethod run-agent [::download-agent :state] [ag-state env]
   (let [tag (:tag ag-state)]
-    (cond (dead?- ag-state) ag-state
+    (cond (dead? ag-state) ag-state
 
           (not tag) (let [new-state (execute-action ag-state @env)]
-                      (cond (dead?- new-state) (done env *agent*)
-                            (fail?- new-state) (run-agent *agent* env)
+                      (cond (dead? new-state) (done env *agent*)
+                            (fail? new-state) (run-agent *agent* env)
                             (:tag new-state) (do (add-tag env (:tag new-state))
                                                  (received-tag env *agent*))
                             :else (run-agent *agent* env))
@@ -58,8 +51,8 @@
 
           :else (let [new-state (with-lock-env-tag env tag
                                   (execute-action ag-state @env))]
-                  (cond (dead?- new-state) (done env *agent*)
-                        (fail?- new-state) (done env *agent*)
+                  (cond (dead? new-state) (done env *agent*)
+                        (fail? new-state) (done env *agent*)
                         :else (run-agent *agent* env))
                   new-state))))
 
@@ -71,17 +64,17 @@
                                        done-path nil
                                        progress-agent nil
                                        termination empty-fn}}]]
-  (agent {:type :download :agents '() :tags {}
+  (agent {:type ::download-env :agents '() :tags {}
           :working-path working-path
           :done-path done-path
           :progress-agent progress-agent
           :termination termination}))
 
-(defmethod run-env- :download [env-state]
+(defmethod run-env [::download-env :state] [env-state]
   (doseq [ag (:agents env-state)] (run-agent ag *agent*))
   env-state)
 
-(defmethod received-tag- :download [env-state ag]
+(defmethod received-tag [::download-env :state] [env-state ag]
   (when-let [next-alive-untagged-agent
              (next-after-when #(and (alive? %) (not (:tag (deref %))))
                               ag (:agents env-state))]
@@ -89,7 +82,7 @@
   (run-agent ag *agent*)
   env-state)
 
-(defmethod done- :download [env-state ag]
+(defmethod done [::download-env :state] [env-state ag]
   (let [alive-unfailed-with-same-tag
         (some #(when (and (= (:tag @ag) (:tag @%)) (alive? %) (not (fail? %))) %)
               (:agents env-state))
@@ -103,5 +96,5 @@
           next-alive-with-same-tag
           (run-agent next-alive-with-same-tag *agent*)
 
-          (termination?- env-state) ((env-state :termination) env-state)))
+          (termination? env-state) ((env-state :termination) env-state)))
   env-state)
