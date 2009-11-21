@@ -188,3 +188,38 @@
 
 ;;               (termination? e)
 ;;               )))))
+(comment 
+(defn make-a [] (agent {:another-a nil}))
+
+(defn bind-a-to-a [a another-a]
+  (assoc a :another-a another-a))
+
+(def a1 (make-a))
+
+(def a2 (make-a))
+
+(send a1 bind-a-to-a a2)
+
+(send a2 bind-a-to-a a1)
+
+;;;;;;;;;;;;;;;;;;;;;
+
+(defn make-b [type x] (agent {:type type :x x}))
+
+(derive ::type-aa ::type-a)
+
+(defmulti plus (fn [b] (cond (agent? b) [(:type @b) :agent]
+                             :else      [(:type b) :state])))
+
+(defmethod plus [::type-a :agent] [b]
+  (send b plus))
+
+(defmethod plus [::type-a :state] [b]
+  (assoc b :x (inc (:x b))))
+
+(plus (make-b ::type-a 1))
+
+
+
+)
+

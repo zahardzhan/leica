@@ -10,6 +10,8 @@
 
 ;;;; Агент
 
+(derive ::download-agent :env/default-agent)
+
 (defn download-agent 
   "Агент для скачивания.
 
@@ -30,7 +32,7 @@
   [line rules]
   (let [[address actions] (match line rules {:action list})]
     (when (and address actions)
-      (agent {:type :download
+      (agent {:type ::download-agent
               :address (URI. address)
               :link nil :name nil :tag nil :file nil :length nil
               :actions actions
@@ -40,7 +42,7 @@
 (defn download-agents [lines rules]
   (remove (comp not agent?) (map #(download-agent % rules) lines)))
 
-(defmethod run-agent- :download [ag-state env]
+(defmethod run-agent [::download-agent :state] [ag-state env]
   (let [tag (:tag ag-state)]
     (cond (dead?- ag-state) ag-state
 

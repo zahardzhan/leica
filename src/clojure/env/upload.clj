@@ -12,6 +12,8 @@
 
 ;;;; Агент
 
+(derive ::upload-agent :env/default-agent)
+
 (defn upload-agent 
   "Агент для закачивания.
 
@@ -23,7 +25,7 @@
   
   [#^File file]
   (when (and (.isFile file) (.canRead file) (> (file-length file) 0))
-    (agent {:type :upload
+    (agent {:type ::upload-agent
             :name (.getName file) :file file :length (file-length file)
             :address nil
             :password nil :description *slogan*
@@ -37,7 +39,7 @@
 (defn upload-agents [files]
   (remove (comp not agent?) (map upload-agent files)))
 
-(defmethod run-agent- :upload [ag-state env]
+(defmethod run-agent [::upload-agent :state] [ag-state env]
   (cond (dead?- ag-state) ag-state
  
         :else (let [new-state (execute-action ag-state @env)]

@@ -19,29 +19,35 @@
 
 (defstruct agent-body :type :name :alive :program :actions :action)
 
-(defn- agent-state-type-dispatch
-  ([ag] (:type ag))
-  ([ag arg] (:type ag)))
+(defn- agent-or-state-dispatch [ag]
+  (cond (agent? ag) [(:type @ag) :agent]
+        :else       [(:type ag)  :state]))
 
-;;;; Интерфейс к состоянию агента
+(defn- type-dispatch
+  ([ag] (agent-or-state-dispatch ag))
+  ([ag args] (agent-or-state-dispatch ag)))
 
-(defmulti run-agent-  agent-state-type-dispatch)
-(defmulti stop-agent- agent-state-type-dispatch)
-(defmulti alive?-     agent-state-type-dispatch)
-(defmulti dead?-      agent-state-type-dispatch)
-(defmulti fail?-      agent-state-type-dispatch)
+;;;; Интерфейс к агенту
 
-(defn run-agent  [ag env] (send-off ag run-agent- env))
-(defn stop-agent [ag env] (send-off ag stop-agent- env))
-(defn alive? [ag] (alive?- (deref ag)))
-(defn dead?  [ag] (dead?- (deref ag)))
-(defn fail?  [ag] (fail?- (deref ag)))
+(defmulti run-agent   type-dispatch)
+(defmulti stop-agent  type-dispatch)
+(defmulti alive?      type-dispatch)
+(defmulti dead?       type-dispatch)
+(defmulti fail?       type-dispatch)
 
-;;;; Реализация ацессоров
+(defmethod run-agent [::default-agent :agent] [ag env] 
+  (send-off ag run-agent env))
 
-(defmethod alive?- :default [ag] (:alive ag))
-(defmethod dead?-  :default [ag] (not (:alive ag)))
-(defmethod fail?-  :default [ag] (:fail ag))
+(defmethod stop-agent [::default-agent :agent] [ag env] 
+  (send-off ag stop-agent env))
+
+(defmethod alive? [::default-agent :agent] [ag] (alive? (deref ag)))
+(defmethod dead?  [::default-agent :agent] [ag] (dead? (deref ag)))
+(defmethod fail?  [::default-agent :agent] [ag] (fail? (deref ag)))
+
+(defmethod alive? [::default-agent :state] [ag] (:alive ag))
+(defmethod dead?  [::default-agent :state] [ag] (not (:alive ag)))
+(defmethod fail?  [::default-agent :state] [ag] (:fail ag))
 
 ;;;; Закрытые мутаторы
 
@@ -55,8 +61,8 @@
             (let [new-state (((ag :actions) action) ag env)]
               (reset! result new-state)
               (log/debug (str (or (ag :name) (ag :address)) " " action " "
-                              (cond (dead?- new-state) "агент умер"
-                                    (fail?- new-state) "агент провалился"
+                              (cond (dead? new-state) "агент умер"
+                                    (fail? new-state) "агент провалился"
                                     :else "успешно"))))))]
     (.start thread)
     (.join thread)
@@ -66,42 +72,52 @@
 
 (defstruct env-body :type :agents :termination)
 
-(defmulti add-agent-    agent-state-type-dispatch)
-(defmulti add-agents-   agent-state-type-dispatch)
-(defmulti add-tag-      agent-state-type-dispatch)
-(defmulti run-env-      agent-state-type-dispatch)
+(defmulti add-agent    type-dispatch)
+(defmulti add-agents   type-dispatch)
+(defmulti add-tag      type-dispatch)
+(defmulti run-env      type-dispatch)
 
-(defmulti received-tag- agent-state-type-dispatch)
-(defmulti done-         agent-state-type-dispatch)
+(defmulti received-tag type-dispatch)
+(defmulti done         type-dispatch)
 
-(defmulti termination?- agent-state-type-dispatch)
+(defmulti termination? type-dispatch)
 
-(defn add-agent    [env ag]  (send env add-agent- ag))
-(defn add-agents   [env ags] (send env add-agents- ags))
-(defn add-tag      [env tag] (send env add-tag- tag))
-(defn run-env      [env]     (send env run-env-))
+(defmulti agents       type-dispatch)
+(defmulti tags         type-dispatch)
 
-(defn received-tag [env ag]  (send env received-tag- ag))
-(defn done         [env ag]  (send env done- ag))
+(defmethod add-agent    [::default-env :agent] [env ag]  (send env add-agent ag))
+(defmethod add-agents   [::default-env :agent] [env ags] (send env add-agents ags))
+(defmethod add-tag      [::default-env :agent] [env tag] (send env add-tag tag))
+(defmethod run-env      [::default-env :agent] [env]     (send env run-env))
 
-(defn agents       [env] (:agents (deref env)))
-(defn tags         [env] (:tags   (deref env)))
-(defn termination? [env] (termination?- (deref env)))
+(defmethod received-tag [::default-env :agent] [env ag]  (send env received-tag ag))
+(defmethod done         [::default-env :agent] [env ag]  (send env done ag))
 
-(defmethod add-agent- :default [env ag]
+(defmethod termination? [::default-env :agent] [env] (termination? (deref env)))
+
+(defmethod agents       [::default-env :agent] [env] (agents (deref env)))
+(defmethod tags         [::default-env :agent] [env] (tags   (deref env)))
+
+(defmethod add-agent [::default-env :state] [env ag]
   (if-not (agent? ag) env
           (assoc env :agents (push (env :agents) ag))))
 
-(defmethod add-agents- :default [env agents]
-  (doseq [ag agents] (send *agent* add-agent- ag))
+(defmethod add-agents [::default-env :state] [env agents]
+  (doseq [ag agents] (send *agent* add-agent ag))
   env)
 
-(defmethod add-tag- :default [env tag]
+(defmethod add-tag [::default-env :state] [env tag]
   (if (or (nil? tag) (contains? (env :tags) tag)) env
       (assoc env :tags (assoc (env :tags) tag (atom false)))))
   
-(defmethod termination?- :default [env]
+(defmethod termination? [::default-env :state] [env]
   (or (empty? (env :agents)) (every? dead? (env :agents))))
+
+(defmethod agents [::default-env :state] [env]
+  (:agents env))
+
+(defmethod tags [::default-env :state] [env]
+  (:tags env))
 
 (defn tag-locked? [env tag]
   (when (contains? (tags env) tag)
