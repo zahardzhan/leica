@@ -51,6 +51,7 @@
    (nil?
     (def e (env.download/download-environment {:working-path (File. "/home/haru/inbox/dsv")}))
     (def a (env.download/download-agent "http://dsv.data.cod.ru/500836" *download-rules*))
+    (add-agent e a)
     (add-agents e [a])
     (run-agent a e)
 
@@ -74,17 +75,19 @@
 
 (comment 
 
-(defn make-e [] (agent {:as '()}))
+(defn make-e [] (agent {:a nil}))
 (defn make-a [] (agent {:e nil}))
 
 (defn bindea [e a]
-  (send a assoc :e (fn [] *agent*)))
+  (send a assoc :e (fn [] e))
+  (send e assoc :a (fn [] a)))
 
 (def e (make-e))
 (def a (make-a))
 
-(send e bindea a)
+(bindea e a)
 e
+a
 ((@a :e))
 )
 

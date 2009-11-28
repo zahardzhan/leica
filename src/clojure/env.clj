@@ -92,7 +92,10 @@
 (defmethod related-env [::default-agent :agent] [ag] (related-env (deref ag)))
 (defmethod related-env [::default-agent :state] [ag] ((:env ag)))
 
-(defmethod add-agent    [::default-env :agent] [env ag]  (send env add-agent ag))
+(defmethod add-agent    [::default-env :agent] [env ag]
+  (send ag assoc :env (fn [] env))
+  (send env add-agent ag))
+
 (defmethod add-agents   [::default-env :agent] [env ags] (send env add-agents ags))
 (defmethod add-tag      [::default-env :agent] [env tag] (send env add-tag tag))
 (defmethod run-env      [::default-env :agent] [env]     (send env run-env))
@@ -107,12 +110,10 @@
 
 (defmethod add-agent [::default-env :state] [env ag]
   (if-not (agent? ag) env
-          (assoc env 
-            :agents (push (env :agents) 
-                          (send ag assoc :env (fn [] *agent*))))))
+          (assoc env :agents (push (env :agents) ag))))
 
 (defmethod add-agents [::default-env :state] [env agents]
-  (doseq [ag agents] (send *agent* add-agent ag))
+  (doseq [ag agents] (add-agent *agent* ag))
   env)
 
 (defmethod add-tag [::default-env :state] [env tag]
