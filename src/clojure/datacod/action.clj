@@ -9,7 +9,7 @@
             [clojure.contrib.http.agent :as ha]
             [clojure.contrib.duck-streams :as duck]
             [clojure.contrib.logging :as log])
-  (:use aux)
+  (:use aux env)
   (:import (java.io File)
            (org.apache.commons.httpclient URI HttpClient HttpStatus)
            (org.apache.commons.httpclient.methods GetMethod PostMethod)
@@ -20,7 +20,7 @@
 
 (in-ns 'datacod.action)
 
-(defn get-link-and-name [ag env]
+(defn get-link-and-name [ag]
   (when-let [#^URI address (ag :address)]
     (let [#^HttpClient client (new HttpClient)
           #^GetMethod get (GetMethod. (str address))]
@@ -31,24 +31,24 @@
                              (duck/slurp* (.getResponseBodyAsStream get)))]
                  (if (and (parsed :name) (parsed :link))
                    (assoc ag :name (parsed :name) :link (parsed :link) :fail false)
-                   (action/die ag env)))
-               ((http-error-status-handler status action/die action/fail) ag env)))
-           (catch java.net.ConnectException e (action/die ag env))
-           (catch Exception e (action/fail ag env))
+                   (action/die ag)))
+               ((http-error-status-handler status action/die action/fail) ag)))
+           (catch java.net.ConnectException e (action/die ag))
+           (catch Exception e (action/fail ag))
            (finally (.releaseConnection get))))))
 
-(defn report [ag env]
+(defn report [ag]
   (action/with-action :report
-    (when-let [#^File report-file (env :report-file)]
+    (when-let [#^File report-file ((deref (related-env ag)) :report-file)]
       (duck/with-out-append-writer report-file
         (print (format-link-for-forum (ag :name) (ag :address)))))
     ag))
 
-(defn upload [ag env]
+(defn upload [ag]
   ;; 14:37:30 I/O exception (java.net.ConnectException) caught when processing request: Connection timed out
   ;; 14:37:30 Retrying request
   (action/with-action :upload
-    (let [domain ((env :account) :domain)
+    (let [domain (((deref (related-env ag)) :account) :domain)
           referer (str "http://" domain "/cabinet/upload/")
           #^HttpClient client (new HttpClient)
           #^PostMethod post (PostMethod. referer)
@@ -59,7 +59,7 @@
                              (StringPart. "agree"  "1")
                              (StringPart. "password" (or (ag :password) ""))
                              (StringPart. "description" (or (ag :description) ""))])]
-      (datacod.account/with-auth client (env :account)
+      (datacod.account/with-auth client ((deref (related-env ag)) :account)
         (.addRequestHeader post "Referer" referer)
         (try (.setRequestEntity
               post (MultipartRequestEntity. parts (.getParams post)))
@@ -69,11 +69,11 @@
                  (do (log/info (str "Закончена загрузка " (ag :name)))
                      (assoc ag :address (str "http://" domain location) :fail false))
                  (do (log/info (str "Загрузка не может быть закончена " (ag :name)))
-                     (action/die ag env)))
+                     (action/die ag)))
                (do (log/info (str "Прервана загрузка " (ag :name)))
-                   (action/fail ag env)))
+                   (action/fail ag)))
              (catch Exception exc
                (do (log/info (str "Прервана загрузка " (ag :name)))
-                   (action/fail ag env)))
+                   (action/fail ag)))
              (finally (.releaseConnection post)))))))
 

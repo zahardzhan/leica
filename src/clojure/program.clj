@@ -5,41 +5,40 @@
        "Программы агентов."
        :author "Роман Захаров"}
   program
-  (:use aux match)
-  (:require env)
+  (:use aux match env)
   (:import (java.io File)))
 
 (defn- out-of-space-on-work-path? [percept]
-  (when-let [#^File working-path ((percept :env) :working-path)]
+  (when-let [#^File working-path ((deref (related-env (percept :self))) :working-path)]
     (when-let [#^File file ((percept :self) :file)]
       (when-let [full-length ((percept :self) :length)]
         (< (.getUsableSpace working-path) (- full-length (file-length file)))))))
 
 (defn- out-of-space-on-done-path? [percept]
-  (when-let [#^File done-path ((percept :env) :done-path)]
+  (when-let [#^File done-path ((deref (related-env (percept :self))) :done-path)]
     (when-let [full-length ((percept :self) :length)]
       (< (.getUsableSpace done-path) full-length))))
 
 (defn- done-path-set? [percept]
-  ((percept :env) :done-path))
+  ((deref (related-env (percept :self))) :done-path))
 
 (defn- fully-loaded? [percept]
   (<= ((percept :self) :length)
       (file-length ((percept :self) :file))))
 
 (defn- already-on-done-path? [percept]
-  (when-let [#^File done-path ((percept :env) :done-path)]
+  (when-let [#^File done-path ((deref (related-env (percept :self))) :done-path)]
     (when-let [#^File file ((percept :self) :file)]
       (.exists (File. done-path (.getName file))))))
 
 (defn reflex-download
   "Простая рефлексная программа агента для скачивания."
   [percept]
-  (letfn [(dead? [percept] (not ((percept :self) :alive)))
+  (letfn [(agent-is-dead? [percept] (not ((percept :self) :alive)))
           (missing [key] (fn [percept] (not ((percept :self) key))))
           (otherwise [_] true)]
     (match percept
-           [[dead?                                :pass]
+           [[agent-is-dead?                       :pass]
             [(missing :address)                   :die]
             [(missing :actions)                   :die]
             [(missing :link)                      :get-link]
@@ -53,5 +52,5 @@
                    (out-of-space-on-done-path? %)) :die]
             [#(and (fully-loaded? %)
                    (done-path-set? %))            :move-to-done-path]                    
-            [fully-loaded?      :die]
-            [otherwise          :download]])))
+            [fully-loaded?                        :die]
+            [otherwise                            :download]])))

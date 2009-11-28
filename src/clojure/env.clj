@@ -17,6 +17,8 @@
   Основное содержание тела агента:
   :type    тип агента (агент для загрузки/скачивания/...)
   :name    имя агента
+  :env     окружение к которому привязан агент, ссылка на окружение находится
+           внутри замыкания во избежание переполнения стэка
   :tag     идентификатор по которому определяются общие с другими агентами ресурсы
   :alive   определяет жив агент или умер
   :program программа агента, содержит функцию одного аргумента,
@@ -54,6 +56,7 @@
 (defmulti alive?      type-dispatch)
 (defmulti dead?       type-dispatch)
 (defmulti fail?       type-dispatch)
+(defmulti related-env type-dispatch)
 
 ;;;; Интерфейс к окружению
 
@@ -72,11 +75,11 @@
 
 ;;;; Реализация
 
-(defmethod run-agent [::default-agent :agent] [ag env] 
-  (send-off ag run-agent env))
+(defmethod run-agent [::default-agent :agent] [ag]
+  (send-off ag run-agent))
 
-(defmethod stop-agent [::default-agent :agent] [ag env] 
-  (send-off ag stop-agent env))
+(defmethod stop-agent [::default-agent :agent] [ag]
+  (send-off ag stop-agent))
 
 (defmethod alive? [::default-agent :agent] [ag] (alive? (deref ag)))
 (defmethod dead?  [::default-agent :agent] [ag] (dead? (deref ag)))
@@ -86,7 +89,13 @@
 (defmethod dead?  [::default-agent :state] [ag] (not (:alive ag)))
 (defmethod fail?  [::default-agent :state] [ag] (:fail ag))
 
-(defmethod add-agent    [::default-env :agent] [env ag]  (send env add-agent ag))
+(defmethod related-env [::default-agent :agent] [ag] (related-env (deref ag)))
+(defmethod related-env [::default-agent :state] [ag] ((:env ag)))
+
+(defmethod add-agent    [::default-env :agent] [env ag]
+  (send ag assoc :env (fn [] env))
+  (send env add-agent ag))
+
 (defmethod add-agents   [::default-env :agent] [env ags] (send env add-agents ags))
 (defmethod add-tag      [::default-env :agent] [env tag] (send env add-tag tag))
 (defmethod run-env      [::default-env :agent] [env]     (send env run-env))
@@ -104,7 +113,7 @@
           (assoc env :agents (push (env :agents) ag))))
 
 (defmethod add-agents [::default-env :state] [env agents]
-  (doseq [ag agents] (send *agent* add-agent ag))
+  (doseq [ag agents] (add-agent *agent* ag))
   env)
 
 (defmethod add-tag [::default-env :state] [env tag]
@@ -141,14 +150,14 @@
          (tag-unlock ~env ~tag)
          result#)))
 
-(defn execute-action [ag env]
+(defn execute-action [ag]
   (let [result (atom nil)
         thread
         (Thread. 
-         #(let [percept {:self ag :env env}
+         #(let [percept {:self ag}
                 action  ((ag :program) percept)]
             (log/debug (str (or (ag :name) (ag :address)) " " action))
-            (let [new-state (((ag :actions) action) ag env)]
+            (let [new-state (((ag :actions) action) ag)]
               (reset! result new-state)
               (log/debug (str (or (ag :name) (ag :address)) " " action " "
                               (cond (dead? new-state) "агент умер"
