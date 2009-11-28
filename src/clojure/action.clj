@@ -136,7 +136,7 @@
              (do (log/info (str "Время ожидания ответа сервера истекло для " (ag :name)))
                  (fail ag)))
            (catch Exception e 
-             (do (log/info (str "Загрузка не может быть закончена " (ag :name)))
-                 (die ag)))
+             (do (log/info (str "Ошибка во время загрузки " (ag :name)))
+                 (fail ag)))
            (finally (send progress-agent progress/hide-progress (:tag ag))
                     (.releaseConnection get))))))
