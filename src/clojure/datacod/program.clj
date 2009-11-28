@@ -4,8 +4,8 @@
 (ns #^{:doc "Программа агента, работающего с data.cod.ru."
        :author "Роман Захаров"}
   datacod.program
-  (:require env datacod.account)
-  (:use aux match)
+  (:require datacod.account)
+  (:use aux match env)
   (:import (org.apache.commons.httpclient HttpClient)))
 
 (defn after
@@ -17,14 +17,15 @@
                (= status :failed) (= ((percept :self) :fail) true))))))
 
 (defn out-of-space [percept] 
-  (let [client (new HttpClient)]
-    (datacod.account/with-auth client ((percept :env) :account)
-      (let [free-space (datacod.account/free-space client ((percept :env) :account))]
+  (let [client (new HttpClient)
+        account ((deref (related-env (percept :self))) :account)]
+    (datacod.account/with-auth client account
+      (let [free-space (datacod.account/free-space client account)]
         (if free-space
           (< free-space ((percept :self) :length))
           true)))))
 
-(defn dead? [percept] (not ((percept :self) :alive)))
+(defn agent-is-dead? [percept] (not ((percept :self) :alive)))
 (defn missing [key] (fn [percept] (not ((percept :self) key))))
 (defn has [key] (fn [percept] ((percept :self) key)))
 (defn otherwise [_] true)
@@ -33,7 +34,7 @@
   "Простая рефлексная программа агента для заливки."
   [percept]
   (match percept
-         [[dead?                       :pass]
+         [[agent-is-dead?              :pass]
           [(missing :actions)          :die]
           [(missing :file)             :die]
           [(missing :name)             :die]

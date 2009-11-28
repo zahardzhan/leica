@@ -21,57 +21,42 @@
 
 (in-ns 'test.main)
 
+(def *default-download-rule*
+     {:get-link          action/get-link
+      :get-name          action/get-name
+      :get-tag           action/get-tag
+      :get-file          action/get-file
+      :get-length        action/get-length
+      :move-to-done-path action/move-to-done-path
+      :download          action/download
+      :die               action/die
+      :pass              action/pass})
+
 (def #^{:doc "Таблица действий агентов для скачивания для конкретных адресов.
   Хосты упорядочены от частного к общему."}
      *download-rules*
      [[#"http://dsv.data.cod.ru/\d{6}"
-       {:get-link   datacod.action/get-link-and-name
-        :get-tag    (partial action/get-tag [#"files3?.dsv.data.cod.ru"
-                                         #"files2.dsv.data.cod.ru"])
-        :get-file   action/get-file
-        :get-length action/get-length
-        :move-to-done-path action/move-to-done-path
-        :download   action/download
-        :die        action/die
-        :pass       action/pass}]
+       (merge *default-download-rule*
+              {:get-link   datacod.action/get-link-and-name
+               :get-tag    (partial action/get-tag [#"files3?.dsv.data.cod.ru"
+                                                    #"files2.dsv.data.cod.ru"])})]
       [#"http://[\w\.]*data.cod.ru/\d+"
-       {:get-link   datacod.action/get-link-and-name
-        :get-tag    (partial action/get-tag nil)
-        :get-file   action/get-file
-        :get-length action/get-length
-        :move-to-done-path action/move-to-done-path
-        :download   action/download
-        :die        action/die
-        :pass       action/pass}]
-      [#"http://77.35.112.8[1234]/.+"
-       {:get-link   action/get-link
-        :get-name   action/get-name
-        :get-tag    (partial action/get-tag nil)
-        :get-file   action/get-file
-        :get-length action/get-length
-        :move-to-done-path action/move-to-done-path
-        :download   action/download
-        :die        action/die
-        :pass       action/pass}]
-      [#"http://dsvload.net/ftpupload/.+"
-       {:get-link   action/get-link
-        :get-name   action/get-name
-        :get-tag    (partial action/get-tag nil)
-        :get-file   action/get-file
-        :get-length action/get-length
-        :move-to-done-path action/move-to-done-path
-        :download   action/download
-        :die        action/die
-        :pass       action/pass}]])
+       (merge *default-download-rule*
+              {:get-link   datacod.action/get-link-and-name})]
+      [#"http://77.35.112.8[1234]/.+" *default-download-rule*]
+      [#"http://dsvload.net/ftpupload/.+" *default-download-rule*]])
 
 (deftest main-test
   (is 
    (nil?
     (def e (env.download/download-environment {:working-path (File. "/home/haru/inbox/dsv")}))
-    (def a (env.download/download-agent "http://dsv.data.cod.ru/479745" *download-rules*))
+    (def a (env.download/download-agent "http://dsv.data.cod.ru/500836" *download-rules*))
     (add-agents e [a])
     (run-agent a e)
 
+
+    (((deref a) :env))
+    (related-env a)
     (run-env e) e
     
     ((@a :program) {:self @a :env @e})
@@ -87,139 +72,19 @@
 
     )))
 
-;; (deftest upload-test
-;;   (is (nil?
-;;        (do
-;;          (def a (env.upload/upload-agent (File. "/home/haru/inbox/dsv/.jobs")))
-;;          (def e (env.upload/upload-environment
-;;                  (datacod.account/datacod-account "dsv" "zahardzhan@gmail.com" "zscxadw")
-;;                  {:report-file (leica/verified-log-file "/home/haru/share/src/leica/log")}))
-;;          (add-agent e a)
-;;          (await e))
-
-;;        ;;(env/type-dispatch a)
-       
-;;        (run-env e) e
-       
-;;        (run-agent a e) e ((@a :program) {:self @a :env @e})
-;;        (env/dead? a)
-
-;;        (env/dead?- (env/execute-action @a @e))
-
-       
-;;        (run-env e) e
-;;        (termination? e)
-;;        (agent-errors e)
-;;        (clear-agent-errors e)
-
-;;        ((@a :program) {:self @a :env @e})
-       
-;;        (def a1 (execute-action @a @e)) a1
-;;        ((a1 :program) {:self a1 :env @e})
-;;        (def a2 (execute-action a1 @e)) a2
-;;        ((a2 :program) {:self a2 :env @e})
-;;        (def a3 (execute-action a2 @e)) a3
-;;        ((a3 :program) {:self a3 :env @e})
-;;        )))
-
-;;;; TESTS
-
-;; (let [jj {:link (URI. "http://files3.dsv.data.cod.ru/?WyIyMGI4%3D%3D")
-;;           :name "Hayate_the_combat_butler.mkv"
-;;           :address (URI. "http://dsv.data.cod.ru/433148")}
-;;       jk {:link (URI. "http://files4.dsv.data.cod.ru/?WyIyMGI4%3D%3D")
-;;           :name "Hayate_the_combat_butler.mkv"
-;;           :address (URI. "http://dsv.data.cod.ru/433148")}
-;;       j8 {:link (URI. "http://77.35.112.82/upload/Personal_Folders/Peshehod/Chelovek-Slon.mpg")
-;;           :name "Chelovek-Slon.mpg"
-;;           :address (URI. "http://77.35.112.82/upload/Personal_Folders/Peshehod/Chelovek-Slon.mpg")}]
-;;   (deftest test-tag
-;;     (is (= (:tag (leica/job-tag nil jj nil))
-;;            "files3.dsv.data.cod.ru"))
-;;     (is (= (:tag (leica/job-tag #"files3?.dsv.data.cod.ru" jj nil))
-;;            "files3?.dsv.data.cod.ru"))
-;;     (is (= (:tag (leica/job-tag [#"files3?.dsv.data.cod.ru"
-;;                                  #"files2.dsv.data.cod.ru"] jj nil))
-;;            "files3?.dsv.data.cod.ru"))
-;;     (is (= (:tag (job-tag [#"files3?.dsv.data.cod.ru"
-;;                            #"files2.dsv.data.cod.ru"] jk nil))
-;;            "files4.dsv.data.cod.ru"))
-;;     (is (= (:tag (job-tag nil j8 nil))
-;;            "77.35.112.82"))))
-
-;; (deftest test-match
-;;   (is (= (match "http://dsv.data.cod.ru/433148"
-;;                 '((#"http://dsv.data.cod.ru/\d{6}" :MATCH))
-;;                 {:rule-response rest})
-;;          '(:MATCH))))
-
-;; (deftest test-login-and-password
-;;   (is (= ["zahardzhan@gmail.com" "zxcvbn"]
-;;          (login-and-password "zahardzhan@gmail.com:zxcvbn")))
-;;   (is (= ["mail@gmail.com" "password"]
-;;          (login-and-password "mail@gmail.com:password"))))
-
-;; (deftest test-run
-;;   (is (nil?
-;;        (and nil
-;;             (do
-;;               (def e (environment {:working-path (File. "/home/haru/inbox/dsv")}))
-;;               (send e add-agents (download-agents
-;;                                   ["http://dsv.data.cod.ru/458692"
-;;                                    "http://77.35.112.82/upload/Personal_Folders/Peshehod/Chelovek-Slon.mpg"]))
-;;               (await e)
-;;               (send e run-environment))))))
-
-;; (deftest test-upload
-;;   (is (nil?
-;;        (and nil
-;;             (do
-;;               (def e (upload-environment
-;;                       (datacod-account "zahardzhan@gmail.com" "zscxadw")))
-;;               (def b (upload-agent (File. "/home/haru/inbox/issue27-ru.pdf")))
-;;               (def d (upload-agent (File. "/home/haru/inbox/sicp.pdf")))
-;;               (def f (upload-agent (File. "/home/haru/inbox/pcl.pdf")))
-;;               (send e add-agent b)
-;;               (send e add-agent d)
-;;               (send e add-agent f)
-
-;;               ;;(send-off b act e)
-;;               (send e run-environment)
-
-;;               (termination? e)
-;;               )))))
 (comment 
-(defn make-a [] (agent {:another-a nil}))
 
-(defn bind-a-to-a [a another-a]
-  (assoc a :another-a another-a))
+(defn make-e [] (agent {:as '()}))
+(defn make-a [] (agent {:e nil}))
 
-(def a1 (make-a))
+(defn bindea [e a]
+  (send a assoc :e (fn [] *agent*)))
 
-(def a2 (make-a))
+(def e (make-e))
+(def a (make-a))
 
-(send a1 bind-a-to-a a2)
-
-(send a2 bind-a-to-a a1)
-
-;;;;;;;;;;;;;;;;;;;;;
-
-(defn make-b [type x] (agent {:type type :x x}))
-
-(derive ::type-aa ::type-a)
-
-(defmulti plus (fn [b] (cond (agent? b) [(:type @b) :agent]
-                             :else      [(:type b) :state])))
-
-(defmethod plus [::type-a :agent] [b]
-  (send b plus))
-
-(defmethod plus [::type-a :state] [b]
-  (assoc b :x (inc (:x b))))
-
-(plus (make-b ::type-a 1))
-
-
-
+(send e bindea a)
+e
+((@a :e))
 )
 

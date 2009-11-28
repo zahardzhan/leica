@@ -58,8 +58,8 @@ leica [ключи] -a домен:почтовый@адрес:пароль [фа�
      [[#"http://dsv.data.cod.ru/\d{6}"
        (merge *default-download-rule*
               {:get-link   datacod.action/get-link-and-name
-               :get-tag    (action/get-tag [#"files3?.dsv.data.cod.ru"
-                                            #"files2.dsv.data.cod.ru"])})]
+               :get-tag    (partial action/get-tag [#"files3?.dsv.data.cod.ru"
+                                                    #"files2.dsv.data.cod.ru"])})]
       [#"http://[\w\.]*data.cod.ru/\d+"
        (merge *default-download-rule*
               {:get-link   datacod.action/get-link-and-name})]

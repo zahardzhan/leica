@@ -27,6 +27,7 @@
   [#^File file]
   (when (and (.isFile file) (.canRead file) (> (file-length file) 0))
     (agent {:type ::upload-agent
+            :env empty-fn
             :name (.getName file) :file file :length (file-length file)
             :address nil
             :password nil :description *slogan*
@@ -40,14 +41,15 @@
 (defn upload-agents [files]
   (remove (comp not agent?) (map upload-agent files)))
 
-(defmethod run-agent [::upload-agent :state] [ag-state env]
-  (cond (dead? ag-state) ag-state
+(defmethod run-agent [::upload-agent :state] [ag-state]
+  (let [env (related-env ag-state)]
+    (cond (dead? ag-state) ag-state
  
-        :else (let [new-state (execute-action ag-state @env)]
-                (cond (dead? new-state) (done env *agent*)
-                      (fail? new-state) (done env *agent*)
-                      :else (run-agent *agent* env))
-                new-state)))
+          :else (let [new-state (execute-action ag-state)]
+                  (cond (dead? new-state) (done env *agent*)
+                        (fail? new-state) (done env *agent*)
+                        :else (run-agent *agent*))
+                  new-state))))
 
 ;;;; Окружение
 
@@ -61,7 +63,7 @@
 
 (defmethod run-env [::upload-env :state] [env-state]
   (when-let [alive-ag (some #(when (alive? %) %) (:agents env-state))]
-    (run-agent alive-ag *agent*))
+    (run-agent alive-ag))
   env-state)
 
 (defmethod done [::upload-env :state] [env-state ag]
@@ -72,10 +74,10 @@
         (next-after-when #(and (alive? %)) ag (:agents env-state))]
     
     (cond alive-unfailed
-          (run-agent alive-unfailed *agent*)
+          (run-agent alive-unfailed)
 
           next-alive
-          (run-agent next-alive *agent*)
+          (run-agent next-alive)
 
           (termination? env-state) ((env-state :termination) env-state)))
   env-state)

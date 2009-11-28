@@ -27,6 +27,7 @@
     (when (and address actions)
       (agent {:type ::download-agent
               :address (URI. address)
+              :env empty-fn
               :link nil :name nil :tag nil :file nil :length nil
               :actions actions
               :program program/reflex-download
@@ -35,25 +36,26 @@
 (defn download-agents [lines rules]
   (remove (comp not agent?) (map #(download-agent % rules) lines)))
 
-(defmethod run-agent [::download-agent :state] [ag-state env]
-  (let [tag (:tag ag-state)]
+(defmethod run-agent [::download-agent :state] [ag-state]
+  (let [tag (:tag ag-state)
+        env (related-env ag-state)]
     (cond (dead? ag-state) ag-state
 
-          (not tag) (let [new-state (execute-action ag-state @env)]
+          (not tag) (let [new-state (execute-action ag-state)]
                       (cond (dead? new-state) (done env *agent*)
-                            (fail? new-state) (run-agent *agent* env)
+                            (fail? new-state) (run-agent *agent*)
                             (:tag new-state) (do (add-tag env (:tag new-state))
                                                  (received-tag env *agent*))
-                            :else (run-agent *agent* env))
+                            :else (run-agent *agent*))
                       new-state)
 
           (tag-locked? env tag) ag-state
 
           :else (let [new-state (with-lock-env-tag env tag
-                                  (execute-action ag-state @env))]
+                                  (execute-action ag-state))]
                   (cond (dead? new-state) (done env *agent*)
                         (fail? new-state) (done env *agent*)
-                        :else (run-agent *agent* env))
+                        :else (run-agent *agent*))
                   new-state))))
 
 ;;;; Окружение
@@ -71,15 +73,15 @@
           :termination termination}))
 
 (defmethod run-env [::download-env :state] [env-state]
-  (doseq [ag (:agents env-state)] (run-agent ag *agent*))
+  (doseq [ag (:agents env-state)] (run-agent ag))
   env-state)
 
 (defmethod received-tag [::download-env :state] [env-state ag]
   (when-let [next-alive-untagged-agent
              (next-after-when #(and (alive? %) (not (:tag (deref %))))
                               ag (:agents env-state))]
-    (run-agent next-alive-untagged-agent *agent*))
-  (run-agent ag *agent*)
+    (run-agent next-alive-untagged-agent))
+  (run-agent ag)
   env-state)
 
 (defmethod done [::download-env :state] [env-state ag]
@@ -91,10 +93,10 @@
                          ag (:agents env-state))]
     
     (cond alive-unfailed-with-same-tag
-          (run-agent alive-unfailed-with-same-tag *agent*)
+          (run-agent alive-unfailed-with-same-tag)
 
           next-alive-with-same-tag
-          (run-agent next-alive-with-same-tag *agent*)
+          (run-agent next-alive-with-same-tag)
 
           (termination? env-state) ((env-state :termination) env-state)))
   env-state)

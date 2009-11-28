@@ -8,7 +8,7 @@
             [clojure.contrib.http.agent :as ha]
             [clojure.contrib.duck-streams :as duck]
             [clojure.contrib.logging :as log])
-  (:use aux match)
+  (:use aux match env)
   (:import (java.io File FileOutputStream InputStream InterruptedIOException)
            (org.apache.commons.httpclient URI HttpClient HttpStatus ConnectTimeoutException)
            (org.apache.commons.httpclient.methods GetMethod HeadMethod)
@@ -25,34 +25,33 @@
   `(let [action-result# (do ~@body)]
      (assoc action-result# :action ~action-name)))
 
-(defn pass [ag env]
+(defn pass [ag]
   ag)
  
-(defn fail [ag env]
+(defn fail [ag]
   (assoc ag :fail true))
  
-(defn die [ag env]
+(defn die [ag]
   (assoc ag :alive false))
  
-(defn get-link [ag env]
+(defn get-link [ag]
   (when-let [#^URI address (ag :address)]
     (assoc ag :link address :fail false)))
  
-(defn get-name [ag env]
+(defn get-name [ag]
   (when-let [#^URI link (ag :link)]
     (assoc ag :name (second (re-find #"/([^/]+)$" (.getPath link))) :fail false)))
 
-(defn move-to-done-path [ag env]
-  (when-let [#^File done-path (env :done-path)]
+(defn move-to-done-path [ag]
+  (when-let [#^File done-path ((deref (related-env ag)) :done-path)]
     (when-let [#^File file (ag :file)]
       (if-let [#^File moved (move-file file done-path)]
         (assoc ag :file moved :fail false)
-        (die ag env)))))
+        (die ag)))))
 
-(defn get-tag 
-  ([pattern] (fn [ag env] (get-tag pattern ag env)))
-  ([ag env]  (get-tag nil ag env))
-  ([pattern ag env]
+(defn get-tag
+  ([ag] (get-tag nil ag))
+  ([pattern ag]
      (when-let [#^URI link (ag :link)]
        (when-let [tag (or (if pattern
                             (some (fn [pat] (if (re-find pat (str link)) (str pat)))
@@ -60,7 +59,7 @@
                           (.getHost link))]
          (assoc ag :tag tag :fail false)))))
 
-(defn get-length [ag env]
+(defn get-length [ag]
   (when-let [#^URI link (ag :link)]
     (let [#^HttpClient client (new HttpClient)
           #^HeadMethod head (HeadMethod. (str link))]
@@ -74,24 +73,24 @@
              (if (= status HttpStatus/SC_OK)
                (if-let [length (.. head (getResponseHeader "Content-Length") (getValue))]
                  (assoc ag :length (Integer/parseInt length) :fail false)
-                 (die ag env))
-               ((http-error-status-handler status die fail) ag env)))
+                 (die ag))
+               ((http-error-status-handler status die fail) ag)))
            (catch java.io.InterruptedIOException e
              (do (log/info (str "Время ожидания ответа сервера истекло для " (ag :name)))
-                 (fail ag env)))
-           (catch java.net.ConnectException e (die ag env))
-           (catch Exception e (die ag env))
+                 (fail ag)))
+           (catch java.net.ConnectException e (die ag))
+           (catch Exception e (die ag))
            (finally (.releaseConnection head))))))
 
-(defn get-file [ag env]
+(defn get-file [ag]
   (when-let [name (ag :name)]
-    (when-let [#^File working-path (env :working-path)]
+    (when-let [#^File working-path ((deref (related-env ag)) :working-path)]
       (assoc ag :file (new File (join-paths working-path name)) :fail false))))
 
 (def *buffer-size* 4096)
 
-(defn download [ag env]
-  (let [progress-agent (:progress-agent env)
+(defn download [ag]
+  (let [progress-agent (:progress-agent (deref (related-env ag)))
         #^URI link (:link ag)
         #^File file (:file ag)
         #^HttpClient client (new HttpClient)
@@ -105,11 +104,11 @@
            (let [content-length (.getResponseContentLength get)]
              (cond (not content-length)
                    (do (log/info (str "Невозможно проверить файл перед загрузкой " (ag :name)))
-                       (fail ag env))
+                       (fail ag))
 
                    (not= content-length (- (ag :length) (file-length file)))
                    (do (log/info (str "Размер получаемого файла не совпадает с ожидаемым " (ag :name)))
-                       (fail ag env))
+                       (fail ag))
 
                    :else
                    (with-open [#^InputStream input (.getResponseBodyAsStream get)
@@ -131,12 +130,12 @@
                        (assoc ag :fail false)))))
            (catch ConnectTimeoutException e
              (do (log/info (str "Время ожидания соединения с сервером истекло для " (ag :name)))
-                 (fail ag env)))
+                 (fail ag)))
            (catch InterruptedIOException e
              (do (log/info (str "Время ожидания ответа сервера истекло для " (ag :name)))
-                 (fail ag env)))
+                 (fail ag)))
            (catch Exception e 
              (do (log/info (str "Загрузка не может быть закончена " (ag :name)))
-                 (die ag env)))
+                 (die ag)))
            (finally (send progress-agent progress/hide-progress (:tag ag))
                     (.releaseConnection get))))))
