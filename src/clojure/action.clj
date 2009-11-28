@@ -74,7 +74,8 @@
              (if (= status HttpStatus/SC_OK)
                (if-let [length (.. head (getResponseHeader "Content-Length") (getValue))]
                  (assoc ag :length (Integer/parseInt length) :fail false)
-                 (die ag env))
+                 (do (log/info (str "Невозможно узнать размер файла " (ag :name)))
+                     (die ag env)))
                ((http-error-status-handler status die fail) ag env)))
            (catch java.io.InterruptedIOException e
              (do (log/info (str "Время ожидания ответа сервера истекло для " (ag :name)))
