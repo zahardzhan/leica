@@ -8,12 +8,8 @@
   (:require :reload program)
   (:import (org.apache.commons.httpclient URI)))
 
-(in-ns 'env.download)
-
 (derive ::download-agent :env/default-agent)
 (derive ::download-env   :env/default-env)
-
-(derive ::received-tag   :env/default-message)
 
 ;;;; Агент
 
@@ -46,10 +42,10 @@
     (cond (dead? ag-state) ag-state
 
           (not tag) (let [new-state (execute-action ag-state)]
-                      (cond (dead? new-state) (done env *agent* :env/died)
+                      (cond (dead? new-state) (done env *agent*)
                             (fail? new-state) (run-agent *agent*)
                             (:tag new-state) (do (add-tag env (:tag new-state))
-                                                 (done env *agent* ::received-tag))
+                                                 (received-tag env *agent*))
                             :else (run-agent *agent*))
                       new-state)
 
@@ -57,8 +53,8 @@
 
           :else (let [new-state (with-lock-env-tag env tag
                                   (execute-action ag-state))]
-                  (cond (dead? new-state) (done env *agent* :env/died)
-                        (fail? new-state) (done env *agent* :env/failed)
+                  (cond (dead? new-state) (done env *agent*)
+                        (fail? new-state) (done env *agent*)
                         :else (run-agent *agent*))
                   new-state))))
 
@@ -80,7 +76,7 @@
   (doseq [ag (:agents env-state)] (run-agent ag))
   env-state)
 
-(defmethod done [::download-env :state ::received-tag] [env-state ag message]
+(defmethod received-tag [::download-env :state] [env-state ag]
   (when-let [next-alive-untagged-agent
              (next-after-when #(and (alive? %) (not (:tag (deref %))))
                               ag (:agents env-state))]
@@ -88,7 +84,7 @@
   (run-agent ag)
   env-state)
 
-(defmethod done [::download-env :state :env/default-message] [env-state ag message]
+(defmethod done [::download-env :state] [env-state ag]
   (let [alive-unfailed-with-same-tag
         (some #(when (and (= (:tag @ag) (:tag @%)) (alive? %) (not (fail? %))) %)
               (:agents env-state))

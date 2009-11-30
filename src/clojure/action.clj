@@ -63,8 +63,10 @@
   (when-let [#^URI link (ag :link)]
     (let [#^HttpClient client (new HttpClient)
           #^HeadMethod head (HeadMethod. (str link))]
+      ;; Sets the timeout until a connection is etablished.
       (.. client getHttpConnectionManager getParams 
           (setConnectionTimeout *default-connection-timeout*))
+      ;; Sets the default socket timeout which is the timeout for waiting for data.
       (.. head getParams (setSoTimeout *default-head-request-timeout*))
       (try (let [status (.executeMethod client head)]
              (.releaseConnection head)

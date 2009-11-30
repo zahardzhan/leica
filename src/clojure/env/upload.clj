@@ -46,8 +46,8 @@
     (cond (dead? ag-state) ag-state
  
           :else (let [new-state (execute-action ag-state)]
-                  (cond (dead? new-state) (done env *agent* :env/died)
-                        (fail? new-state) (done env *agent* :env/failed)
+                  (cond (dead? new-state) (done env *agent*)
+                        (fail? new-state) (done env *agent*)
                         :else (run-agent *agent*))
                   new-state))))
 
@@ -66,7 +66,7 @@
     (run-agent alive-ag))
   env-state)
 
-(defmethod done [::upload-env :state :env/default-message] [env-state ag message]
+(defmethod done [::upload-env :state] [env-state ag]
   (let [alive-unfailed
         (some #(when (and (alive? %) (not (fail? %))) %)
               (:agents env-state))
