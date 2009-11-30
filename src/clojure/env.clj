@@ -17,61 +17,80 @@
   Основное содержание тела агента:
   :type    тип агента (агент для загрузки/скачивания/...)
   :name    имя агента
+  :alive   определяет жив агент или умер
   :env     окружение к которому привязан агент, ссылка на окружение находится
            внутри замыкания во избежание переполнения стэка
-  :tag     идентификатор по которому определяются общие с другими агентами ресурсы
-  :alive   определяет жив агент или умер
+  :tag     идентификатор по которому определяются общие с другими агентами ресурсы.
+           агент с соответствующим тагом блокирует таг в окружении на время
+           выполнения действия, разрешённого только одному агенту с таким тагом.
   :program программа агента, содержит функцию одного аргумента,
-           результата восприятия окружения, и возвращает действие
-  :actions словарь с действиями агента {:имя-действия функция}
+           результата восприятия окружения, и возвращает действие.
+           восприятие передается в программу как словарь типа
+           {:self собственное-тело-агента, ... еще какие-нибудь данные}
+  :actions словарь с действиями агента
+           {:имя-действия мутатор-тела-агента}
   :action  последнее действие агента
   :percept последнее восприятие агента
   
   Основное содержание тела окружения:
-  :type    тип окружения
+  :type    тип окружения (окружение загружающих/скачивающих/... агентов)
   :agents  список агентов в окружении
   :tags    словарь {tag (atom с условной переменной)} для управления
            взаимно-блокирующими агентами
-  :termination функция (продолжение, continuation), вызываемая 
-           после остановки окружения"
+  :termination продолжение вызываемое после остановки окружения"
        :author "Роман Захаров"}
   env
   (:require [clojure.contrib.logging :as log])
   (:use aux match))
 
-(defn- agent-or-state-dispatch [ag]
-  (cond (agent? ag) [(:type @ag) :agent]
-        :else       [(:type ag)  :state]))
+(in-ns 'env)
 
-(defn- type-dispatch
-  "Мультиметоды агентов диспетчеризуется по типу агента :type,
-  и по ссылке на агент :agent / телу агента :state"
-  ([ag] (agent-or-state-dispatch ag))
-  ([ag args] (agent-or-state-dispatch ag)))
+(letfn [(dispatch [ag] ((if (agent? ag) @ag ag) :type))]
+  (defn- type-dispatch
+    "Диспетчер по типу агента."
+    ([ag] (dispatch ag))
+    ([ag args] (dispatch ag))))
+
+(letfn [(dispatch [ag] (if (agent? ag) :agent :state))]
+  (defn- agent-dispatch
+    "Диспетчер по ссылке на агент (:agent) и по телу агента (:state)."
+    ([ag] (dispatch ag))
+    ([ag args] (dispatch ag))))
+
+(letfn [(dispatch [ag] [(type-dispatch ag) (agent-dispatch ag)])]
+  (defn- type-agent-dispatch
+    "Диспетчер по типу агента, и по ссылке на агент."
+    ([ag] (dispatch ag))
+    ([ag args] (dispatch ag))))
+
+(letfn [(dispatch [ag message] [(type-dispatch ag) (agent-dispatch ag) message])]
+  (defn- type-agent-message-dispatch
+    "Диспетчер по типу агента, ссылке и типу сообщения."
+    ([ag sender message] (dispatch ag message))
+    ([ag sender message args] (dispatch ag message))))
 
 ;;;; Интерфейс к агенту
 
-(defmulti run-agent   type-dispatch)
-(defmulti stop-agent  type-dispatch)
-(defmulti alive?      type-dispatch)
-(defmulti dead?       type-dispatch)
-(defmulti fail?       type-dispatch)
-(defmulti related-env type-dispatch)
+(defmulti run-agent   type-agent-dispatch)
+(defmulti stop-agent  type-agent-dispatch)
+(defmulti alive?      type-agent-dispatch)
+(defmulti dead?       type-agent-dispatch)
+(defmulti fail?       type-agent-dispatch)
+(defmulti related-env type-agent-dispatch)
 
 ;;;; Интерфейс к окружению
 
-(defmulti add-agent    type-dispatch)
-(defmulti add-agents   type-dispatch)
-(defmulti add-tag      type-dispatch)
-(defmulti run-env      type-dispatch)
+(defmulti add-agent    type-agent-dispatch)
+(defmulti add-agents   type-agent-dispatch)
+(defmulti add-tag      type-agent-dispatch)
+(defmulti run-env      type-agent-dispatch)
 
-(defmulti received-tag type-dispatch)
-(defmulti done         type-dispatch)
+(defmulti done         type-agent-message-dispatch)
 
-(defmulti termination? type-dispatch)
+(defmulti termination? type-agent-dispatch)
 
-(defmulti agents       type-dispatch)
-(defmulti tags         type-dispatch)
+(defmulti agents       type-agent-dispatch)
+(defmulti tags         type-agent-dispatch)
 
 ;;;; Реализация
 
@@ -100,8 +119,13 @@
 (defmethod add-tag      [::default-env :agent] [env tag] (send env add-tag tag))
 (defmethod run-env      [::default-env :agent] [env]     (send env run-env))
 
-(defmethod received-tag [::default-env :agent] [env ag]  (send env received-tag ag))
-(defmethod done         [::default-env :agent] [env ag]  (send env done ag))
+(derive ::failed ::default-message)
+(derive ::died   ::default-message)
+
+(defmethod done [::default-env :agent ::default-message] [env ag message]
+  (send env done ag message))
+;;(defmethod done [::default-env :agent ::default-message] [env ag message args]
+;;  (send env done ag message args))
 
 (defmethod termination? [::default-env :agent] [env] (termination? (deref env)))
 
@@ -142,8 +166,6 @@
     (reset! ((tags env) tag) false)))
 
 (defmacro with-lock-env-tag
-  "Блокирока тага в окружении для координирования действий
-  взаимно-блокирующих агентов."
   [env tag & body]
   `(do (tag-lock ~env ~tag)
        (let [result# ~@body]

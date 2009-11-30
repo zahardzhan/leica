@@ -76,7 +76,7 @@
 (comment 
 
 (defn make-e [] (agent {:a nil}))
-(defn make-a [] (agent {:e nil}))
+(defn make-a [] (agent {:type :base :e nil}))
 
 (defn bindea [e a]
   (send a assoc :e (fn [] e))
@@ -89,5 +89,21 @@
 e
 a
 ((@a :e))
+
+(defn type-dispatch [ag]
+  ((if (agent? ag) @ag ag) :type))
+
+(defn agent-dispatch [ag]
+  (if (agent? ag) :agent :state))
+
+(type-dispatch a)
+(type-dispatch @a)
+
+(agent-dispatch a)
+(agent-dispatch @a)
+
+[(type-dispatch a) (agent-dispatch a)]
+
+
 )
 
