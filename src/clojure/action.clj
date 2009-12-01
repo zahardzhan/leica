@@ -21,9 +21,40 @@
 (def *default-get-request-timeout* 60000)
 (def *default-connection-timeout* 50000)
 
+;; (defmacro deftarget [sym doc & forms]
+;;   `(let [[has-run-fn reset-fn once-fn] (runonce (fn [] ~@forms))]
+;;      (def ~(with-meta sym {:has-run-fn has-run-fn
+;;                            :reset-fn reset-fn
+;;                            :doc doc})
+;;           once-fn)))
+
+;; (defmacro deftarget [sym doc & forms]
+;;   (let [has-run-fn (gensym "hr-" ) reset-fn (gensym "rf-" )]
+;;     `(let [[~has-run-fn ~reset-fn once-fn#] (runonce (fn [] ~@forms))]
+;;        (def ~(with-meta
+;;               sym
+;;               {:doc doc :has-run-fn has-run-fn :reset-fn reset-fn})
+;;             once-fn#))))
+
 (defmacro with-action [action-name & body]
   `(let [action-result# (do ~@body)]
      (assoc action-result# :action ~action-name)))
+
+(defn execute-action [ag]
+  (let [result (atom nil)
+        thread
+        (Thread. 
+         #(let [percept {:self ag}
+                action  ((ag :program) percept)]
+            (log/debug (str (or (ag :name) (ag :address)) " " action))
+            (reset! result (((ag :actions) action) ag))
+            (log/debug (str (or (ag :name) (ag :address)) " " action " "
+                            (cond (dead? @result) "агент умер"
+                                  (fail? @result) "агент провалился"
+                                  :else "успешно")))))]
+    (.start thread)
+    (.join thread)
+    @result))
 
 (defn pass [ag]
   ag)

@@ -162,19 +162,3 @@
        (let [result# (do ~@body)]
          (tag-unlock ~env ~tag)
          result#)))
-
-(defn execute-action [ag]
-  (let [result (atom nil)
-        thread
-        (Thread. 
-         #(let [percept {:self ag}
-                action  ((ag :program) percept)]
-            (log/debug (str (or (ag :name) (ag :address)) " " action))
-            (reset! result (((ag :actions) action) ag))
-            (log/debug (str (or (ag :name) (ag :address)) " " action " "
-                            (cond (dead? @result) "агент умер"
-                                  (fail? @result) "агент провалился"
-                                  :else "успешно")))))]
-    (.start thread)
-    (.join thread)
-    @result))

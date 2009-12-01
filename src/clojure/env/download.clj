@@ -5,7 +5,7 @@
        :author "Роман Захаров"}
   env.download
   (:use env aux match)
-  (:require :reload program)
+  (:require :reload action program)
   (:import (org.apache.commons.httpclient URI)))
 
 (derive ::download-agent :env/default-agent)
@@ -41,7 +41,7 @@
         env (related-env ag-state)]
     (cond (dead? ag-state) ag-state
 
-          (not tag) (let [new-state (execute-action ag-state)]
+          (not tag) (let [new-state (action/execute-action ag-state)]
                       (cond (dead? new-state) (done env *agent*)
                             (fail? new-state) (run-agent *agent*)
                             (:tag new-state) (do (add-tag env (:tag new-state))
@@ -52,7 +52,7 @@
           (tag-locked? env tag) ag-state
 
           :else (let [new-state (with-lock-env-tag env tag
-                                  (execute-action ag-state))]
+                                  (action/execute-action ag-state))]
                   (cond (dead? new-state) (done env *agent*)
                         (fail? new-state) (done env *agent*)
                         :else (run-agent *agent*))

@@ -45,7 +45,7 @@
   (let [env (related-env ag-state)]
     (cond (dead? ag-state) ag-state
  
-          :else (let [new-state (execute-action ag-state)]
+          :else (let [new-state (action/execute-action ag-state)]
                   (cond (dead? new-state) (done env *agent*)
                         (fail? new-state) (done env *agent*)
                         :else (run-agent *agent*))
