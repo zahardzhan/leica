@@ -21,33 +21,14 @@
 (def *default-get-request-timeout* 60000)
 (def *default-connection-timeout* 50000)
 
-;; (defmacro deftarget [sym doc & forms]
-;;   `(let [[has-run-fn reset-fn once-fn] (runonce (fn [] ~@forms))]
-;;      (def ~(with-meta sym {:has-run-fn has-run-fn
-;;                            :reset-fn reset-fn
-;;                            :doc doc})
-;;           once-fn)))
-
-;; (defmacro deftarget [sym doc & forms]
-;;   (let [has-run-fn (gensym "hr-" ) reset-fn (gensym "rf-" )]
-;;     `(let [[~has-run-fn ~reset-fn once-fn#] (runonce (fn [] ~@forms))]
-;;        (def ~(with-meta
-;;               sym
-;;               {:doc doc :has-run-fn has-run-fn :reset-fn reset-fn})
-;;             once-fn#))))
-
-(defmacro with-action [action-name & body]
-  `(let [action-result# (do ~@body)]
-     (assoc action-result# :action ~action-name)))
-
-(defn execute-action [ag]
+(defn execute-action [ag percept]
   (let [result (atom nil)
         thread
         (Thread. 
-         #(let [percept {:self ag}
-                action  ((ag :program) percept)]
+         #(let [action ((ag :program) percept)]
             (log/debug (str (or (ag :name) (ag :address)) " " action))
-            (reset! result (((ag :actions) action) ag))
+            (reset! result (assoc (((ag :actions) action) ag)
+                             :action action))
             (log/debug (str (or (ag :name) (ag :address)) " " action " "
                             (cond (dead? @result) "агент умер"
                                   (fail? @result) "агент провалился"
@@ -169,5 +150,6 @@
            (catch Exception e 
              (do (log/info (str "Ошибка во время загрузки " (ag :name)))
                  (fail ag)))
-           (finally (send progress-agent progress/hide-progress (:tag ag))
+           (finally (when progress-agent
+                      (send progress-agent progress/hide-progress (:tag ag)))
                     (.releaseConnection get))))))

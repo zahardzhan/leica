@@ -31,7 +31,7 @@
               :link nil :name nil :tag nil :file nil :length nil
               :actions actions
               :program program/reflex-download
-              :alive true :fail false :percept nil :action nil}))))
+              :alive true :fail false :percept nil :action :create}))))
 
 (defn download-agents [lines rules]
   (remove (comp not agent?) (map #(download-agent % rules) lines)))
@@ -41,7 +41,7 @@
         env (related-env ag-state)]
     (cond (dead? ag-state) ag-state
 
-          (not tag) (let [new-state (action/execute-action ag-state)]
+          (not tag) (let [new-state (action/execute-action ag-state {:self ag-state})]
                       (cond (dead? new-state) (done env *agent*)
                             (fail? new-state) (run-agent *agent*)
                             (:tag new-state) (do (add-tag env (:tag new-state))
@@ -52,7 +52,7 @@
           (tag-locked? env tag) ag-state
 
           :else (let [new-state (with-lock-env-tag env tag
-                                  (action/execute-action ag-state))]
+                                  (action/execute-action ag-state {:self ag-state}))]
                   (cond (dead? new-state) (done env *agent*)
                         (fail? new-state) (done env *agent*)
                         :else (run-agent *agent*))

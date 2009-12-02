@@ -36,7 +36,7 @@
                       :pass   action/pass
                       :die    action/die}
             :program datacod.program/reflex-upload
-            :alive true :fail false :percept nil :action :creation})))
+            :alive true :fail false :percept nil :action :create})))
 
 (defn upload-agents [files]
   (remove (comp not agent?) (map upload-agent files)))
@@ -45,7 +45,7 @@
   (let [env (related-env ag-state)]
     (cond (dead? ag-state) ag-state
  
-          :else (let [new-state (action/execute-action ag-state)]
+          :else (let [new-state (action/execute-action ag-state {:self ag-state})]
                   (cond (dead? new-state) (done env *agent*)
                         (fail? new-state) (done env *agent*)
                         :else (run-agent *agent*))

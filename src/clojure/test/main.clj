@@ -47,31 +47,27 @@
       [#"http://dsvload.net/ftpupload/.+" *default-download-rule*]])
 
 (deftest main-test
-  (is 
-   (nil?
-    (def e (env.download/download-environment {:working-path (File. "/home/haru/inbox/dsv")}))
-    (def a (env.download/download-agent "http://dsv.data.cod.ru/500836" *download-rules*))
-    (add-agent e a)
-    (add-agents e [a])
-    (run-agent a e)
+  (def e (env.download/download-environment {:working-path (File. "/home/haru/inbox/dsv")}))
+  (def a (env.download/download-agent "http://dsv.data.cod.ru/507882" *download-rules*))
+  (add-agent e a)
+  (run-env e)
+  a
+  e
+  (agent-errors e)
+  (agent-errors a)
 
+  ;; ((@a :program) {:self @a :env @e})
+  ;; (((@a :actions) :get-link) @a @e)
+  ;; (def a3 (execute-action (execute-action (execute-action @a @e) @e) @e))
+  ;; ((a3 :program) {:self a3 :env @e})
+  ;; (def a4 (execute-action a3 @e))
+  ;; ((a4 :program) {:self a4 :env @e})
+  ;; (def a5 (execute-action a4 @e))
+  ;; ((a5 :program) {:self a5 :env @e})
+  ;; (def a6 (execute-action a5 @e))
+  ;; ((a6 :program) {:self a6 :env @e})
 
-    (((deref a) :env))
-    (related-env a)
-    (run-env e) e
-    
-    ((@a :program) {:self @a :env @e})
-    (((@a :actions) :get-link) @a @e)
-    (def a3 (execute-action (execute-action (execute-action @a @e) @e) @e))
-    ((a3 :program) {:self a3 :env @e})
-    (def a4 (execute-action a3 @e))
-    ((a4 :program) {:self a4 :env @e})
-    (def a5 (execute-action a4 @e))
-    ((a5 :program) {:self a5 :env @e})
-    (def a6 (execute-action a5 @e))
-    ((a6 :program) {:self a6 :env @e})
-
-    )))
+  )
 
 (comment 
 
