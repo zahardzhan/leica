@@ -46,6 +46,28 @@
       [#"http://77.35.112.8[1234]/.+" *default-download-rule*]
       [#"http://dsvload.net/ftpupload/.+" *default-download-rule*]])
 
+;; (ns clojure.test-clojure.agents
+;;   (:use clojure.test))
+
+;; (deftest handle-all-throwables-during-agent-actions
+;;   ;; Bug fixed in r1198; previously hung Clojure or didn't report agent errors
+;;   ;; after OutOfMemoryError, yet wouldn't execute new actions.
+;;   (let [agt (agent nil)]
+;;     (send agt (fn [state] (throw (Throwable. "just testing Throwables"))))
+;;     (try
+;;      ;; Let the action finish; eat the "agent has errors" error that bubbles up
+;;      (await agt)
+;;      (catch RuntimeException _))
+;;     (is (instance? Throwable (first (agent-errors agt))))
+;;     (is (= 1 (count (agent-errors agt))))
+
+;;     ;; And now send an action that should work
+;;     (clear-agent-errors agt)
+;;     (is (= nil @agt))
+;;     (send agt nil?)
+;;     (await agt)
+;;     (is (true? @agt))))
+
 (deftest main-test
   (def e (env.download/download-environment {:working-path (File. "/home/haru/inbox/dsv")}))
   (def a (env.download/download-agent "http://dsv.data.cod.ru/507882" *download-rules*))
@@ -77,6 +99,8 @@
 (defn bindea [e a]
   (send a assoc :e (fn [] e))
   (send e assoc :a (fn [] a)))
+
+(delay (+ 2 2))
 
 (def e (make-e))
 (def a (make-a))

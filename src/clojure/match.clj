@@ -8,12 +8,15 @@
        :author "Роман Захаров"}
   match)
 
+(in-ns 'match)
+
 (defn default-matcher 
   "Дефолтный сопоставитель с образцом."
   [rule sample]
   (cond (fn? rule) (rule sample)
         (set? rule) (rule sample)
-        (string? rule) (if (= rule sample) rule)
+        (keyword? rule) (when (= rule sample) rule)
+        (string? rule) (when (= rule sample) rule)
         (instance? java.util.regex.Pattern rule) (re-find rule sample)))
 
 (defn match 
@@ -35,3 +38,9 @@
           (when-let [result (matcher (rule-pattern rule) sample)]
             (action result (rule-response rule))))
         rules))
+
+(defn case [sample & rules]
+  (loop [[pattern response & rs] rules]
+    (if (default-matcher pattern sample)
+      response
+      (when rs (recur rs)))))

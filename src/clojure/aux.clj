@@ -25,6 +25,9 @@
   (concat coll (list x)))
 
 (defn next-after-when [pred? x xs]
+  "Для коллекции уникальных элементов xs находит следующий за x
+  элемент, соответствующий предикату pred?. Если после х таких нет,
+  то берется первый соответствующий элемент с начала коллекции."
   (when (some pred? xs)
     (let [[before after] (split-with (partial not= x) xs)]
       (some #(when (pred? %) %) (rest (cycle (concat after before)))))))
