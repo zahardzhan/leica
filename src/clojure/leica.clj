@@ -9,12 +9,9 @@
        :author "Роман Захаров"}
   leica
   (:gen-class)
-  (:use :reload aux match env
+  (:use :reload aux match env rules
         [clojure.contrib command-line seq-utils test-is])
-  (:require :reload action program
-            env.download env.upload
-            datacod.account datacod.action datacod.program
-            progress
+  (:require :reload env.download env.upload datacod.account progress
             [clojure.contrib.duck-streams :as duck]
             [clojure.contrib.logging :as log])
   (:import (java.io File)
@@ -40,46 +37,6 @@ leica [ключи] -a домен:почтовый@адрес:пароль [фа�
        (System/getProperty "os.name") \space
        (System/getProperty "os.version") \space
        (System/getProperty "os.arch") \)))
-
-(def *default-upload-rule*
-     {:program datacod.program/reflex-upload
-      :actions {:upload datacod.action/upload
-                :report datacod.action/report
-                :pass   action/pass
-                :die    action/die}})
-
-(def #^{:doc "Таблица действий агентов для закачивания."}
-     *upload-rules* *default-upload-rule*)
-
-(def *default-download-rule*
-     {:program program/reflex-download
-      :actions {:get-link          action/get-link
-                :get-name          action/get-name
-                :get-tag           action/get-tag
-                :get-file          action/get-file
-                :get-length        action/get-length
-                :move-to-done-path action/move-to-done-path
-                :download          action/download
-                :die               action/die
-                :pass              action/pass}})
-
-(def #^{:doc "Таблица действий агентов для скачивания для конкретных адресов.
-  Хосты упорядочены от частного к общему."}
-     *download-rules*
-     [[#"http://dsv.data.cod.ru/\d{6}"
-       (merge *default-download-rule*
-              {:actions 
-               (merge (:actions *default-download-rule*)
-                      {:get-link   datacod.action/get-link-and-name
-                       :get-tag    (partial action/get-tag [#"files3?.dsv.data.cod.ru"
-                                                            #"files2.dsv.data.cod.ru"])})})]
-      [#"http://[\w\.]*data.cod.ru/\d+"
-       (merge *default-download-rule*
-              {:actions
-               (merge (:actions *default-download-rule*)
-                      {:get-link   datacod.action/get-link-and-name})})]
-      [#"http://77.35.112.8[1234]/.+" *default-download-rule*]
-      [#"http://dsvload.net/ftpupload/.+" *default-download-rule*]])
 
 (defn verified-path [path]
   (cond (string? path)
@@ -183,7 +140,7 @@ leica [ключи] -a домен:почтовый@адрес:пароль [фа�
                             :termination (fn [env]
                                            (print-succesfully-uploaded (env :agents))
                                            (System/exit 0))})]
-                (add-agents e (env.upload/upload-agents files))
+                (add-agents e (env.upload/upload-agents files *upload-rules*))
                 (await e)
                 (run-env e))))
           :else

@@ -27,8 +27,9 @@
         (Thread. 
          #(let [action ((ag :program) percept)]
             (log/debug (str (or (ag :name) (ag :address)) " " action))
-            (reset! result (assoc (((ag :actions) action) ag)
-                             :action action))
+            (reset! result (((ag :actions) action) ag))
+            (when-not (#{:die :fail :pass} action)
+              (reset! result (assoc @result :action action)))
             (log/debug (str (or (ag :name) (ag :address)) " " action " "
                             (cond (dead? @result) "агент умер"
                                   (fail? @result) "агент провалился"
