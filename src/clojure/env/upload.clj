@@ -46,17 +46,20 @@
           :else (let [new-state (action/execute-action ag-state {:self ag-state})]
                   (cond (dead? new-state) (done env *agent*)
                         (fail? new-state) (done env *agent*)
-                        :else (run-agent *agent*))
+                        :else (when-not (debug? *agent*) (run-agent *agent*)))
                   new-state))))
 
 ;;;; Окружение
 
 (defn upload-environment [account & [{:keys [report-file
+                                             debug
                                              termination]
                                       :or   {report-file nil
+                                             debug false
                                              termination empty-fn}}]]
   (agent {:type ::upload-env :agents '() :account account
           :report-file report-file
+          :debug debug
           :termination termination}))
 
 (defmethod run-env [::upload-env :state] [env-state]
