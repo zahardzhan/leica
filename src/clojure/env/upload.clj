@@ -5,8 +5,9 @@
        :author "Роман Захаров"}
   env.upload
   (:use env aux match)
-  (:require :reload action program datacod.action datacod.program)
-  (:import [java.io File]))
+  (:require :reload action datacod.account)
+  (:import (java.io File)
+           (org.apache.commons.httpclient HttpClient)))
 
 (def *slogan* "uploaded with secret alien technology")
 
@@ -24,18 +25,15 @@
   :password пароль на файл
   :description описание файла"
   
-  [#^File file]
+  [#^File file rules]
   (when (and (.isFile file) (.canRead file) (> (file-length file) 0))
     (agent {:type ::upload-agent
             :env empty-fn
             :name (.getName file) :file file :length (file-length file)
             :address nil
             :password nil :description *slogan*
-            :actions {:upload datacod.action/upload
-                      :report datacod.action/report
-                      :pass   action/pass
-                      :die    action/die}
-            :program datacod.program/reflex-upload
+            :actions (:actions rules)
+            :program (:program rules)
             :alive true :fail false :percept nil :action :create})))
 
 (defn upload-agents [files]
@@ -81,3 +79,15 @@
 
           (termination? env-state) ((env-state :termination) env-state)))
   env-state)
+
+(defmulti out-of-space-on-account? type-agent-dispatch)
+
+(defmethod out-of-space-on-account? [::upload-agent :agent] [ag]
+  (out-of-space-on-account? (deref ag)))
+
+(defmethod out-of-space-on-account? [::upload-agent :state] [ag]
+  (let [client (new HttpClient)
+        account ((deref (related-env ag)) :account)]
+    (datacod.account/with-auth client account
+      (let [free-space (datacod.account/free-space client account)]
+        (< free-space (ag :length))))))

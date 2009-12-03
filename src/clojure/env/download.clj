@@ -5,8 +5,9 @@
        :author "Роман Захаров"}
   env.download
   (:use env aux match)
-  (:require :reload action program)
-  (:import (org.apache.commons.httpclient URI)))
+  (:require :reload action)
+  (:import (java.io File)
+           (org.apache.commons.httpclient URI)))
 
 (derive ::download-agent :env/default-agent)
 (derive ::download-env   :env/default-env)
@@ -23,14 +24,15 @@
   :length  размер файла, что нужно скачать"
   
   [line rules]
-  (let [[address actions] (match line rules {:action list})]
+  (let [[address {actions :actions program :program}]
+        (match line rules {:action list})]
     (when (and address actions)
       (agent {:type ::download-agent
               :address (URI. address)
               :env empty-fn
               :link nil :name nil :tag nil :file nil :length nil
               :actions actions
-              :program program/reflex-download
+              :program program
               :alive true :fail false :percept nil :action :create}))))
 
 (defn download-agents [lines rules]
@@ -100,3 +102,46 @@
 
           (termination? env-state) ((env-state :termination) env-state)))
   env-state)
+
+(defmulti out-of-space-on-work-path? type-agent-dispatch)
+(defmulti out-of-space-on-done-path? type-agent-dispatch)
+(defmulti done-path-set?             type-agent-dispatch)
+(defmulti fully-loaded?              type-agent-dispatch)
+(defmulti already-on-done-path?      type-agent-dispatch)
+
+(defmethod out-of-space-on-work-path? [::download-agent :agent] [ag]
+  (out-of-space-on-work-path? (deref ag)))
+
+(defmethod out-of-space-on-work-path? [::download-agent :state] [ag]
+  (when-let [#^File working-path ((deref (related-env ag)) :working-path)]
+    (when-let [#^File file (ag :file)]
+      (when-let [full-length (ag :length)]
+        (< (.getUsableSpace working-path) (- full-length (file-length file)))))))
+
+(defmethod out-of-space-on-done-path? [::download-agent :agent] [ag]
+  (out-of-space-on-done-path? (deref ag)))
+
+(defmethod out-of-space-on-done-path? [::download-agent :state] [ag]
+  (when-let [#^File done-path ((deref (related-env ag)) :done-path)]
+    (when-let [full-length (ag :length)]
+      (< (.getUsableSpace done-path) full-length))))
+
+(defmethod fully-loaded? [::download-agent :agent] [ag]
+  (fully-loaded? (deref ag)))
+
+(defmethod fully-loaded? [::download-agent :state] [ag]
+  (<= (ag :length) (file-length (ag :file))))
+
+(defmethod already-on-done-path? [::download-agent :agent] [ag]
+  (already-on-done-path? (deref ag)))
+
+(defmethod already-on-done-path? [::download-agent :state] [ag]
+  (when-let [#^File done-path ((deref (related-env ag)) :done-path)]
+    (when-let [#^File file (ag :file)]
+      (.exists (File. done-path (.getName file))))))
+
+(defmethod done-path-set? [::download-agent :agent] [env]
+  (done-path-set? (deref env)))
+
+(defmethod done-path-set? [::download-agent :state] [env]
+  (:done-path env))

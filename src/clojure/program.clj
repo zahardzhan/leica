@@ -6,51 +6,35 @@
        :author "Роман Захаров"}
   program
   (:use aux match env)
-  (:import (java.io File)))
+  (:require action env.download))
 
-(defn- out-of-space-on-work-path? [percept]
-  (when-let [#^File working-path ((deref (related-env (percept :self))) :working-path)]
-    (when-let [#^File file ((percept :self) :file)]
-      (when-let [full-length ((percept :self) :length)]
-        (< (.getUsableSpace working-path) (- full-length (file-length file)))))))
+(defn has [key]
+  (comp key :self))
 
-(defn- out-of-space-on-done-path? [percept]
-  (when-let [#^File done-path ((deref (related-env (percept :self))) :done-path)]
-    (when-let [full-length ((percept :self) :length)]
-      (< (.getUsableSpace done-path) full-length))))
+(defn missing [key]
+  (comp not key :self))
 
-(defn- done-path-set? [percept]
-  ((deref (related-env (percept :self))) :done-path))
-
-(defn- fully-loaded? [percept]
-  (<= ((percept :self) :length)
-      (file-length ((percept :self) :file))))
-
-(defn- already-on-done-path? [percept]
-  (when-let [#^File done-path ((deref (related-env (percept :self))) :done-path)]
-    (when-let [#^File file ((percept :self) :file)]
-      (.exists (File. done-path (.getName file))))))
+(def otherwise (constantly true))
 
 (defn reflex-download
   "Простая рефлексная программа агента для скачивания."
   [percept]
-  (letfn [(agent-is-dead? [percept] (not ((percept :self) :alive)))
-          (missing [key] (fn [percept] (not ((percept :self) key))))
-          (otherwise [_] true)]
-    (match percept
-           [[agent-is-dead?                       :pass]
-            [(missing :address)                   :die]
-            [(missing :actions)                   :die]
-            [(missing :link)                      :get-link]
-            [(missing :tag)                       :get-tag]
-            [(missing :name)                      :get-name]
-            [(missing :file)                      :get-file]
-            [already-on-done-path?                :die]
-            [(missing :length)                    :get-length]
-            [out-of-space-on-work-path?           :die]
-            [#(and (fully-loaded? %)
-                   (out-of-space-on-done-path? %)) :die]
-            [#(and (fully-loaded? %)
-                   (done-path-set? %))            :move-to-done-path]                    
-            [fully-loaded?                        :die]
-            [otherwise                            :download]])))
+  (match percept
+         [[(comp dead? :self) :pass]
+          [(missing :address) :die]
+          [(missing :actions) :die]
+          [(missing :link)    :get-link]
+          [(missing :tag)     :get-tag]
+          [(missing :name)    :get-name]
+          [(missing :file)    :get-file]
+          [(comp env.download/already-on-done-path? :self) :die]
+          [(missing :length)  :get-length]
+          [(comp env.download/out-of-space-on-work-path? :self) :die]
+          [(fn-and
+            (comp env.download/fully-loaded? :self)
+            (comp env.download/out-of-space-on-done-path? :self)) :die]
+          [(fn-and 
+            (comp env.download/fully-loaded? :self)
+            (comp env.download/done-path-set? :self)) :move-to-done-path]
+          [(comp env.download/fully-loaded? :self) :die]
+          [otherwise          :download]]))

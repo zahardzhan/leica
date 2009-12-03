@@ -24,7 +24,6 @@
   (when-let [#^URI address (ag :address)]
     (let [#^HttpClient client (new HttpClient)
           #^GetMethod get (GetMethod. (str address))]
-      ;; Use HttpConnectionParams.setConnectionTimeout(int), HttpConnectionManager.getParams().
       (try (let [status (.executeMethod client get)]
              (if (= status HttpStatus/SC_OK)
                (let [parsed (datacod.account/parse-page
@@ -44,8 +43,6 @@
   ag)
 
 (defn upload [ag]
-  ;; 14:37:30 I/O exception (java.net.ConnectException) caught when processing request: Connection timed out
-  ;; 14:37:30 Retrying request
   (let [domain (((deref (related-env ag)) :account) :domain)
         referer (str "http://" domain "/cabinet/upload/")
         #^HttpClient client (new HttpClient)
