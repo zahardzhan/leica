@@ -37,9 +37,9 @@ leica [ключи] -a домен:почтовый@адрес:пароль [фа�
 
 (defn user-agent [] ;; TODO: Сделать юзер-агента в соответствии со стандартом
   (str "Leica by Zahardzhan & GO1d ("
-       (System/getProperty "os.name") " "
-       (System/getProperty "os.version") " "
-       (System/getProperty "os.arch") ")"))
+       (System/getProperty "os.name") \space
+       (System/getProperty "os.version") \space
+       (System/getProperty "os.arch") \)))
 
 (def *default-upload-rule*
      {:program datacod.program/reflex-upload
@@ -141,7 +141,7 @@ leica [ключи] -a домен:почтовый@адрес:пароль [фа�
 
 (defn print-succesfully-uploaded [agents]
   (log/info
-   (apply str "Загруженные файлы:\n"
+   (apply str "Загруженные файлы:" \newline
           (seq (map (fn [ag] (when-let [address (@ag :address)]
                                (format-link-for-forum (@ag :name) address)))
                     agents)))))
@@ -162,9 +162,9 @@ leica [ключи] -a домен:почтовый@адрес:пароль [фа�
           log-formatter (proxy [Formatter] []
                           (format 
                            [#^LogRecord record]
-                           (str "\r" 
-                                (.format date-formatter (Date. (.getMillis record))) " "
-                                (.getMessage record) "\n")))
+                           (str \return
+                                (.format date-formatter (Date. (.getMillis record)))
+                                \space (.getMessage record) \newline)))
           log-level (cond quiet? (Level/OFF)
                           debug? (Level/FINE)
                           :else  (Level/INFO))]
@@ -181,8 +181,8 @@ leica [ключи] -a домен:почтовый@адрес:пароль [фа�
               (let [e (env.upload/upload-environment
                        acc {:report-file report-file
                             :termination (fn [env]
-                                           (do (print-succesfully-uploaded (env :agents))
-                                               (System/exit 0)))})]
+                                           (print-succesfully-uploaded (env :agents))
+                                           (System/exit 0))})]
                 (add-agents e (env.upload/upload-agents files))
                 (await e)
                 (run-env e))))
