@@ -15,6 +15,24 @@
   ([x y] nil)
   ([x y & z] nil))
 
+(defn fn-and
+  "Пересечение функций возвращает функцию, эквивалентную
+  (fn [x] (and (f1 x) (f2 x) (f3 x) ...)"
+  [f & fs]
+  (if-not fs
+    f
+    (let [chain (apply fn-and fs)]
+      (fn [x] (and (f x) (chain x))))))
+
+(defn fn-or
+  "Объединение функций, возвращает функцию, эквивалентную
+  (fn [x] (or (f1 x) (f2 x) (f3 x) ...)"
+  [f & fs]
+  (if-not fs
+    f
+    (let [chain (apply fn-or fs)]
+      (fn [x] (or (f x) (chain x))))))
+
 (defn agent? [x]
   (instance? clojure.lang.Agent x))
 

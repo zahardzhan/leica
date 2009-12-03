@@ -21,4 +21,10 @@
        "В рот мне ноги!" "V rot mne nogi!"
        "Twitter в ударе" "Twitter v udare"))
 
-;; (run-tests 'test.aux)
+(deftest fn-test
+  (are [f fs arg result] (= result ((apply f fs) arg))
+       fn-and [pos? even?]  2 true
+       fn-and [pos? even?] -2 false
+
+       fn-or  [pos? even?] -2 true
+       fn-or  [pos? odd?]  -2 false))
