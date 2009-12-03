@@ -22,19 +22,21 @@
 (in-ns 'test.main)
 
 (deftest download-test
-  (let [e (download-environment {:working-path (File. "/home/haru/inbox/dsv")})
+  (let [e (download-environment {:working-path (File. "/home/haru/inbox/dsv")
+                                 :debug true})
         a (download-agent "http://dsv.data.cod.ru/507882" *download-rules*)]
     (add-agent e a)
     (await e)
     
     (println "Тест скачивания файла:")
-    (loop [ag @a]
-      (println "Последнее действие:" \space (ag :action))
-      (let [new-ag (action/execute-action ag {:self ag})]
-        (if (dead? new-ag)
-          (do (is (action/after :successful :download new-ag))
-              (when (.exists (ag :file)) (.delete (ag :file))))
-          (recur new-ag))))))
+    (loop []
+      (println "Последнее действие:" \space (@a :action))
+      (run-agent a)
+      (await a)
+      (if (dead? a)
+        (do (is (action/after :successful :download @a))
+            (when (.exists (@a :file)) (.delete (@a :file))))
+        (recur)))))
 
 (deftest bind-test
   (let [make-e (fn [] (agent {:a nil}))

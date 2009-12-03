@@ -45,10 +45,11 @@
 
           (not tag) (let [new-state (action/execute-action ag-state {:self ag-state})]
                       (cond (dead? new-state) (done env *agent*)
-                            (fail? new-state) (run-agent *agent*)
+                            (fail? new-state) (when-not (debug? *agent*)
+                                                (run-agent *agent*))
                             (:tag new-state) (do (add-tag env (:tag new-state))
                                                  (received-tag env *agent*))
-                            :else (run-agent *agent*))
+                            :else (when-not (debug? *agent*) (run-agent *agent*)))
                       new-state)
 
           (tag-locked? env tag) ag-state
@@ -57,16 +58,17 @@
                                   (action/execute-action ag-state {:self ag-state}))]
                   (cond (dead? new-state) (done env *agent*)
                         (fail? new-state) (done env *agent*)
-                        :else (run-agent *agent*))
+                        :else (when-not (debug? *agent*) (run-agent *agent*)))
                   new-state))))
 
 ;;;; Окружение
 
 (defn download-environment [& [{:keys [working-path done-path progress-agent 
-                                       termination]
+                                       debug termination]
                                 :or   {working-path nil
                                        done-path nil
                                        progress-agent nil
+                                       debug false
                                        termination empty-fn}}]]
   (agent {:type ::download-env :agents '() :tags {}
           :working-path working-path

@@ -37,6 +37,7 @@
   :agents  список агентов в окружении
   :tags    словарь {tag (atom с условной переменной)} для управления
            взаимно-блокирующими агентами
+  :debug   работа окружения в режиме отладки, агенты действуют пошагово
   :termination продолжение вызываемое после остановки окружения"
 
        :author "Роман Захаров"}
@@ -50,19 +51,19 @@
   (defn type-dispatch
     "Диспетчер по типу агента."
     ([ag] (dispatch ag))
-    ([ag args] (dispatch ag))))
+    ([ag & args] (dispatch ag))))
 
 (letfn [(dispatch [ag] (if (agent? ag) :agent :state))]
   (defn agent-dispatch
     "Диспетчер по ссылке на агент (:agent) и по телу агента (:state)."
     ([ag] (dispatch ag))
-    ([ag args] (dispatch ag))))
+    ([ag & args] (dispatch ag))))
 
 (letfn [(dispatch [ag] [(type-dispatch ag) (agent-dispatch ag)])]
   (defn type-agent-dispatch
     "Диспетчер по типу агента, и по ссылке на агент."
     ([ag] (dispatch ag))
-    ([ag args] (dispatch ag))))
+    ([ag & args] (dispatch ag))))
 
 ;;;; Интерфейс к агенту
 
@@ -88,6 +89,8 @@
 (defmulti agents       type-agent-dispatch)
 (defmulti tags         type-agent-dispatch)
 
+(defmulti debug?       type-agent-dispatch)
+
 ;;;; Реализация
 
 (defmethod run-agent [::default-agent :agent] [ag]
@@ -104,8 +107,13 @@
 (defmethod dead?  [::default-agent :state] [ag] (not (:alive ag)))
 (defmethod fail?  [::default-agent :state] [ag] (:fail ag))
 
-(defmethod related-env [::default-agent :agent] [ag] (related-env (deref ag)))
+(defmethod related-env [::default-agent :agent] [ag] ((:env (deref ag))))
 (defmethod related-env [::default-agent :state] [ag] ((:env ag)))
+
+(defmethod debug? [::default-agent :agent] [ag] (:debug (deref (related-env ag))))
+(defmethod debug? [::default-agent :state] [ag] (:debug (deref (related-env ag))))
+(defmethod debug? [::default-env   :agent] [ag] (:debug (deref ag)))
+(defmethod debug? [::default-env   :state] [ag] (:debug ag))
 
 (defmethod add-agent    [::default-env :agent] [env ag]
   (send ag assoc :env (fn [] env))
