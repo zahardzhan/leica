@@ -41,10 +41,10 @@
 (defn after
   ([action ag] (= action (:action ag)))
   ([status action ag] 
-     (when (after action ag)
-       (case status
-             :successful (not (fail? ag))
-             :failed     (fail? ag)))))
+     (and (after action ag)
+          (case status
+                :successful (not (fail? ag))
+                :failed     (fail? ag)))))
 
 (defn pass [ag]
   ag)
