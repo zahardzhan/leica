@@ -38,12 +38,34 @@
             (when (.exists (@a :file)) (.delete (@a :file))))
         (recur)))))
 
+(deftest upload-test
+  (let [account (datacod.account/datacod-account
+                 "dsv" "zahardzhan@gmail.com" "zscxadw")
+        file (File. "/home/haru/inbox/dsv/.jobs")
+        ;; report-file (verified-log-file report)
+        e (upload-environment account
+                              {;:report-file report-file
+                               :debug true})
+        a (upload-agent file *upload-rules*)]
+    (add-agent e a)
+    (await e)
+    
+    (println "Тест закачивания файла:")
+    (loop []
+      (println "Последнее действие:" \space (@a :action))
+      (run-agent a)
+      (await a)
+      (if (dead? a)
+        (is (action/after :report @a))
+        (recur)))))
+
 (deftest bind-test
   (let [make-e (fn [] (agent {:a nil}))
         make-a (fn [] (agent {:e nil}))
         bindea (fn [e a]
                  (send a assoc :e (fn [] e))
-                 (send e assoc :a (fn [] a)))
+                 (send e assoc :a (fn [] a))
+                 (await a e))
         e (make-e)
         a (make-a)]
     

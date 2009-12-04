@@ -43,7 +43,7 @@
         env (related-env ag-state)]
     (cond (dead? ag-state) ag-state
 
-          (not tag) (let [new-state (action/execute-action ag-state {:self ag-state})]
+          (not tag) (let [new-state (action/percept-and-execute ag-state {:self ag-state})]
                       (cond (dead? new-state) (done env *agent*)
                             (fail? new-state) (when-not (debug? *agent*)
                                                 (run-agent *agent*))
@@ -55,7 +55,7 @@
           (tag-locked? env tag) ag-state
 
           :else (let [new-state (with-lock-env-tag env tag
-                                  (action/execute-action ag-state {:self ag-state}))]
+                                  (action/percept-and-execute ag-state {:self ag-state}))]
                   (cond (dead? new-state) (done env *agent*)
                         (fail? new-state) (done env *agent*)
                         :else (when-not (debug? *agent*) (run-agent *agent*)))

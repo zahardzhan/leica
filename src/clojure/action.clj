@@ -10,7 +10,8 @@
             [clojure.contrib.logging :as log])
   (:use aux match env)
   (:import (java.io File FileOutputStream InputStream InterruptedIOException)
-           (org.apache.commons.httpclient URI HttpClient HttpStatus ConnectTimeoutException)
+           (org.apache.commons.httpclient 
+            URI HttpClient HttpStatus ConnectTimeoutException NoHttpResponseException)
            (org.apache.commons.httpclient.methods GetMethod HeadMethod)
            (org.apache.commons.httpclient.params.HttpMethodParams)
            (org.apache.commons.httpclient.util EncodingUtil)))
@@ -21,22 +22,26 @@
 (def *default-get-request-timeout* 60000)
 (def *default-connection-timeout* 50000)
 
-(defn execute-action [ag percept]
+(defn execute-action [ag action]
   (let [result (atom nil)
         thread
         (Thread. 
-         #(let [action ((ag :program) percept)]
-            (log/debug (str (or (ag :name) (ag :address)) " " action))
-            (reset! result (((ag :actions) action) ag))
-            (when-not (#{:die :fail :pass} action)
-              (reset! result (assoc @result :action action)))
-            (log/debug (str (or (ag :name) (ag :address)) " " action " "
-                            (cond (dead? @result) "агент умер"
-                                  (fail? @result) "агент провалился"
-                                  :else "успешно")))))]
+         #(do (log/debug (str (or (ag :name) (ag :address)) \space action))
+              (reset! result (((ag :actions) action) ag))
+              (when-not (#{:die :fail :pass} action)
+                (reset! result (assoc @result :action action)))
+              (log/debug (str (or (ag :name) (ag :address))
+                              \space action \space
+                              (cond (dead? @result) "агент умер"
+                                    (fail? @result) "агент провалился"
+                                    :else "успешно")))))]
     (.start thread)
     (.join thread)
     @result))
+
+(defn percept-and-execute [ag percept]
+  (let [action ((ag :program) percept)]
+    (execute-action ag action)))
 
 (defn after
   ([action ag] (= action (:action ag)))
@@ -84,10 +89,8 @@
   (when-let [#^URI link (ag :link)]
     (let [#^HttpClient client (new HttpClient)
           #^HeadMethod head (HeadMethod. (str link))]
-      ;; Sets the timeout until a connection is etablished.
       (.. client getHttpConnectionManager getParams 
           (setConnectionTimeout *default-connection-timeout*))
-      ;; Sets the default socket timeout which is the timeout for waiting for data.
       (.. head getParams (setSoTimeout *default-head-request-timeout*))
       (try (let [status (.executeMethod client head)]
              (.releaseConnection head)
@@ -121,7 +124,7 @@
       (.. client getHttpConnectionManager getParams 
           (setConnectionTimeout action/*default-connection-timeout*))
       (.. get getParams (setSoTimeout action/*default-get-request-timeout*))
-		(.setRequestHeader get "Range" (str "bytes=" (file-length file) "-"))
+		(.setRequestHeader get "Range" (str "bytes=" (file-length file) \-))
       (try (.executeMethod client get)
            (let [content-length (.getResponseContentLength get)]
              (cond (not content-length)
@@ -155,6 +158,9 @@
                  (fail ag)))
            (catch InterruptedIOException e
              (do (log/info (str "Время ожидания ответа сервера истекло для " (ag :name)))
+                 (fail ag)))
+           (catch NoHttpResponseException e
+             (do (log/info (str "Сервер не отвечает на запрос для " (ag :name)))
                  (fail ag)))
            (catch Exception e 
              (do (log/info (str "Ошибка во время загрузки " (ag :name)))
