@@ -12,6 +12,8 @@
 (derive ::download-agent :env/default-agent)
 (derive ::download-env   :env/default-env)
 
+(def *timeout-after-fail* 3000)
+
 ;;;; Агент
 
 (defn download-agent 
@@ -45,8 +47,9 @@
 
           (not tag) (let [new-state (action/percept-and-execute ag-state {:self ag-state})]
                       (cond (dead? new-state) (done env *agent*)
-                            (fail? new-state) (when-not (debug? *agent*)
-                                                (run-agent *agent*))
+                            (fail? new-state) (do (sleep *agent* *timeout-after-fail*)
+                                                  (when-not (debug? *agent*)
+                                                    (run-agent *agent*)))
                             (:tag new-state) (do (add-tag env (:tag new-state))
                                                  (received-tag env *agent*))
                             :else (when-not (debug? *agent*) (run-agent *agent*)))
@@ -57,7 +60,8 @@
           :else (let [new-state (with-lock-env-tag env tag
                                   (action/percept-and-execute ag-state {:self ag-state}))]
                   (cond (dead? new-state) (done env *agent*)
-                        (fail? new-state) (done env *agent*)
+                        (fail? new-state) (do (sleep *agent* *timeout-after-fail*)
+                                              (done env *agent*))
                         :else (when-not (debug? *agent*) (run-agent *agent*)))
                   new-state))))
 

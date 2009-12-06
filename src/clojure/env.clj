@@ -38,6 +38,7 @@
   :tags    словарь {tag (atom с условной переменной)} для управления
            взаимно-блокирующими агентами
   :debug   работа окружения в режиме отладки, агенты действуют пошагово
+           (функция run-agent не вызывает рекурсивно сама себя)
   :termination продолжение вызываемое после остановки окружения"
 
        :author "Роман Захаров"}
@@ -67,8 +68,11 @@
 
 ;;;; Интерфейс к агенту
 
-(defmulti run-agent   type-agent-dispatch)
+(defmulti run-agent 
+  "Запуск агента на выполнение действий." 
+  type-agent-dispatch)
 (defmulti stop-agent  type-agent-dispatch)
+(defmulti sleep       type-agent-dispatch)
 (defmulti alive?      type-agent-dispatch)
 (defmulti dead?       type-agent-dispatch)
 (defmulti fail?       type-agent-dispatch)
@@ -93,18 +97,19 @@
 
 ;;;; Реализация
 
-(defmethod run-agent [::default-agent :agent] [ag]
-  (send-off ag run-agent))
+(defmethod run-agent  [::default-agent :agent] [ag] (send-off ag run-agent))
+(defmethod stop-agent [::default-agent :agent] [ag] (send-off ag stop-agent))
 
-(defmethod stop-agent [::default-agent :agent] [ag]
-  (send-off ag stop-agent))
+(defmethod sleep      [::default-agent :agent] [ag millis] (send-off ag sleep millis))
+(defmethod sleep      [::default-agent :state] [ag millis] (Thread/sleep millis) ag)
 
 (defmethod alive? [::default-agent :agent] [ag] (alive? (deref ag)))
-(defmethod dead?  [::default-agent :agent] [ag] (dead? (deref ag)))
-(defmethod fail?  [::default-agent :agent] [ag] (fail? (deref ag)))
-
 (defmethod alive? [::default-agent :state] [ag] (:alive ag))
+
+(defmethod dead?  [::default-agent :agent] [ag] (dead? (deref ag)))
 (defmethod dead?  [::default-agent :state] [ag] (not (:alive ag)))
+
+(defmethod fail?  [::default-agent :agent] [ag] (fail? (deref ag)))
 (defmethod fail?  [::default-agent :state] [ag] (:fail ag))
 
 (defmethod related-env [::default-agent :agent] [ag] ((:env (deref ag))))
