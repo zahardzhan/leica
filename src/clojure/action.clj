@@ -100,11 +100,18 @@
                  (do (log/info (str "Невозможно узнать размер файла " (ag :name)))
                      (die ag)))
                ((http-error-status-handler status die fail) ag)))
-           (catch java.io.InterruptedIOException e
+           (catch ConnectTimeoutException e
+             (do (log/info (str "Время ожидания соединения с сервером истекло для " (ag :name)))
+                 (fail ag)))
+           (catch InterruptedIOException e
              (do (log/info (str "Время ожидания ответа сервера истекло для " (ag :name)))
                  (fail ag)))
-           (catch java.net.ConnectException e (die ag))
-           (catch Exception e (die ag))
+           (catch NoHttpResponseException e
+             (do (log/info (str "Сервер не отвечает на запрос для " (ag :name)))
+                 (fail ag)))
+           (catch Exception e 
+             (do (log/info (str "Ошибка во время получения длины файла " (ag :name)))
+                 (fail ag)))
            (finally (.releaseConnection head))))))
 
 (defn get-file [ag]

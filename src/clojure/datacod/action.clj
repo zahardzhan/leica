@@ -30,10 +30,21 @@
                              (duck/slurp* (.getResponseBodyAsStream get)))]
                  (if (and (parsed :name) (parsed :link))
                    (assoc ag :name (parsed :name) :link (parsed :link) :fail false)
-                   (action/die ag)))
+                   (do (log/info (str "Невозможно получить имя файла и ссылку с адреса " address))
+                       (action/die ag))))
                ((http-error-status-handler status action/die action/fail) ag)))
-           (catch java.net.ConnectException e (action/die ag))
-           (catch Exception e (action/fail ag))
+           (catch ConnectTimeoutException e
+             (do (log/info (str "Время ожидания соединения с сервером истекло для " address))
+                 (fail ag)))
+           (catch InterruptedIOException e
+             (do (log/info (str "Время ожидания ответа сервера истекло для " address))
+                 (fail ag)))
+           (catch NoHttpResponseException e
+             (do (log/info (str "Сервер не отвечает на запрос для " address))
+                 (fail ag)))
+           (catch Exception e 
+             (do (log/info (str "Ошибка во время получения имени файла и ссылки с адреса " address))
+                 (fail ag)))
            (finally (.releaseConnection get))))))
 
 (defn report [ag]
@@ -71,4 +82,3 @@
              (do (log/info (str "Прервана загрузка " (ag :name)))
                  (action/fail ag)))
            (finally (.releaseConnection post))))))
-
