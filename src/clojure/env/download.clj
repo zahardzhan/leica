@@ -9,6 +9,8 @@
   (:import (java.io File)
            (org.apache.commons.httpclient URI)))
 
+(in-ns 'env.download)
+
 (derive ::download-agent :env/default-agent)
 (derive ::download-env   :env/default-env)
 
@@ -36,6 +38,10 @@
               :actions actions
               :program program
               :alive true :fail false :percept nil :action :create}))))
+
+(defmethod same? ::download-agent [ag1 ag2]
+  (or (= ag1 ag2)
+      (= (:address @ag1) (:address @ag2))))
 
 (defn download-agents [lines rules]
   (remove (comp not agent?) (map #(download-agent % rules) lines)))

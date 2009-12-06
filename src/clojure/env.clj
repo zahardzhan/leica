@@ -80,6 +80,15 @@
     ([ag] (dispatch ag))
     ([ag & args] (dispatch ag))))
 
+(defn same-type-dispatch
+  "Диспетчер по одинаковому типу двух агентов.
+  Если типы агентов не совпадают - возвращает ::different-types."
+  ([ag1 ag2] (let [type1 (type-dispatch ag1)
+                   type2 (type-dispatch ag2)]
+               (if (= type1 type2)
+                 type1
+                 ::different-types))))
+
 ;;;; Интерфейс к агенту
 
 (defmulti run-agent 
@@ -106,6 +115,9 @@
   "Взаимосвязанное с агентом окружение.
   Возвращает замыкание с агентом-окружением внутри."
   type-agent-dispatch)
+(defmulti same?
+  "Одинаковы ли агенты/окружения?"
+  same-type-dispatch)
 
 ;;;; Интерфейс к окружению
 
@@ -169,13 +181,16 @@
 (defmethod debug? [::default-env   :agent] [ag] (:debug (deref ag)))
 (defmethod debug? [::default-env   :state] [ag] (:debug ag))
 
+(defmethod same? :default [a1 a2] (= a1 a2))
+(defmethod same? ::different-types [a1 a2] false)
+
 (defmethod add-agent [::default-env :agent] [env ag]
-  (send ag assoc :env (fn [] env))
-  (send env add-agent ag))
+  (when-not (some (partial same? ag) (agents env))
+    (send ag assoc :env (fn [] env))
+    (send env add-agent ag)))
 
 (defmethod add-agent [::default-env :state] [env ag]
-  (if-not (agent? ag) env
-          (assoc env :agents (push (env :agents) ag))))
+  (assoc env :agents (push (env :agents) ag)))
 
 (defmethod add-agents [::default-env :agent] [env ags] (send env add-agents ags))
 (defmethod add-agents [::default-env :state] [env agents]

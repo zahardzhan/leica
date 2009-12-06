@@ -1,9 +1,9 @@
 ;;; -*- mode: clojure; coding: utf-8 -*-
 ;;; author: Roman Zaharov <zahardzhan@gmail.com>
 
-(ns #^{:doc "Многопоточная качалка для data.cod.ru и dsvload.net."
+(ns #^{:doc "Тесты окружения."
        :author "Роман Захаров"}
-  test.main
+  test.env
   (:use :reload aux match env env.download env.upload rules)
   (:use clojure.test [clojure.contrib seq-utils])
   (:require :reload action program
@@ -19,7 +19,24 @@
            (org.apache.commons.httpclient.params.HttpMethodParams)
            (org.apache.commons.httpclient.util EncodingUtil)))
 
-(in-ns 'test.main)
+(in-ns 'test.env)
+
+(deftest add-agent-test ;; FAILS!
+  (let [e1 (download-environment {:working-path (File. "/home/haru/inbox/dsv")})
+        e2 (download-environment {:working-path (File. "/home/haru/inbox/dsv")})
+        ags (download-agents ["http://dsv.data.cod.ru/507882"
+                              "http://dsv.data.cod.ru/507882"
+                              "http://dsv.data.cod.ru/507883"]
+                             *download-rules*)]
+    (add-agent e2 (first ags))
+    (add-agent e2 (second ags))
+    (add-agent e2 (first (rest (rest ags)))) 
+    (await e2)
+    (is (= 2 (count (agents e2))))
+
+    (add-agents e1 ags)
+    (await e1)
+    (is (= 2 (count (agents e1))))))
 
 (deftest download-test
   (let [e (download-environment {:working-path (File. "/home/haru/inbox/dsv")
@@ -58,6 +75,11 @@
       (if (dead? a)
         (is (action/after :report @a))
         (recur)))))
+
+(deftest same-type-dispatch-test
+  (are [x y] (= x y)
+       :env/different-types (same-type-dispatch (agent {:type :a}) (agent {:type :b}))
+       :a (same-type-dispatch (agent {:type :a}) (agent {:type :a}))))
 
 (deftest bind-test
   (let [make-e (fn [] (agent {:a nil}))

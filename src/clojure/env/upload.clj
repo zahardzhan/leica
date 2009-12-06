@@ -36,6 +36,10 @@
             :program (:program rules)
             :alive true :fail false :percept nil :action :create})))
 
+(defmethod same? ::upload-agent [ag1 ag2]
+  (or (= ag1 ag2)
+      (= (:file @ag1) (:file @ag2))))
+
 (defn upload-agents [files]
   (remove (comp not agent?) (map upload-agent files)))
 
