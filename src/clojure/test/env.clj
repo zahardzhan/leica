@@ -21,7 +21,7 @@
 
 (in-ns 'test.env)
 
-(deftest add-agent-test ;; FAILS!
+(deftest add-agent-test
   (let [e1 (download-environment {:working-path (File. "/home/haru/inbox/dsv")})
         e2 (download-environment {:working-path (File. "/home/haru/inbox/dsv")})
         ags (download-agents ["http://dsv.data.cod.ru/507882"
@@ -38,7 +38,7 @@
     (await e1)
     (is (= 2 (count (agents e1))))))
 
-(deftest download-test
+(deftest download-test ;; add :done-path test
   (let [e (download-environment {:working-path (File. "/home/haru/inbox/dsv")
                                  :debug true})
         a (download-agent "http://dsv.data.cod.ru/507882" *download-rules*)]

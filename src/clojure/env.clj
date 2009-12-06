@@ -95,26 +95,33 @@
   "Запуск агента на выполнение действий.
   При включенном в окружении дебаге агент выполнит только одно действие."
   type-agent-dispatch)
+
 (defmulti stop-agent
   "Останавливает выполнение действий агентом."
   type-agent-dispatch)
+
 (defmulti sleep
   "Усыпляет агента на некоторое время (в миллисекундах).
   Агент может спать только до/после выполнения действия."
   type-agent-dispatch)
+
 (defmulti alive?
   "Жив ли агент?"
   type-agent-dispatch)
+
 (defmulti dead?
   "Мёртв ли агент?"
   type-agent-dispatch)
+
 (defmulti fail?
   "Агент провалил предыдущее действие?"
   type-agent-dispatch)
+
 (defmulti related-env
   "Взаимосвязанное с агентом окружение.
   Возвращает замыкание с агентом-окружением внутри."
   type-agent-dispatch)
+
 (defmulti same?
   "Одинаковы ли агенты/окружения?"
   same-type-dispatch)
@@ -124,12 +131,15 @@
 (defmulti add-agent
   "Добавить агента в окружение."
   type-agent-dispatch)
+
 (defmulti add-agents
   "Добавить много агентов в окружение."
   type-agent-dispatch)
+
 (defmulti add-tag
   "Добавить таг в окружение."
   type-agent-dispatch)
+
 (defmulti run-env
   "Запустить агентов в окружении."
   type-agent-dispatch)
@@ -137,6 +147,7 @@
 (defmulti received-tag
   "Сообщение от агента о получении тага."
   type-agent-dispatch)
+
 (defmulti done
   "Сообщение от агента о завершении работы агента."
   type-agent-dispatch)
@@ -148,6 +159,7 @@
 (defmulti agents
   "Агенты в окружении."
   type-agent-dispatch)
+
 (defmulti tags
   "Таги в окружении."
   type-agent-dispatch)
@@ -184,17 +196,16 @@
 (defmethod same? :default [a1 a2] (= a1 a2))
 (defmethod same? ::different-types [a1 a2] false)
 
-(defmethod add-agent [::default-env :agent] [env ag]
-  (when-not (some (partial same? ag) (agents env))
-    (send ag assoc :env (fn [] env))
-    (send env add-agent ag)))
+(defmethod add-agent [::default-env :agent] [env ag] (send env add-agent ag env))
+(defmethod add-agent [::default-env :state] [env ag env-ref]
+  (if-not (some (partial same? ag) (:agents env))
+    (do (send ag assoc :env (fn [] env-ref))
+        (assoc env :agents (push (env :agents) ag)))
+    env))
 
-(defmethod add-agent [::default-env :state] [env ag]
-  (assoc env :agents (push (env :agents) ag)))
-
-(defmethod add-agents [::default-env :agent] [env ags] (send env add-agents ags))
-(defmethod add-agents [::default-env :state] [env agents]
-  (doseq [ag agents] (add-agent *agent* ag))
+(defmethod add-agents [::default-env :agent] [env ags] (send env add-agents ags env))
+(defmethod add-agents [::default-env :state] [env agents env-ref]
+  (doseq [ag agents] (add-agent env-ref ag))
   env)
 
 (defmethod add-tag [::default-env :agent] [env tag] (send env add-tag tag))
@@ -214,11 +225,11 @@
 (defmethod termination? [::default-env :state] [env]
   (or (empty? (env :agents)) (every? dead? (env :agents))))
 
-(defmethod agents       [::default-env :agent] [env] (agents (deref env)))
-(defmethod agents       [::default-env :state] [env] (:agents env))
+(defmethod agents [::default-env :agent] [env] (agents (deref env)))
+(defmethod agents [::default-env :state] [env] (:agents env))
 
-(defmethod tags         [::default-env :agent] [env] (tags (deref env)))
-(defmethod tags         [::default-env :state] [env] (:tags env))
+(defmethod tags [::default-env :agent] [env] (tags (deref env)))
+(defmethod tags [::default-env :state] [env] (:tags env))
 
 (defn tag-locked? [env tag]
   (when (contains? (tags env) tag)
