@@ -10,8 +10,9 @@
             [clojure.contrib.duck-streams :as duck]
             [clojure.contrib.logging :as log])
   (:use aux env)
-  (:import (java.io File)
-           (org.apache.commons.httpclient URI HttpClient HttpStatus)
+  (:import (java.io File InterruptedIOException)
+           (org.apache.commons.httpclient 
+            URI HttpClient HttpStatus ConnectTimeoutException NoHttpResponseException)
            (org.apache.commons.httpclient.methods GetMethod PostMethod)
            (org.apache.commons.httpclient.methods.multipart
             FilePart MultipartRequestEntity Part StringPart)
@@ -35,16 +36,16 @@
                ((http-error-status-handler status action/die action/fail) ag)))
            (catch ConnectTimeoutException e
              (do (log/info (str "Время ожидания соединения с сервером истекло для " address))
-                 (fail ag)))
+                 (action/fail ag)))
            (catch InterruptedIOException e
              (do (log/info (str "Время ожидания ответа сервера истекло для " address))
-                 (fail ag)))
+                 (action/fail ag)))
            (catch NoHttpResponseException e
              (do (log/info (str "Сервер не отвечает на запрос для " address))
-                 (fail ag)))
+                 (action/fail ag)))
            (catch Exception e 
              (do (log/info (str "Ошибка во время получения имени файла и ссылки с адреса " address))
-                 (fail ag)))
+                 (action/fail ag)))
            (finally (.releaseConnection get))))))
 
 (defn report [ag]

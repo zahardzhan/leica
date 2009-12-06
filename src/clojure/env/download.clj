@@ -80,10 +80,6 @@
           :progress-agent progress-agent
           :termination termination}))
 
-(defmethod run-env [::download-env :state] [env-state]
-  (doseq [ag (:agents env-state)] (run-agent ag))
-  env-state)
-
 (defmethod received-tag [::download-env :state] [env-state ag]
   (when-let [next-alive-untagged-agent
              (next-after-when #(and (alive? %) (not (:tag (deref %))))

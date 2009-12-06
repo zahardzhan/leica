@@ -9,10 +9,24 @@
   которая выбирает действие, основываясь на состоянии агента и 
   восприятии окружения.
 
-  Окружение содержит в себе агенты и координирует их работу.
+  Окружение координирует работу агентов. Агенты и окружение взаимосвязаны,
+  т.е. ссылаются друг на друга.
 
-  И окружения и агенты являются асинхронными агентами Clojure, 
-  и взаимодействуют друг с другом отправкой сообщений.
+  И окружения и агенты являются агентами Clojure, 
+  и взаимодействуют посредством асинхронной отправки сообщений.
+
+  Управление окружением и агентами осуществляется небольшим набором
+  функций (асинхронных сообщений).
+
+  API агента:
+  run-agent запускает выполнение действий агентом (выполнение некоторых 
+           действий может быть заблокировано другими агентами)
+  stop-agent останавливает выполнение действий агентом. не реализовано
+
+  API окружения:
+  add-agent добавление агента в окружение (скорее, взаимное связывание агента
+           с окружением)
+  run-env  запуск агентов окружения
 
   Основное содержание тела агента:
   :type    тип агента (агент для загрузки/скачивания/...)
@@ -69,31 +83,66 @@
 ;;;; Интерфейс к агенту
 
 (defmulti run-agent 
-  "Запуск агента на выполнение действий." 
+  "Запуск агента на выполнение действий.
+  При включенном в окружении дебаге агент выполнит только одно действие."
   type-agent-dispatch)
-(defmulti stop-agent  type-agent-dispatch)
-(defmulti sleep       type-agent-dispatch)
-(defmulti alive?      type-agent-dispatch)
-(defmulti dead?       type-agent-dispatch)
-(defmulti fail?       type-agent-dispatch)
-(defmulti related-env type-agent-dispatch)
+(defmulti stop-agent
+  "Останавливает выполнение действий агентом."
+  type-agent-dispatch)
+(defmulti sleep
+  "Усыпляет агента на некоторое время (в миллисекундах).
+  Агент может спать только до/после выполнения действия."
+  type-agent-dispatch)
+(defmulti alive?
+  "Жив ли агент?"
+  type-agent-dispatch)
+(defmulti dead?
+  "Мёртв ли агент?"
+  type-agent-dispatch)
+(defmulti fail?
+  "Агент провалил предыдущее действие?"
+  type-agent-dispatch)
+(defmulti related-env
+  "Взаимосвязанное с агентом окружение.
+  Возвращает замыкание с агентом-окружением внутри."
+  type-agent-dispatch)
 
 ;;;; Интерфейс к окружению
 
-(defmulti add-agent    type-agent-dispatch)
-(defmulti add-agents   type-agent-dispatch)
-(defmulti add-tag      type-agent-dispatch)
-(defmulti run-env      type-agent-dispatch)
+(defmulti add-agent
+  "Добавить агента в окружение."
+  type-agent-dispatch)
+(defmulti add-agents
+  "Добавить много агентов в окружение."
+  type-agent-dispatch)
+(defmulti add-tag
+  "Добавить таг в окружение."
+  type-agent-dispatch)
+(defmulti run-env
+  "Запустить агентов в окружении."
+  type-agent-dispatch)
 
-(defmulti received-tag type-agent-dispatch)
-(defmulti done         type-agent-dispatch)
+(defmulti received-tag
+  "Сообщение от агента о получении тага."
+  type-agent-dispatch)
+(defmulti done
+  "Сообщение от агента о завершении работы агента."
+  type-agent-dispatch)
 
-(defmulti termination? type-agent-dispatch)
+(defmulti termination? 
+  "Окружение закончило свою работу?"
+  type-agent-dispatch)
 
-(defmulti agents       type-agent-dispatch)
-(defmulti tags         type-agent-dispatch)
+(defmulti agents
+  "Агенты в окружении."
+  type-agent-dispatch)
+(defmulti tags
+  "Таги в окружении."
+  type-agent-dispatch)
 
-(defmulti debug?       type-agent-dispatch)
+(defmulti debug?
+  "Окружение/агент в режиме дебага?"
+  type-agent-dispatch)
 
 ;;;; Реализация
 
@@ -120,42 +169,41 @@
 (defmethod debug? [::default-env   :agent] [ag] (:debug (deref ag)))
 (defmethod debug? [::default-env   :state] [ag] (:debug ag))
 
-(defmethod add-agent    [::default-env :agent] [env ag]
+(defmethod add-agent [::default-env :agent] [env ag]
   (send ag assoc :env (fn [] env))
   (send env add-agent ag))
-
-(defmethod add-agents   [::default-env :agent] [env ags] (send env add-agents ags))
-(defmethod add-tag      [::default-env :agent] [env tag] (send env add-tag tag))
-(defmethod run-env      [::default-env :agent] [env]     (send env run-env))
-
-(defmethod received-tag [::default-env :agent] [env ag]  (send env received-tag ag))
-(defmethod done         [::default-env :agent] [env ag]  (send env done ag))
-
-(defmethod termination? [::default-env :agent] [env] (termination? (deref env)))
-
-(defmethod agents       [::default-env :agent] [env] (agents (deref env)))
-(defmethod tags         [::default-env :agent] [env] (tags   (deref env)))
 
 (defmethod add-agent [::default-env :state] [env ag]
   (if-not (agent? ag) env
           (assoc env :agents (push (env :agents) ag))))
 
+(defmethod add-agents [::default-env :agent] [env ags] (send env add-agents ags))
 (defmethod add-agents [::default-env :state] [env agents]
   (doseq [ag agents] (add-agent *agent* ag))
   env)
 
+(defmethod add-tag [::default-env :agent] [env tag] (send env add-tag tag))
 (defmethod add-tag [::default-env :state] [env tag]
   (if (or (nil? tag) (contains? (env :tags) tag)) env
       (assoc env :tags (assoc (env :tags) tag (atom false)))))
-  
+
+(defmethod run-env [::default-env :agent] [env] (send env run-env))
+(defmethod run-env [::default-env :state] [env]
+  (doseq [ag (agents env)] (run-agent ag))
+  env)
+
+(defmethod received-tag [::default-env :agent] [env ag] (send env received-tag ag))
+(defmethod done         [::default-env :agent] [env ag] (send env done ag))
+
+(defmethod termination? [::default-env :agent] [env] (termination? (deref env)))
 (defmethod termination? [::default-env :state] [env]
   (or (empty? (env :agents)) (every? dead? (env :agents))))
 
-(defmethod agents [::default-env :state] [env]
-  (:agents env))
+(defmethod agents       [::default-env :agent] [env] (agents (deref env)))
+(defmethod agents       [::default-env :state] [env] (:agents env))
 
-(defmethod tags [::default-env :state] [env]
-  (:tags env))
+(defmethod tags         [::default-env :agent] [env] (tags (deref env)))
+(defmethod tags         [::default-env :state] [env] (:tags env))
 
 (defn tag-locked? [env tag]
   (when (contains? (tags env) tag)
