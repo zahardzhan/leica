@@ -25,6 +25,9 @@
   (when-let [#^URI address (ag :address)]
     (let [#^HttpClient client (new HttpClient)
           #^GetMethod get (GetMethod. (str address))]
+      (.. client getHttpConnectionManager getParams 
+          (setConnectionTimeout action/*default-connection-timeout*))
+      (.. get getParams (setSoTimeout action/*default-get-request-timeout*))
       (try (let [status (.executeMethod client get)]
              (if (= status HttpStatus/SC_OK)
                (let [parsed (datacod.account/parse-page
@@ -32,7 +35,7 @@
                  (if (and (parsed :name) (parsed :link))
                    (assoc ag :name (parsed :name) :link (parsed :link) :fail false)
                    (do (log/info (str "Невозможно получить имя файла и ссылку с адреса " address))
-                       (action/die ag))))
+                       (action/die ag))))               
                ((http-error-status-handler status action/die action/fail) ag)))
            (catch ConnectTimeoutException e
              (do (log/info (str "Время ожидания соединения с сервером истекло для " address))
