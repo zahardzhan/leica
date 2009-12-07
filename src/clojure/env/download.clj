@@ -84,6 +84,7 @@
           :working-path working-path
           :done-path done-path
           :progress-agent progress-agent
+          :debug debug
           :termination termination}))
 
 (defmethod received-tag [::download-env :state] [env-state ag]
@@ -113,7 +114,7 @@
 
 (defmulti out-of-space-on-work-path? type-agent-dispatch)
 (defmulti out-of-space-on-done-path? type-agent-dispatch)
-(defmulti done-path-set?             type-agent-dispatch)
+(defmulti done-path                  type-agent-dispatch)
 (defmulti fully-loaded?              type-agent-dispatch)
 (defmulti already-on-done-path?      type-agent-dispatch)
 
@@ -148,8 +149,7 @@
     (when-let [#^File file (ag :file)]
       (.exists (File. done-path (.getName file))))))
 
-(defmethod done-path-set? [::download-agent :agent] [env]
-  (done-path-set? (deref env)))
-
-(defmethod done-path-set? [::download-agent :state] [env]
-  (:done-path env))
+(defmethod done-path [::download-agent :agent] [ag] (:done-path (deref (related-env ag))))
+(defmethod done-path [::download-agent :state] [ag] (:done-path (deref (related-env ag))))
+(defmethod done-path [::download-env :agent]  [env] (:done-path (deref env)))
+(defmethod done-path [::download-env :state]  [env] (:done-path env))

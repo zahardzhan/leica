@@ -5,8 +5,8 @@
        "Программы агентов."
        :author "Роман Захаров"}
   program
-  (:use aux match env)
-  (:require action env.download))
+  (:use aux match env env.download)
+  (:require action))
 
 (defn has [key]
   (comp key :self))
@@ -27,14 +27,14 @@
           [(missing :tag)     :get-tag]
           [(missing :name)    :get-name]
           [(missing :file)    :get-file]
-          [(comp env.download/already-on-done-path? :self) :die]
+          [(comp already-on-done-path? :self) :die]
           [(missing :length)  :get-length]
-          [(comp env.download/out-of-space-on-work-path? :self) :die]
+          [(comp out-of-space-on-work-path? :self) :die]
           [(fn-and
-            (comp env.download/fully-loaded? :self)
-            (comp env.download/out-of-space-on-done-path? :self)) :die]
+            (comp fully-loaded? :self)
+            (comp out-of-space-on-done-path? :self)) :die]
           [(fn-and 
-            (comp env.download/fully-loaded? :self)
-            (comp env.download/done-path-set? :self)) :move-to-done-path]
-          [(comp env.download/fully-loaded? :self) :die]
+            (comp fully-loaded? :self)
+            (comp done-path :self)) :move-to-done-path]
+          [(comp fully-loaded? :self) :die]
           [otherwise          :download]]))

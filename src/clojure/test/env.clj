@@ -7,41 +7,33 @@
   (:use :reload aux match env env.download env.upload rules)
   (:use clojure.test [clojure.contrib seq-utils])
   (:require :reload action program
-            datacod.account datacod.action datacod.program
-            [clojure.contrib.http.agent :as ha]
-            [clojure.contrib.duck-streams :as duck]
-            [clojure.contrib.logging :as log])
-  (:import (java.io File FileOutputStream InputStream)
-           (java.util Date)
-           (java.util.logging Logger Level Formatter LogRecord StreamHandler)
-           (org.apache.commons.httpclient URI HttpClient HttpStatus)
-           (org.apache.commons.httpclient.methods GetMethod HeadMethod)
-           (org.apache.commons.httpclient.params.HttpMethodParams)
-           (org.apache.commons.httpclient.util EncodingUtil)))
+            datacod.account datacod.action datacod.program)
+  (:import (java.io File)))
 
 (in-ns 'test.env)
 
 (deftest add-agent-test
-  (let [e1 (download-environment {:working-path (File. "/home/haru/inbox/dsv")})
-        e2 (download-environment {:working-path (File. "/home/haru/inbox/dsv")})
-        ags (download-agents ["http://dsv.data.cod.ru/507882"
+  (let [ags (download-agents ["http://dsv.data.cod.ru/507882"
                               "http://dsv.data.cod.ru/507882"
                               "http://dsv.data.cod.ru/507883"]
                              *download-rules*)]
-    (add-agent e2 (first ags))
-    (add-agent e2 (second ags))
-    (add-agent e2 (first (rest (rest ags)))) 
-    (await e2)
-    (is (= 2 (count (agents e2))))
+    (let [e (download-environment {})]
+      (doseq [ag ags] (add-agent e ag))
+      (await e)
+      (is (= 2 (count (agents e))))
+      (is (every? #(= e (related-env %)) (agents e))))
 
-    (add-agents e1 ags)
-    (await e1)
-    (is (= 2 (count (agents e1))))))
+    (let [e (download-environment {})]
+      (add-agents e ags)
+      (await e)
+      (is (= 2 (count (agents e))))
+      (is (every? #(= e (related-env %)) (agents e))))))
 
-(deftest download-test ;; add :done-path test
+(deftest download-test
   (let [e (download-environment {:working-path (File. "/home/haru/inbox/dsv")
+                                 :done-path (File. "/home/haru/inbox/dsv/done")
                                  :debug true})
-        a (download-agent "http://dsv.data.cod.ru/507882" *download-rules*)]
+        a (download-agent "http://dsv.data.cod.ru/519222" *download-rules*)]
     (add-agent e a)
     (await e)
     
@@ -51,7 +43,8 @@
       (run-agent a)
       (await a)
       (if (dead? a)
-        (do (is (action/after :successful :download @a))
+        (do (is (action/after :successful :move-to-done-path @a))
+            (is (.exists (@a :file)))
             (when (.exists (@a :file)) (.delete (@a :file))))
         (recur)))))
 
