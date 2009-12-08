@@ -62,33 +62,6 @@
 
 (in-ns 'env)
 
-(letfn [(dispatch [ag] ((if (agent? ag) @ag ag) :type))]
-  (defn type-dispatch
-    "Диспетчер по типу агента."
-    ([ag] (dispatch ag))
-    ([ag & args] (dispatch ag))))
-
-(letfn [(dispatch [ag] (if (agent? ag) :agent :state))]
-  (defn agent-dispatch
-    "Диспетчер по ссылке на агент (:agent) и по телу агента (:state)."
-    ([ag] (dispatch ag))
-    ([ag & args] (dispatch ag))))
-
-(letfn [(dispatch [ag] [(type-dispatch ag) (agent-dispatch ag)])]
-  (defn type-agent-dispatch
-    "Диспетчер по типу агента, и по ссылке на агент."
-    ([ag] (dispatch ag))
-    ([ag & args] (dispatch ag))))
-
-(defn same-type-dispatch
-  "Диспетчер по одинаковому типу двух агентов.
-  Если типы агентов не совпадают - возвращает ::different-types."
-  ([ag1 ag2] (let [type1 (type-dispatch ag1)
-                   type2 (type-dispatch ag2)]
-               (if (= type1 type2)
-                 type1
-                 ::different-types))))
-
 ;;;; Интерфейс к агенту
 
 (defmulti run-agent 
@@ -194,7 +167,7 @@
 (defmethod debug? [::default-env   :state] [ag] (:debug ag))
 
 (defmethod same? :default [a1 a2] (= a1 a2))
-(defmethod same? ::different-types [a1 a2] false)
+(defmethod same? :different-types [a1 a2] false)
 
 (defmethod add-agent [::default-env :agent] [env ag] (send env add-agent ag env))
 (defmethod add-agent [::default-env :state] [env ag env-ref]
