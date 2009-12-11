@@ -33,7 +33,7 @@
   (let [e (download-environment {:working-path (File. "/home/haru/inbox/dsv")
                                  :done-path (File. "/home/haru/inbox/dsv/done")
                                  :debug true})
-        a (download-agent "http://dsv.data.cod.ru/519222" *download-rules*)]
+        a (download-agent "http://dsv.data.cod.ru/526633" *download-rules*)]
     (add-agent e a)
     (await e)
     
