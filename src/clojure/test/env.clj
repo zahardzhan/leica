@@ -5,7 +5,7 @@
        :author "Роман Захаров"}
   test.env
   (:use :reload aux match env env.download env.upload rules)
-  (:use clojure.test [clojure.contrib seq-utils])
+  (:use clojure.test clojure.set [clojure.contrib seq-utils])
   (:require :reload action program
             datacod.account datacod.action datacod.program)
   (:import (java.io File)))
@@ -78,12 +78,23 @@
   (let [make-e (fn [] (agent {:a nil}))
         make-a (fn [] (agent {:e nil}))
         bindea (fn [e a]
-                 (send a assoc :e (fn [] e))
-                 (send e assoc :a (fn [] a))
+                 (send a assoc :e (delay e))
+                 (send e assoc :a (delay a))
                  (await a e))
         e (make-e)
         a (make-a)]
-    
     (bindea e a)
-    
-    (is (= a (((deref e) :a))))))
+    (is (= a ((comp force :a deref) e))))
+  
+  (let [make-a (fn [] (agent {:env (ref (delay #{}))}))
+        env (comp force deref :env deref)
+        a (make-a)
+        b (make-a)
+        c (make-a)
+        bind (fn [x y] (let [e (union #{x y} (env x) (env y))
+                             ee (delay e)]
+                         (dosync (doseq [a e] (ref-set (@a :env) ee)))
+                         e))]
+    (bind a b)
+    (bind a c)
+    (is (= (env a) #{a b c}))))

@@ -7,6 +7,10 @@
   (:use match [clojure.contrib seq-utils])
   (:import (java.io File)))
 
+;; Задержаные вычисления не печатаются
+(defmethod print-method clojure.lang.Delay [x w]
+  ((get-method print-method Object) x w))
+
 (in-ns 'aux)
 
 (defn empty-fn 
