@@ -98,3 +98,33 @@
     (bind a b)
     (bind a c)
     (is (= (env a) #{a b c}))))
+
+(deftest env-test
+  (let [make-a (fn [adr]
+                 (agent {:type :env/default-agent
+                         :env (ref (delay #{}))
+                         :program 'program
+                         :actions 'actions
+                         :action :create
+                         :alive true
+                         :fail false
+                         :percept nil
+                         :address adr
+                         :tag nil
+                         :working-path 'working-path
+                         :done-path 'done-path
+                         :progress-agent 'progress-agent
+                         :debug false
+                         :termination 'termination}))
+        a (make-a 'a)]
+    (are [x y] (= x y)
+         true  (alive? a)
+         true  (alive? @a)
+         false (dead? a)
+         false (dead? @a)
+         false (debug? a)
+         false (debug? @a)
+         #{}   (env a)
+         #{}   (env @a))))
+
+(env-test)

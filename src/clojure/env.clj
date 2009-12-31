@@ -64,6 +64,10 @@
 
 ;;;; Интерфейс к агенту
 
+(defmulti bind 
+  "Связывание агентов друг с другом."
+  agent-dispatch)
+
 (defmulti run-agent 
   "Запуск агента на выполнение действий.
   При включенном в окружении дебаге агент выполнит только одно действие."
@@ -94,7 +98,7 @@
   "Таг агента."
   type-agent-dispatch)
 
-(defmulti related-env
+(defmulti env
   "Взаимосвязанное с агентом окружение.
   Возвращает замыкание с агентом-окружением внутри."
   type-agent-dispatch)
@@ -148,55 +152,41 @@
 ;;;; Реализация
 
 (defmethod run-agent  [::default-agent :agent] [ag] (send-off ag run-agent))
+
+(defmethod run-env [::default-agent :agent] [ag] (doseq [a (env ag)] (run-agent a)))
+(defmethod run-env [::default-agent :state] [ag] (doseq [a (env ag)] (run-agent a)))
+
 (defmethod stop-agent [::default-agent :agent] [ag] (send-off ag stop-agent))
 
 (defmethod sleep      [::default-agent :agent] [ag millis] (send-off ag sleep millis))
 (defmethod sleep      [::default-agent :state] [ag millis] (Thread/sleep millis) ag)
 
-(defmethod alive? [::default-agent :agent] [ag] (alive? (deref ag)))
+(defmethod alive? [::default-agent :agent] [ag] (:alive @ag))
 (defmethod alive? [::default-agent :state] [ag] (:alive ag))
 
-(defmethod dead?  [::default-agent :agent] [ag] (dead? (deref ag)))
+(defmethod dead?  [::default-agent :agent] [ag] (not (:alive @ag)))
 (defmethod dead?  [::default-agent :state] [ag] (not (:alive ag)))
 
-(defmethod fail?  [::default-agent :agent] [ag] (fail? (deref ag)))
+(defmethod fail?  [::default-agent :agent] [ag] (:fail @ag))
 (defmethod fail?  [::default-agent :state] [ag] (:fail ag))
 
-(defmethod tag    [::default-agent :agent] [ag] (:tag (deref ag)))
+(defmethod tag    [::default-agent :agent] [ag] (:tag @ag))
 (defmethod tag    [::default-agent :state] [ag] (:tag ag))
 
-(defmethod related-env [::default-agent :agent] [ag] ((:env (deref ag))))
-(defmethod related-env [::default-agent :state] [ag] ((:env ag)))
+(defmethod env [::default-agent :agent] [ag] ((comp force deref :env) @ag))
+(defmethod env [::default-agent :state] [ag] ((comp force deref :env) ag))
 
-(defmethod debug? [::default-agent :agent] [ag] (:debug (deref (related-env ag))))
-(defmethod debug? [::default-agent :state] [ag] (:debug (deref (related-env ag))))
-(defmethod debug? [::default-env   :agent] [ag] (:debug (deref ag)))
-(defmethod debug? [::default-env   :state] [ag] (:debug ag))
+(defmethod debug? [::default-agent :agent] [ag] (:debug @ag))
+(defmethod debug? [::default-agent :state] [ag] (:debug ag))
 
 (defmethod same? :default [a1 a2] (= a1 a2))
 (defmethod same? :different-types [a1 a2] false)
 
-(defmethod add-agent [::default-env :agent] [env ag] (send env add-agent ag env))
-(defmethod add-agent [::default-env :state] [env ag env-ref]
-  (if-not (some (partial same? ag) (:agents env))
-    (do (send ag assoc :env (fn [] env-ref))
-        (assoc env :agents (push (env :agents) ag)))
-    env))
-
-(defmethod add-agents [::default-env :agent] [env ags] (send env add-agents ags env))
-(defmethod add-agents [::default-env :state] [env agents env-ref]
-  (doseq [ag agents] (add-agent env-ref ag))
-  env)
-
-(defmethod add-tag [::default-env :agent] [env tag] (send env add-tag tag))
-(defmethod add-tag [::default-env :state] [env tag]
-  (if (or (nil? tag) (contains? (env :tags) tag)) env
-      (assoc env :tags (assoc (env :tags) tag (atom false)))))
-
-(defmethod run-env [::default-env :agent] [env] (send env run-env))
-(defmethod run-env [::default-env :state] [env]
-  (doseq [ag (agents env)] (run-agent ag))
-  env)
+(defmethod bind :agent [x y]
+  (let [unified-env (union #{x y} (env x) (env y))
+        delayed-env (delay unified-env)]
+    (dosync (doseq [ag unified-env] (ref-set (@ag :env) delayed-env)))
+    unified-env))
 
 (defmethod received-tag [::default-env :agent] [env ag] (send env received-tag ag))
 (defmethod done         [::default-env :agent] [env ag] (send env done ag))

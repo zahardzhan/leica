@@ -23,21 +23,16 @@
 (def *default-connection-timeout* 50000)
 
 (defn execute-action [ag action]
-  (let [result (atom nil)
-        thread
-        (Thread. 
-         #(do (log/debug (str (or (ag :name) (ag :address)) \space action))
-              (reset! result (((ag :actions) action) ag))
-              (when-not (#{:die :fail :pass} action)
-                (reset! result (assoc @result :action action)))
-              (log/debug (str (or (ag :name) (ag :address))
-                              \space action \space
-                              (cond (dead? @result) "агент умер"
-                                    (fail? @result) "агент провалился"
-                                    :else "успешно")))))]
-    (.start thread)
-    (.join thread)
-    @result))
+  (let [fag (future (assoc (((ag :actions) action) ag)
+                            :action (if (#{:die :fail :pass} action)
+                                      (ag :action)
+                                      action)))]
+    (log/debug (str (or (ag :name) (ag :address)) \space action))
+    (log/debug (str (or (@fag :name) (@fag :address)) \space action \space 
+                    (cond (dead? @fag) "агент умер"
+                          (fail? @fag) "агент провалился"
+                          :else        "успешно")))
+    @fag))
 
 (defn percept-and-execute [ag percept]
   (let [action ((ag :program) percept)]
