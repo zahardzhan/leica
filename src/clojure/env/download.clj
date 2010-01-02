@@ -5,50 +5,54 @@
        :author "Роман Захаров"}
   env.download
   (:use env aux match)
-  (:require :reload action)
+  (:require :reload [action :only 'percept-and-execute])
   (:import (java.io File)
            (org.apache.commons.httpclient URI)))
 
 (in-ns 'env.download)
 
 (derive ::download-agent :env/default-agent)
-(derive ::download-env   :env/default-env)
 
 (def *timeout-after-fail* 3000)
 
-;;;; Агент
+(defn download-environment [& [{:keys [working-path done-path progress-agent 
+                                       debug termination]
+                                :or   {working-path nil
+                                       done-path nil
+                                       progress-agent nil
+                                       debug false
+                                       termination empty-fn}}]]
+  (agent {:type ::download-env :agents '() :tags {}
+          :working-path working-path
+          :done-path done-path
+          :progress-agent progress-agent
+          :debug debug
+          :termination termination}))
 
 (defn download-agent 
-  "Агент для скачивания.
-
-  :address адрес задания
-  :link    прямая ссылка на файл, который нужно скачать
-  :tag     идентификатор по которому разделяются потоки загрузок
-  :file    файл в который сохраняется скачанное
-  :length  размер файла, что нужно скачать"
-  
-  [line rules]
+  "Агент для скачивания."  
+  [rules line]
   (let [[address {actions :actions program :program}]
         (match line rules {:action list})]
-    (when (and address actions)
-      (agent {:type ::download-agent
-              :address (URI. address)
-              :env empty-fn
-              :link nil :name nil :tag nil :file nil :length nil
-              :actions actions
-              :program program
-              :alive true :fail false :percept nil :action :create}))))
+    (when (and address actions program)
+      (send (default-agent {:type ::download-agent
+                            :actions actions
+                            :program program})
+            assoc
+            :address (URI. address) ; адрес задания
+            :link nil ; прямая ссылка на файл, который нужно скачать
+            :file nil ; файл в который сохраняется скачанное
+            :length nil ; размер файла, что нужно скачать
+            ))))
 
-(defmethod same? ::download-agent [ag1 ag2]
-  (or (= ag1 ag2)
-      (= (:address @ag1) (:address @ag2))))
+(defn address [ag] (-> ag self deref :address))
 
-(defn same-tag? [ag1 ag2]
-  (= (tag ag1) (tag ag2)))
+(def same-download-agents (fn-or (partial same identity)
+                                 (partial same address)))
 
-(defn download-agents [lines rules]
+(defn download-agents [rules lines]
   (remove (comp not agent?) 
-          (map #(download-agent % rules) lines)))
+          (map (partial download-agent rules) lines)))
 
 (defmethod run-agent [::download-agent :state] [ag]
   (let [tag (:tag ag)
@@ -76,20 +80,6 @@
                   new-state))))
 
 ;;;; Окружение
-
-(defn download-environment [& [{:keys [working-path done-path progress-agent 
-                                       debug termination]
-                                :or   {working-path nil
-                                       done-path nil
-                                       progress-agent nil
-                                       debug false
-                                       termination empty-fn}}]]
-  (agent {:type ::download-env :agents '() :tags {}
-          :working-path working-path
-          :done-path done-path
-          :progress-agent progress-agent
-          :debug debug
-          :termination termination}))
 
 (defmethod received-tag [::download-env :state] [env ag]
   (when-let [next-alive-untagged (next-after-when (fn-and alive? (complement tag))

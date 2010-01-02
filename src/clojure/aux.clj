@@ -58,14 +58,8 @@
     ([ag] (dispatch ag))
     ([ag & args] (dispatch ag))))
 
-(defn same-type-dispatch
-  "Диспетчер по одинаковому типу двух агентов.
-  Если типы агентов не совпадают - возвращает ::different-types."
-  ([ag1 ag2] (let [type1 (type-dispatch ag1)
-                   type2 (type-dispatch ag2)]
-               (if (= type1 type2)
-                 type1
-                 :different-types))))
+(defn same [f & xs]
+  (apply = (map f xs)))
 
 (defn file? [x]
   (instance? java.io.File x))
