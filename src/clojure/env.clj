@@ -90,10 +90,6 @@
   "Агент провалил предыдущее действие?"
   type-agent-dispatch)
 
-(defmulti tag
-  "Таг агента."
-  type-agent-dispatch)
-
 (defmulti related-env
   "Взаимосвязанное с агентом окружение.
   Возвращает замыкание с агентом-окружением внутри."
@@ -161,9 +157,6 @@
 
 (defmethod fail?  [::default-agent :agent] [ag] (fail? (deref ag)))
 (defmethod fail?  [::default-agent :state] [ag] (:fail ag))
-
-(defmethod tag    [::default-agent :agent] [ag] (:tag (deref ag)))
-(defmethod tag    [::default-agent :state] [ag] (:tag ag))
 
 (defmethod related-env [::default-agent :agent] [ag] ((:env (deref ag))))
 (defmethod related-env [::default-agent :state] [ag] ((:env ag)))

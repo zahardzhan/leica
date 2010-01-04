@@ -41,8 +41,7 @@
       (= (:file @ag1) (:file @ag2))))
 
 (defn upload-agents [files]
-  (remove (comp not agent?) 
-          (map upload-agent files)))
+  (remove (comp not agent?) (map upload-agent files)))
 
 (defmethod run-agent [::upload-agent :state] [ag-state]
   (let [env (related-env ag-state)]
@@ -67,20 +66,26 @@
           :debug debug
           :termination termination}))
 
-(defmethod run-env [::upload-env :state] [env]
-  (when-let [alive (some (fn-and alive? identity) (agents env))]
-    (run-agent alive))
-  env)
+(defmethod run-env [::upload-env :state] [env-state]
+  (when-let [alive-ag (some #(when (alive? %) %) (:agents env-state))]
+    (run-agent alive-ag))
+  env-state)
 
-(defmethod done [::upload-env :state] [env ag]
-  (let [alive-unfailed (some (fn-and alive? (complement fail?) identity)
-                             (agents env))
-        next-alive (next-after-when alive? ag (agents env))]
+(defmethod done [::upload-env :state] [env-state ag]
+  (let [alive-unfailed
+        (some #(when (and (alive? %) (not (fail? %))) %)
+              (:agents env-state))
+        next-alive
+        (next-after-when #(and (alive? %)) ag (:agents env-state))]
+    
+    (cond alive-unfailed
+          (run-agent alive-unfailed)
 
-    (cond alive-unfailed (run-agent alive-unfailed)
-          next-alive (run-agent next-alive)
-          (termination? env) ((env :termination) env)))
-  env)
+          next-alive
+          (run-agent next-alive)
+
+          (termination? env-state) ((env-state :termination) env-state)))
+  env-state)
 
 (defmulti out-of-space-on-account? type-agent-dispatch)
 
@@ -93,4 +98,3 @@
     (datacod.account/with-auth client account
       (let [free-space (datacod.account/free-space client account)]
         (< free-space (ag :length))))))
-

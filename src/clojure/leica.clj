@@ -76,10 +76,6 @@ leica [ключи] -a домен:почтовый@адрес:пароль [фа�
       dir)))
 
 (defn files-for-upload [upload-paths]
- ;; (filter verified-upload-file
- ;;         (distinct (flatten (map file-seq 
- ;;                                 (filter verified-upload-dir
- ;;                                         upload-paths))))))
   (loop [unique '()
          paths  (flatten
                  (filter identity

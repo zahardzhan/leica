@@ -43,19 +43,15 @@
   (or (= ag1 ag2)
       (= (:address @ag1) (:address @ag2))))
 
-(defn same-tag? [ag1 ag2]
-  (= (tag ag1) (tag ag2)))
-
 (defn download-agents [lines rules]
-  (remove (comp not agent?) 
-          (map #(download-agent % rules) lines)))
+  (remove (comp not agent?) (map #(download-agent % rules) lines)))
 
-(defmethod run-agent [::download-agent :state] [ag]
-  (let [tag (:tag ag)
-        env (related-env ag)]
-    (cond (dead? ag) ag
+(defmethod run-agent [::download-agent :state] [ag-state]
+  (let [tag (:tag ag-state)
+        env (related-env ag-state)]
+    (cond (dead? ag-state) ag-state
 
-          (not tag) (let [new-state (action/percept-and-execute ag {:self ag})]
+          (not tag) (let [new-state (action/percept-and-execute ag-state {:self ag-state})]
                       (cond (dead? new-state) (done env *agent*)
                             (fail? new-state) (do (sleep *agent* *timeout-after-fail*)
                                                   (when-not (debug? *agent*)
@@ -65,10 +61,10 @@
                             :else (when-not (debug? *agent*) (run-agent *agent*)))
                       new-state)
 
-          (tag-locked? env tag) ag
+          (tag-locked? env tag) ag-state
 
           :else (let [new-state (with-lock-env-tag env tag
-                                  (action/percept-and-execute ag {:self ag}))]
+                                  (action/percept-and-execute ag-state {:self ag-state}))]
                   (cond (dead? new-state) (done env *agent*)
                         (fail? new-state) (do (sleep *agent* *timeout-after-fail*)
                                               (done env *agent*))
@@ -91,33 +87,34 @@
           :debug debug
           :termination termination}))
 
-(defmethod received-tag [::download-env :state] [env ag]
-  (when-let [next-alive-untagged (next-after-when (fn-and alive? (complement tag))
-                                                  ag (agents env))]
-    (run-agent next-alive-untagged))
+(defmethod received-tag [::download-env :state] [env-state ag]
+  (when-let [next-alive-untagged-agent
+             (next-after-when #(and (alive? %) (not (:tag (deref %))))
+                              ag (:agents env-state))]
+    (run-agent next-alive-untagged-agent))
   (run-agent ag)
-  env)
+  env-state)
 
-(defmethod done [::download-env :state] [env ag]
-  (let [alive-unfailed-with-same-tag (some (fn-and alive? 
-                                                   (complement fail?) 
-                                                   (partial same-tag? ag)
-                                                   identity)
-                                           (agents env))
-
-        next-alive-with-same-tag (next-after-when (fn-and alive?
-                                                          (partial same-tag? ag))
-                                                  ag (agents env))]
+(defmethod done [::download-env :state] [env-state ag]
+  (let [alive-unfailed-with-same-tag
+        (some #(when (and (= (:tag @ag) (:tag @%)) (alive? %) (not (fail? %))) %)
+              (:agents env-state))
+        next-alive-with-same-tag
+        (next-after-when #(and (= (:tag @ag) (:tag @%)) (alive? %))
+                         ag (:agents env-state))]
     
-    (cond alive-unfailed-with-same-tag (run-agent alive-unfailed-with-same-tag)
-          next-alive-with-same-tag (run-agent next-alive-with-same-tag)
-          (termination? env) ((env :termination) env)))
-  env)
+    (cond alive-unfailed-with-same-tag
+          (run-agent alive-unfailed-with-same-tag)
 
-(defmulti done-path                  type-agent-dispatch)
-(defmulti working-path               type-agent-dispatch)
+          next-alive-with-same-tag
+          (run-agent next-alive-with-same-tag)
+
+          (termination? env-state) ((env-state :termination) env-state)))
+  env-state)
+
 (defmulti out-of-space-on-work-path? type-agent-dispatch)
 (defmulti out-of-space-on-done-path? type-agent-dispatch)
+(defmulti done-path                  type-agent-dispatch)
 (defmulti fully-loaded?              type-agent-dispatch)
 (defmulti already-on-done-path?      type-agent-dispatch)
 
@@ -125,14 +122,18 @@
   (out-of-space-on-work-path? (deref ag)))
 
 (defmethod out-of-space-on-work-path? [::download-agent :state] [ag]
-  (< (.getUsableSpace (working-path ag))
-     (- (ag :length) (file-length (ag :file)))))
+  (when-let [#^File working-path ((deref (related-env ag)) :working-path)]
+    (when-let [#^File file (ag :file)]
+      (when-let [full-length (ag :length)]
+        (< (.getUsableSpace working-path) (- full-length (file-length file)))))))
 
 (defmethod out-of-space-on-done-path? [::download-agent :agent] [ag]
   (out-of-space-on-done-path? (deref ag)))
 
 (defmethod out-of-space-on-done-path? [::download-agent :state] [ag]
-  (< (.getUsableSpace (done-path ag)) (ag :length)))
+  (when-let [#^File done-path ((deref (related-env ag)) :done-path)]
+    (when-let [full-length (ag :length)]
+      (< (.getUsableSpace done-path) full-length))))
 
 (defmethod fully-loaded? [::download-agent :agent] [ag]
   (fully-loaded? (deref ag)))
@@ -144,12 +145,9 @@
   (already-on-done-path? (deref ag)))
 
 (defmethod already-on-done-path? [::download-agent :state] [ag]
-  (.exists (File. (done-path ag) (.getName (ag :file)))))
-
-(defmethod working-path [::download-agent :agent] [ag] (:working-path (deref (related-env ag))))
-(defmethod working-path [::download-agent :state] [ag] (:working-path (deref (related-env ag))))
-(defmethod working-path [::download-env :agent]  [env] (:working-path (deref env)))
-(defmethod working-path [::download-env :state]  [env] (:working-path env))
+  (when-let [#^File done-path ((deref (related-env ag)) :done-path)]
+    (when-let [#^File file (ag :file)]
+      (.exists (File. done-path (.getName file))))))
 
 (defmethod done-path [::download-agent :agent] [ag] (:done-path (deref (related-env ag))))
 (defmethod done-path [::download-agent :state] [ag] (:done-path (deref (related-env ag))))
