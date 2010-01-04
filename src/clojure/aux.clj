@@ -40,19 +40,20 @@
 (defn agent? [x]
   (instance? clojure.lang.Agent x))
 
-(letfn [(dispatch [ag] ((if (agent? ag) @ag ag) :type))]
+(letfn [(dispatch [ag] (when ag ((if (agent? ag) @ag ag) :type)))]
   (defn type-dispatch
     "Диспетчер по типу агента."
     ([ag] (dispatch ag))
     ([ag & args] (dispatch ag))))
 
-(letfn [(dispatch [ag] (if (agent? ag) :agent :state))]
+(letfn [(dispatch [ag] (when ag (if (agent? ag) :agent :state)))]
   (defn agent-dispatch
     "Диспетчер по ссылке на агент (:agent) и по телу агента (:state)."
     ([ag] (dispatch ag))
     ([ag & args] (dispatch ag))))
 
-(letfn [(dispatch [ag] [(type-dispatch ag) (agent-dispatch ag)])]
+(letfn [(dispatch [ag] (let [t (type-dispatch ag), a (agent-dispatch ag)]
+                         (when (and t a) [(type-dispatch ag) (agent-dispatch ag)])))]
   (defn type-agent-dispatch
     "Диспетчер по типу агента, и по ссылке на агент."
     ([ag] (dispatch ag))

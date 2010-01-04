@@ -92,6 +92,10 @@
   При включенном в окружении дебаге агент выполнит только одно действие."
   type-agent-dispatch)
 
+(defmulti done
+  "Агент закончил свою работу."
+  type-agent-dispatch)
+
 (defmulti stop
   "Останавливает выполнение действий агентом."
   type-agent-dispatch)
@@ -155,7 +159,10 @@
 
 ;;;; Реализация
 
+(defmethod run nil [ag] nil)
 (defmethod run [::default-agent :agent] [ag] (send-off ag run))
+
+(defmethod done [::default-agent :agent] [ag] (send-off ag done))
 
 (defmethod run-env :agent [ag] (doseq [a (env ag)] (run a)))
 (defmethod run-env :state [ag] (doseq [a (env ag)] (run a)))
