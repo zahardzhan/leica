@@ -79,27 +79,23 @@
   ag)
 
 (defmethod run [::download-agent :state] [ag]
-  (let [tag (:tag ag)
-        env (related-env ag)]
-    (cond (dead? ag) ag
+  (cond (dead? ag) ag
 
-          (not tag) (let [new-state (action/percept-and-execute ag {:self ag})]
-                      (cond (dead? new-state) (done env *agent*)
-                            (fail? new-state) (do (sleep *agent* *timeout-after-fail*)
-                                                  (when-not (debug? *agent*)
-                                                    (run *agent*)))
-                            (tag new-state) (do (add-tag env (:tag new-state))
-                                                 (run (next-alive-untagged-after *agent*))
-                                                 (run *agent*))
-                            :else (when-not (debug? *agent*) (run-agent *agent*)))
-                      new-state)
+        (not (tag ag)) (let [new-state (action/percept-and-execute ag {})]
+                         (cond (dead? new-state) (done ag)
+                               (fail? new-state) (do (sleep ag *timeout-after-fail*)
+                                                     (when-not (debug? ag) (run ag)))
+                               (tag new-state) (do (run (next-alive-untagged-after ag))
+                                                   (run ag))
+                               :else (when-not (debug? ag) (run ag)))
+                         new-state)
 
-          (tag-locked? env tag) ag
+        (tag-locked? ag) ag
 
-          :else (let [new-state (with-lock-env-tag env tag
-                                  (action/percept-and-execute ag {:self ag}))]
-                  (cond (dead? new-state) (done env *agent*)
-                        (fail? new-state) (do (sleep *agent* *timeout-after-fail*)
-                                              (done env *agent*))
-                        :else (when-not (debug? *agent*) (run-agent *agent*)))
-                  new-state))))
+        :else (let [new-state (locking-tag 
+                               ag (action/percept-and-execute ag {}))]
+                (cond (dead? new-state) (done ag)
+                      (fail? new-state) (do (sleep ag *timeout-after-fail*)
+                                            (done ag))
+                      :else (when-not (debug? ag) (run ag)))
+                new-state)))

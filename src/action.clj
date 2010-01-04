@@ -64,11 +64,9 @@
     (assoc ag :name (second (re-find #"/([^/]+)$" (.getPath link))) :fail false)))
 
 (defn move-to-done-path [ag]
-  (when-let [#^File done-path ((deref (related-env ag)) :done-path)]
-    (when-let [#^File file (ag :file)]
-      (if-let [#^File moved (move-file file done-path)]
-        (assoc ag :file moved :fail false)
-        (die ag)))))
+  (if-let [#^File moved (move-file (ag :file) (ag :done-path))]
+    (assoc ag :file moved :fail false)
+    (die ag)))
 
 (defn get-tag
   ([ag] (get-tag nil ag))
@@ -111,13 +109,13 @@
 
 (defn get-file [ag]
   (when-let [name (ag :name)]
-    (when-let [#^File working-path ((deref (related-env ag)) :working-path)]
+    (when-let [#^File working-path (ag :working-path)]
       (assoc ag :file (new File (join-paths working-path name)) :fail false))))
 
 (def *buffer-size* 4096)
 
 (defn download [ag]
-  (let [progress-agent (:progress-agent (deref (related-env ag)))
+  (let [progress-agent (ag :progress-agent)
         #^URI link (:link ag)
         #^File file (:file ag)
         #^HttpClient client (new HttpClient)
