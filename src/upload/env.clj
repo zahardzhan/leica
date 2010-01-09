@@ -14,6 +14,13 @@
 (derive ::upload-agent :env/default-agent)
 (derive ::upload-env   :env/default-env)
 
+(def upload-agent-control-part
+     {:program datacod.program/reflex-upload
+      :actions {:upload datacod.action/upload
+                :report datacod.action/report
+                :pass   action/pass
+                :die    action/die}})
+
 ;;;; Агент
 
 (defn upload-agent 

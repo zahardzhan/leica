@@ -4,7 +4,7 @@
 (ns #^{:doc "Вспомогательные функции."
        :author "Роман Захаров"}
   aux
-  (:use match [clojure.contrib seq-utils])
+  (:use match clojure.contrib.seq-utils)
   (:import (java.io File)))
 
 ;; Задержаные вычисления не печатаются
@@ -40,24 +40,29 @@
 (defn agent? [x]
   (instance? clojure.lang.Agent x))
 
-(letfn [(dispatch [ag] (when ag ((if (agent? ag) @ag ag) :type)))]
-  (defn type-dispatch
-    "Диспетчер по типу агента."
-    ([ag] (dispatch ag))
-    ([ag & args] (dispatch ag))))
+(defn derefed
+  "Разыменовывает аргумент, если его можно разыменовать."
+  [x]
+  (if (instance? clojure.lang.IDeref x) 
+    (deref x)
+    x))
 
-(letfn [(dispatch [ag] (when ag (if (agent? ag) :agent :state)))]
-  (defn agent-dispatch
-    "Диспетчер по ссылке на агент (:agent) и по телу агента (:state)."
-    ([ag] (dispatch ag))
-    ([ag & args] (dispatch ag))))
+(defmacro with-deref 
+  "Код с разыменоваными идентификаторами ссылок/агентов/санок/обещаний внутри."
+  [[ref & refs] & body] 
+     (cond (not ref)        `(do ~@body)
+           (not (seq refs)) `(let [~ref (derefed ~ref)]
+                               (do ~@body))
+           (seq refs)       `(let [~ref (derefed ~ref)]
+                               (with-deref [~@refs] ~@body))))
 
-(letfn [(dispatch [ag] (let [t (type-dispatch ag), a (agent-dispatch ag)]
-                         (when (and t a) [(type-dispatch ag) (agent-dispatch ag)])))]
-  (defn type-agent-dispatch
-    "Диспетчер по типу агента, и по ссылке на агент."
-    ([ag] (dispatch ag))
-    ([ag & args] (dispatch ag))))
+(defn type-dispatch
+  "Диспетчер по типу агента."
+  [x & xs] (:type (derefed x)))
+
+(defn agent-or-type-dispatch
+  "Диспетчер по агенту (:agent) или по типу тела агента (:state)."
+  [x & xs] (when x (if (agent? x) :agent (type-dispatch x))))
 
 (defn same [f & xs]
   (apply = (map f xs)))

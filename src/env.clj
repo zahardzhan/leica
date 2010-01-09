@@ -9,8 +9,7 @@
   они способны к пониманию и их действия всегда направлены на достижение 
   какой-либо цели.
 
-  Управление агентами осуществляется через API, большая часть которого ---
-  асинхронные сообщения:
+  Управление агентами осуществляется через API:
 
   bind связывает агентов вместе
   run  запускает выполнение действий агентом (выполнение некоторых 
@@ -19,16 +18,15 @@
 
        :author "Роман Захаров"}
   env
-  (:use aux match clojure.set))
+  (:use aux match clojure.set clojure.contrib.def))
 
 (in-ns 'env)
 
-(defn default-agent
+(defnk default-agent
   "Базовый агент."
-  [& [{:keys [type name actions program tag debug termination]
-       :or   {type ::default-agent, name nil, actions {}, program empty-fn,
-              tag nil, debug false, termination empty-fn}}]]
-  (let [a 
+  [:type :default, :name nil, :actions {}, :program empty-fn, :tag nil,
+   :debug false, :termination empty-fn]
+  (let [a
         (agent 
          { ;; Тип агента по-умолчанию это ::default-agent,
           ;; и все производные типы агентов должны наследовать от этого типа.
@@ -37,15 +35,7 @@
           ;; Имя агента.
           :name name,
 
-          ;; Окружение агента --- это ссылка на задержанное множество всех агентов
-          ;; с которыми связан агент:
-          :env (ref (delay #{})),          
-          ;; После создания агент должен быть связан с другими агентами.
-          ;; Связывание производится процедурой bind, все агенты синхронно ссылаются
-          ;; на новое, общее для связываемых агентов окружение. Задержка используется
-          ;; из-за самореферентности окружения.
-
-          ;; Хэш с действия агента {:имя-действия действие},
+           ;; Хэш с действия агента {:имя-действия действие},
           ;; где действие - это функция от тела агента, возвращающая новое тело агента.
           :actions actions,
   
@@ -75,151 +65,113 @@
 
           ;; Метка режим отладки агента, в котором агент действует пошагово,
           ;; тоесть функция run-agent не вызывает рекурсивно сама себя.
-          :debug false,
+          :debug debug,
 
-          ;; Продолжение вызываемое после смерти всех агентов в остановки окружении.
+          ;; Продолжение вызываемое после смерти всех агентов и остановки окружении.
           :termination termination})]
     (send a assoc
           ;; Задержанная ссылка на самого себя.
-          :self (delay a))))
+          :self (delay a)
+          
+          ;; Окружение агента --- это ссылка на задержанное множество всех агентов
+          ;; с которыми связан агент:
+          :env (ref (delay #{a})),          
+          ;; После создания агент должен быть связан с другими агентами.
+          ;; Связывание производится процедурой bind, все агенты синхронно ссылаются
+          ;; на новое, общее для связываемых агентов окружение. Задержка используется
+          ;; из-за самореферентности окружения.
+          )
+    (await a)
+    a))
 
 (defmulti bind 
   "Связывает агентов друг с другом."
-  agent-dispatch)
+  agent-or-type-dispatch)
 
 (defmulti run
   "Запуск агента на выполнение действий.
   При включенном в окружении дебаге агент выполнит только одно действие."
-  type-agent-dispatch)
+  agent-or-type-dispatch)
 
 (defmulti done
   "Агент закончил свою работу."
-  type-agent-dispatch)
+  agent-or-type-dispatch)
 
 (defmulti stop
   "Останавливает выполнение действий агентом."
-  type-agent-dispatch)
+  agent-or-type-dispatch)
 
 (defmulti sleep
   "Усыпляет агента на некоторое время (в миллисекундах).
   Агент может спать только до/после выполнения действия."
-  type-agent-dispatch)
+  agent-or-type-dispatch)
 
-(defmulti self
-  "Ссылка на самого себя."
-  agent-dispatch)
+(defn self "Ссылка на самого себя." 
+  [ag] (-> ag derefed :self))
 
-(defmulti env
-  "Множество агентов окружения."
-  agent-dispatch)
+(defn env "Множество агентов окружения." 
+  [ag] (-> ag derefed :env deref force))
 
-(defmulti alive?
-  "Жив ли агент?"
-  type-agent-dispatch)
-
-(defmulti dead?
-  "Мёртв ли агент?"
-  type-agent-dispatch)
-
-(defmulti fail?
-  "Агент провалил предыдущее действие?"
-  type-agent-dispatch)
-
-(defmulti tag
-  "Таг агента."
-  type-agent-dispatch)
-
-(defmulti tag-lock
-  "Атом замка тага агента."
-  agent-dispatch)
-
-(defmulti lock-tag
-  "Замкнуть таг агента."
-  agent-dispatch)
-
-(defmulti unlock-tag 
-  "Снять замок с тага агента."
-  agent-dispatch)
-
-(defmulti tag-locked?
-  "Замкнут ли хоть один агент в окружении с тем же тагом?"
-  agent-dispatch)
-  
-(defmulti run-env
-  "Запустить агентов в окружении."
-  type-agent-dispatch)
-
-(defmulti termination? 
-  "Агент и его окружение закончило свою работу?"
-  agent-dispatch)
-
-(defmulti debug?
-  "Окружение/агент в режиме дебага?"
-  agent-dispatch)
-
-;;;; Реализация
-
-(defmethod run nil [ag] nil)
-(defmethod run [::default-agent :agent] [ag] (send-off ag run))
-
-(defmethod done [::default-agent :agent] [ag] (send-off ag done))
-
-(defmethod run-env :agent [ag] (doseq [a (env ag)] (run a)))
-(defmethod run-env :state [ag] (doseq [a (env ag)] (run a)))
-
-(defmethod stop [::default-agent :agent] [ag] (send-off ag stop))
-
-(defmethod sleep [::default-agent :agent] [ag millis] (send-off ag sleep millis))
-(defmethod sleep [::default-agent :state] [ag millis] (Thread/sleep millis) ag)
-
-(defmethod alive? [::default-agent :agent] [ag] (:alive @ag))
-(defmethod alive? [::default-agent :state] [ag] (:alive ag))
-
-(defmethod dead? [::default-agent :agent] [ag] (not (:alive @ag)))
-(defmethod dead? [::default-agent :state] [ag] (not (:alive ag)))
-
-(defmethod fail? [::default-agent :agent] [ag] (:fail @ag))
-(defmethod fail? [::default-agent :state] [ag] (:fail ag))
-
-(defmethod env :agent [ag] (-> @ag :env deref force))
-(defmethod env :state [ag] (->  ag :env deref force))
-
-(defmethod self :agent [ag] ag)
-(defmethod self :state [ag] (force (:self ag)))
-
-(defmethod debug? :agent [ag] (:debug @ag))
-(defmethod debug? :state [ag] (:debug ag))
-
+(defmethod bind nil [x] nil)
 (defmethod bind :agent [x y & zs]
   (let [unified-env (union #{x y} (env x) (env y) (set zs) (apply union (map env zs)))
         delayed-env (delay unified-env)]
     (dosync (doseq [ag unified-env] (ref-set (@ag :env) delayed-env)))
     unified-env))
 
-(defmethod termination? :agent [ag] (termination? (deref ag)))
-(defmethod termination? :state [ag] (or (empty? (env ag)) 
-                                        (every? dead? (env ag))))
+(defmethod run nil [ag] nil)
+(defmethod run :agent [ag] (send-off ag run))
+(defmethod run :default [ag] ag)
 
-(defmethod tag [::default-agent :agent] [ag] (:tag @ag))
-(defmethod tag [::default-agent :state] [ag] (:tag ag))
+(defmethod done nil [ag] nil)
+(defmethod done :agent [ag] (send-off ag done))
+(defmethod done :default [ag] ag)
 
-(defmethod tag-lock :agent [ag] (:tag-lock @ag))
-(defmethod tag-lock :state [ag] (:tag-lock ag))
+(defmethod sleep nil [ag] nil)
+(defmethod sleep :agent [ag millis] (send-off ag sleep millis))
+(defmethod sleep :default [ag millis] (Thread/sleep millis) ag)
 
-(defmethod tag-locked? :agent [ag] (tag-locked? @ag))
-(defmethod tag-locked? :state [ag]
-  (or (deref (tag-lock ag))
-      (some (fn-and (comp deref tag-lock) (partial same tag ag))
-            (env ag))))
+(defn run-env "Запустить агентов в окружении."
+  [ag] (doseq [a (env ag)] (run a)))
 
-(defmethod lock-tag :agent [ag] (reset! (tag-lock ag) true))
-(defmethod lock-tag :state [ag] (reset! (tag-lock ag) true))
+(defn alive? "Жив ли агент?"
+  [ag] (-> ag derefed :alive))
 
-(defmethod unlock-tag :agent [ag] (reset! (tag-lock ag) false))
-(defmethod unlock-tag :state [ag] (reset! (tag-lock ag) false))
+(defn dead? "Мёртв ли агент?" 
+  [ag] (-> ag derefed :alive not))
+
+(defn fail? "Агент провалил предыдущее действие?"
+  [ag] (-> ag derefed :fail))
+
+(defn debug? "Окружение/агент в режиме дебага?"
+  [ag] (-> ag derefed :debug))
+
+(defn termination? "Агент и его окружение закончило свою работу?"
+  [ag] (or (empty? (env ag))
+           (every? dead? (env ag))))
+
+(defn tag "Таг агента."
+  [ag] (-> ag derefed :tag))
+
+(defn tag-lock "Атом замка тага агента."
+  [ag] (-> ag derefed :tag-lock))
+
+(defn tag-locked? "Таг агента на замке?"
+  [ag] (-> ag derefed :tag-lock deref))
+
+(defn lock-tag "Замкнуть таг агента."
+  [ag] (reset! (tag-lock ag) true))
+
+(defn unlock-tag "Снять замок с тага агента." 
+  [ag] (reset! (tag-lock ag) false))
+
+(defn tag-locked-in-env? "Замкнут ли хоть один агент в окружении с тем же тагом?"
+  [ag] (or (tag-locked? ag)
+           (some (fn-and (partial same tag ag) tag-locked? (constantly true))
+                 (env ag))))
 
 (defmacro locking-tag [ag & body]
-  `(when-not (tag-locked? ~ag)
+  `(when-not (tag-locked-in-env? ~ag)
      (lock-tag ~ag)
      (let [result# (do ~@body)]
        (unlock-tag ~ag)

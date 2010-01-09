@@ -8,33 +8,29 @@
   (:use aux match env env.download)
   (:require action))
 
-(defn has [key]
-  (comp key :self))
+(in-ns 'program)
 
-(defn missing [key]
-  (comp not key :self))
+(def no complement)
 
 (def otherwise (constantly true))
 
 (defn reflex-download
   "Простая рефлексная программа агента для скачивания."
-  [percept]
-  (match percept
-         [[(comp dead? :self) :pass]
-          [(missing :address) :die]
-          [(missing :actions) :die]
-          [(missing :link)    :get-link]
-          [(missing :tag)     :get-tag]
-          [(missing :name)    :get-name]
-          [(missing :file)    :get-file]
-          [(comp already-on-done-path? :self) :die]
-          [(missing :length)  :get-length]
-          [(comp out-of-space-on-work-path? :self) :die]
-          [(fn-and
-            (comp fully-loaded? :self)
-            (comp out-of-space-on-done-path? :self)) :die]
-          [(fn-and 
-            (comp fully-loaded? :self)
-            (comp done-path :self)) :move-to-done-path]
-          [(comp fully-loaded? :self) :die]
-          [otherwise          :download]]))
+  [ag percept]
+  (match ag
+         [[dead?         :pass]
+          [(no :address) :die]
+          [(no :actions) :die]
+          [(no :link)    :get-link]
+          [(no :tag)     :get-tag]
+          [(no :name)    :get-name]
+          [(no :file)    :get-file]
+          [already-on-done-path? :die]
+          [(no :length)  :get-length]
+          [out-of-space-on-work-path? :die]
+          [(fn-and fully-loaded?
+                   out-of-space-on-done-path?) :die]
+          [(fn-and fully-loaded? 
+                   :done-path) :move-to-done-path]
+          [fully-loaded? :die]
+          [otherwise     :download]]))

@@ -5,15 +5,15 @@
        :author "Роман Захаров"}
   test.env
   (:use :reload aux match env)
-  (:use clojure.test clojure.set [clojure.contrib seq-utils]))
+  (:use clojure.test clojure.set clojure.contrib.seq-utils))
 
 (in-ns 'test.env)
 
 (deftest env-test
-  (let [a (default-agent {:name 'mate :tag 1})
-        b (default-agent {:name 'feed :tag 1})
-        c (default-agent {:name 'kill :tag 2})
-        d (default-agent {:name 'repeat :tag 2})]
+  (let [a (default-agent :name 'mate :tag 1)
+        b (default-agent :name 'feed :tag 1)
+        c (default-agent :name 'kill :tag 2)
+        d (default-agent :name 'rept :tag 2)]
     (bind a b c d)
 
     (is (same env a b c d @a @b @c @d))
@@ -30,11 +30,10 @@
     (is (same tag a b @a @b))
     (is (not (same tag b c)))
 
-    (is (not (tag-locked? d)))
-    (is (locking-tag c (tag-locked? d)))
-    (is (not (tag-locked? d)))))
-
-;; (deftest same-type-dispatch-test
-;;   (are [x y] (= x y)
-;;        (same-type-dispatch (agent {:type :a}) (agent {:type :b})) :env/different-types
-;;        (same-type-dispatch (agent {:type :a}) (agent {:type :a})) :a))
+    (is (and (not (tag-locked? c))
+             (not (tag-locked? d))))
+    (locking-tag c (is (and (tag-locked? c)
+                            (not (tag-locked? d))
+                            (tag-locked-in-env? d))))
+    (is (and (not (tag-locked? c))
+             (not (tag-locked? d))))))

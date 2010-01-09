@@ -28,3 +28,17 @@
 
        fn-or  [pos? even?] -2 true
        fn-or  [pos? odd?]  -2 false))
+
+(deftest with-deref-test  
+  (let [x (atom 1), y (agent 2), z (delay 3)]
+    (is (= [1 2 3] (with-deref [x y z] [x y z])))))
+
+(deftest agent-or-type-dispatch-test
+  (let [a (agent {:type :asdf})]
+    (are [x y] (= x (apply agent-or-type-dispatch y))
+         nil    [nil]
+         :agent [a]
+         :agent [a 1 2 3]
+         :asdf  [@a])))
+
+(run-tests)

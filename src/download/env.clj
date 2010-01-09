@@ -3,19 +3,31 @@
 
 (ns #^{:doc "Агент для скачивания."
        :author "Роман Захаров"}
-  env.download
+  download.env
   (:use env aux match)
   (:require :reload [action :only 'percept-and-execute])
   (:import (java.io File)
            (org.apache.commons.httpclient URI)))
 
-(in-ns 'env.download)
+(in-ns 'download.env)
 
-(derive ::download-agent :env/default-agent)
+(def timeout-after-fail 3000)
 
-(def *timeout-after-fail* 3000)
+(derive ::download-agent :default)
 
-(defn download-agent 
+(def default-download-agent-control-part 
+     {:program program/reflex-download
+      :actions {:get-link          action/get-link
+                :get-name          action/get-name
+                :get-tag           action/get-tag
+                :get-file          action/get-file
+                :get-length        action/get-length
+                :move-to-done-path action/move-to-done-path
+                :download          action/download
+                :die               action/die
+                :pass              action/pass}})
+
+(defn download-agent
   "Агент для скачивания."  
   [rules line & [{:keys [working-path done-path progress-agent]}]]
   (let [[address {actions :actions program :program}]
@@ -35,7 +47,7 @@
             ))))
 
 (defn download-agents [rules lines]
-  (remove (comp not agent?) 
+  (remove (complement agent?) 
           (map (partial download-agent rules) lines)))
 
 (defn address [ag] (-> ag self deref :address))
@@ -83,7 +95,7 @@
 
         (not (tag ag)) (let [new-state (action/percept-and-execute ag {})]
                          (cond (dead? new-state) (done ag)
-                               (fail? new-state) (do (sleep ag *timeout-after-fail*)
+                               (fail? new-state) (do (sleep ag timeout-after-fail)
                                                      (when-not (debug? ag) (run ag)))
                                (tag new-state) (do (run (next-alive-untagged-after ag))
                                                    (run ag))
@@ -95,7 +107,7 @@
         :else (let [new-state (locking-tag 
                                ag (action/percept-and-execute ag {}))]
                 (cond (dead? new-state) (done ag)
-                      (fail? new-state) (do (sleep ag *timeout-after-fail*)
+                      (fail? new-state) (do (sleep ag timeout-after-fail)
                                             (done ag))
                       :else (when-not (debug? ag) (run ag)))
                 new-state)))
