@@ -18,15 +18,16 @@
 (defmulti show-progress
   "Показать прогресс загрузочного агента.
    Формат сообщения: {:tag :name :progress :total :time}"
-  type-agent-dispatch)
+  agent-or-type-dispatch)
 
 (defmulti hide-progress
   "Спрятать показ прогресса загрузочного агента.
    Формат сообщения: tag"
-  type-agent-dispatch)
+  agent-or-type-dispatch)
 
-(defmethod show-progress [::console :agent] [ag message] (send ag show-progress message))
-(defmethod show-progress [::console :state] [ag message]
+(defmethod show-progress :agent [ag message]
+  (send-off ag show-progress message))
+(defmethod show-progress ::console [ag message]
   (let [{:keys [tag name progress total time]} message
         percent (int (if-not (zero? total) (* 100 (/ progress total)) 0))
         new-state (assoc ag :tags
@@ -41,8 +42,8 @@
         (.print System/out (str \[ first-part ".." last-part \space percent \% \]))))
     new-state))
 
-(defmethod hide-progress [::console :agent] [ag tag] (send ag hide-progress tag))
-(defmethod hide-progress [::console :state] [ag tag]
+(defmethod hide-progress :agent [ag tag] (send-off ag hide-progress tag))
+(defmethod hide-progress ::console [ag tag]
   (.print System/out 
           (str "\r" (apply str (repeat *console-width* \space)) "\r"))
   (assoc ag :tags (dissoc (ag :tags) tag)))
