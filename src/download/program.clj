@@ -2,41 +2,32 @@
 ;;; author: Roman Zaharov <zahardzhan@gmail.com>
 
 (ns #^{:doc
-       "Программы агентов."
+       "Программа агента для скачивания."
        :author "Роман Захаров"}
   download.program
-  (:use aux match env env.download program)
-  (:require action))
+  (:use aux match action program env download.env))
 
 (in-ns 'download.program)
 
-(defn has [key]
-  (comp key :self))
-
-(defn missing [key]
-  (comp not key :self))
-
-(def otherwise (constantly true))
-
-(defn reflex-download
+(defn reflex
   "Простая рефлексная программа агента для скачивания."
-  [percept]
-  (match percept
-         [[(comp dead? :self) :pass]
-          [(missing :address) :die]
-          [(missing :actions) :die]
-          [(missing :link)    :get-link]
-          [(missing :tag)     :get-tag]
-          [(missing :name)    :get-name]
-          [(missing :file)    :get-file]
-          [(comp already-on-done-path? :self) :die]
-          [(missing :length)  :get-length]
-          [(comp out-of-space-on-work-path? :self) :die]
+  [ag percept]
+  (match ag
+         [[dead?                         :pass]
+          [(missing :address)            :die]
+          [(missing :actions)            :die]
+          [(missing :link)               :get-link]
+          [(missing :tag)                :get-tag]
+          [(missing :name)               :get-name]
+          [(missing :file)               :get-file]
+          [already-on-done-path?         :die]
+          [(missing :length)             :get-length]
+          [out-of-space-on-work-path?    :die]
           [(fn-and
-            (comp fully-loaded? :self)
-            (comp out-of-space-on-done-path? :self)) :die]
+            fully-loaded?
+            out-of-space-on-done-path?)  :die]
           [(fn-and 
-            (comp fully-loaded? :self)
-            (comp done-path :self)) :move-to-done-path]
-          [(comp fully-loaded? :self) :die]
-          [otherwise          :download]]))
+            fully-loaded?
+            done-path)                   :move-to-done-path]
+          [fully-loaded?                 :die]
+          [else                          :download]]))

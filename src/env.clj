@@ -24,7 +24,7 @@
 
 (defnk default-agent
   "Базовый агент."
-  [:type :default, :name nil, :actions {}, :program empty-fn, :tag nil,
+  [:type ::default-agent, :name nil, :actions {}, :program empty-fn, :tag nil,
    :debug false, :termination empty-fn]
   (let [a
         (agent 
@@ -121,15 +121,15 @@
 
 (defmethod run nil [ag] nil)
 (defmethod run :agent [ag] (send-off ag run))
-(defmethod run :default [ag] ag)
+(defmethod run ::default-agent [ag] ag)
 
 (defmethod done nil [ag] nil)
 (defmethod done :agent [ag] (send-off ag done))
-(defmethod done :default [ag] ag)
+(defmethod done ::default-agent [ag] ag)
 
 (defmethod sleep nil [ag] nil)
 (defmethod sleep :agent [ag millis] (send-off ag sleep millis))
-(defmethod sleep :default [ag millis] (Thread/sleep millis) ag)
+(defmethod sleep ::default-agent [ag millis] (Thread/sleep millis) ag)
 
 (defn run-env "Запустить агентов в окружении."
   [ag] (doseq [a (env ag)] (run a)))

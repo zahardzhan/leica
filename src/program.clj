@@ -5,32 +5,11 @@
        "Программы агентов."
        :author "Роман Захаров"}
   program
-  (:use aux match env env.download)
+  (:use aux match)
   (:require action))
 
 (in-ns 'program)
 
-(def no complement)
+(defn missing [key] (comp no key derefed))
 
-(def otherwise (constantly true))
-
-(defn reflex-download
-  "Простая рефлексная программа агента для скачивания."
-  [ag percept]
-  (match ag
-         [[dead?         :pass]
-          [(no :address) :die]
-          [(no :actions) :die]
-          [(no :link)    :get-link]
-          [(no :tag)     :get-tag]
-          [(no :name)    :get-name]
-          [(no :file)    :get-file]
-          [already-on-done-path? :die]
-          [(no :length)  :get-length]
-          [out-of-space-on-work-path? :die]
-          [(fn-and fully-loaded?
-                   out-of-space-on-done-path?) :die]
-          [(fn-and fully-loaded? 
-                   :done-path) :move-to-done-path]
-          [fully-loaded? :die]
-          [otherwise     :download]]))
+(def else (constantly true))
