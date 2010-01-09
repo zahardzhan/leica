@@ -22,6 +22,8 @@
            (org.htmlparser.tags Div LinkTag)
            (org.htmlparser.nodes TagNode)))
 
+(in-ns 'datacod.account)
+
 (defn datacod-account [domain login password]
   (when (and login password)
     {:domain (str (when domain (str domain ".")) "data.cod.ru")
