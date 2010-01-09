@@ -3,9 +3,9 @@
 
 (ns #^{:doc "Действия агента, работающего с data.cod."
        :author "Роман Захаров"}
-  datacod.action
+  service.cod.data.action
   (:require action
-            datacod.account
+            service.cod.data.account
             [clojure.contrib.http.agent :as ha]
             [clojure.contrib.duck-streams :as duck]
             [clojure.contrib.logging :as log])
@@ -19,37 +19,7 @@
            (org.apache.commons.httpclient.params.HttpMethodParams)
            (org.apache.commons.httpclient.util EncodingUtil)))
 
-(in-ns 'datacod.action)
-
-(defn get-link-and-name [ag]
-  (when-let [#^URI address (ag :address)]
-    (let [#^HttpClient client (new HttpClient)
-          #^GetMethod get (GetMethod. (str address))]
-      (.. client getHttpConnectionManager getParams 
-          (setConnectionTimeout action/*default-connection-timeout*))
-      (.. get getParams (setSoTimeout action/*default-get-request-timeout*))
-      (try (let [status (.executeMethod client get)]
-             (if (= status HttpStatus/SC_OK)
-               (let [parsed (datacod.account/parse-page
-                             (duck/slurp* (.getResponseBodyAsStream get)))]
-                 (if (and (parsed :name) (parsed :link))
-                   (assoc ag :name (parsed :name) :link (parsed :link) :fail false)
-                   (do (log/info (str "Невозможно получить имя файла и ссылку с адреса " address))
-                       (action/die ag))))               
-               ((http-error-status-handler status action/die action/fail) ag)))
-           (catch ConnectTimeoutException e
-             (do (log/info (str "Время ожидания соединения с сервером истекло для " address))
-                 (action/fail ag)))
-           (catch InterruptedIOException e
-             (do (log/info (str "Время ожидания ответа сервера истекло для " address))
-                 (action/fail ag)))
-           (catch NoHttpResponseException e
-             (do (log/info (str "Сервер не отвечает на запрос для " address))
-                 (action/fail ag)))
-           (catch Exception e 
-             (do (log/info (str "Ошибка во время получения имени файла и ссылки с адреса " address))
-                 (action/fail ag)))
-           (finally (.releaseConnection get))))))
+(in-ns 'service.cod.data.action)
 
 (defn report [ag]
   (when-let [#^File report-file ((deref (related-env ag)) :report-file)]

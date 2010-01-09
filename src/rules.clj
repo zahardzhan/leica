@@ -5,8 +5,9 @@
        :author "Роман Захаров"}
   rules
   (:use :reload aux)
-  (:require :reload action datacod.action download.action download.env 
-            program download.program))
+  (:require :reload 
+            action download.action service.cod.data.download.action
+            download.env program download.program))
 
 (in-ns 'rules)
 
@@ -27,14 +28,11 @@
      download-rules
      [[#"http://dsv.data.cod.ru/\d{6}"
        (merge-with merge default-download-agent-control-part 
-                   {:actions {:get-link   datacod.action/get-link-and-name
-                              :get-tag    (partial action/get-tag 
-                                                   [#"files3?.dsv.data.cod.ru"
-                                                    #"files2.dsv.data.cod.ru"])}})]
+                   {:actions {:get-link service.cod.data.download.action/get-link-and-name
+                              :get-tag  (partial download.action/get-tag [#"files3?.dsv.data.cod.ru"
+                                                                          #"files2.dsv.data.cod.ru"])}})]
       [#"http://[\w\.]*data.cod.ru/\d+"
        (merge-with merge default-download-agent-control-part
-                   {:actions {:get-link   datacod.action/get-link-and-name}})]
-      [#"http://77.35.112.8[1234]/.+"
-       default-download-agent-control-part]
-      [#"http://dsvload.net/ftpupload/.+" 
-       default-download-agent-control-part]])
+                   {:actions {:get-link service.cod.data.download.action/get-link-and-name}})]
+      [#"http://77.35.112.8[1234]/.+" default-download-agent-control-part]
+      [#"http://dsvload.net/ftpupload/.+" default-download-agent-control-part]])

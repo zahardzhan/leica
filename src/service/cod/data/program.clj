@@ -3,11 +3,11 @@
 
 (ns #^{:doc "Программа агента, работающего с data.cod.ru."
        :author "Роман Захаров"}
-  datacod.program
+  service.cod.data.program
   (:use aux match env program)
   (:require action env.upload))
 
-(in-ns 'datacod.program)
+(in-ns 'service.cod.data.program)
 
 (defn reflex-upload
   "Простая рефлексная программа агента для заливки."

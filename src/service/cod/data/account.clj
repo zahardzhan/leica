@@ -3,7 +3,7 @@
 
 (ns #^{:doc "Работа с аккаунтом data.cod.ru."
        :author "Роман Захаров"}
-  datacod.account
+  service.cod.data.account
   (:require [clojure.contrib.duck-streams :as duck]
             [clojure.contrib.logging :as log])
   (:use aux match clojure.contrib.seq-utils)
@@ -22,7 +22,7 @@
            (org.htmlparser.tags Div LinkTag)
            (org.htmlparser.nodes TagNode)))
 
-(in-ns 'datacod.account)
+(in-ns 'service.cod.data.account)
 
 (defn datacod-account [domain login password]
   (when (and login password)
