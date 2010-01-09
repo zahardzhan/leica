@@ -32,7 +32,7 @@
 
     (is (and (not (tag-locked? c))
              (not (tag-locked? d))))
-    (locking-tag c (is (and (tag-locked? c)
+    (with-locked-tag c (is (and (tag-locked? c)
                             (not (tag-locked? d))
                             (tag-locked-in-env? d))))
     (is (and (not (tag-locked? c))

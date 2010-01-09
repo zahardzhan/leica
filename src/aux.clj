@@ -19,6 +19,8 @@
   ([x y] nil)
   ([x y & z] nil))
 
+(def no complement)
+
 (defn fn-and
   "Пересечение функций возвращает функцию, эквивалентную
   (fn [x] (and (f1 x) (f2 x) (f3 x) ...)"

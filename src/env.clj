@@ -35,7 +35,7 @@
           ;; Имя агента.
           :name name,
 
-           ;; Хэш с действия агента {:имя-действия действие},
+          ;; Хэш с действия агента {:имя-действия действие},
           ;; где действие - это функция от тела агента, возвращающая новое тело агента.
           :actions actions,
   
@@ -150,6 +150,9 @@
   [ag] (or (empty? (env ag))
            (every? dead? (env ag))))
 
+(defn terminate "Вызвать убийственное продолжение."
+  [ag] ((-> ag derefed :termination) ag))
+
 (defn tag "Таг агента."
   [ag] (-> ag derefed :tag))
 
@@ -170,7 +173,7 @@
            (some (fn-and (partial same tag ag) tag-locked? (constantly true))
                  (env ag))))
 
-(defmacro locking-tag [ag & body]
+(defmacro with-locked-tag [ag & body]
   `(when-not (tag-locked-in-env? ~ag)
      (lock-tag ~ag)
      (let [result# (do ~@body)]

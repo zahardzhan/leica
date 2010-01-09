@@ -76,8 +76,8 @@
         buffer-size 4096]
     (when (and link file)
       (.. client getHttpConnectionManager getParams 
-          (setConnectionTimeout action/default-connection-timeout))
-      (.. get getParams (setSoTimeout action/default-get-request-timeout))
+          (setConnectionTimeout default-connection-timeout))
+      (.. get getParams (setSoTimeout default-get-request-timeout))
 		(.setRequestHeader get "Range" (str "bytes=" (file-length file) \-))
       (try (.executeMethod client get)
            (let [content-length (.getResponseContentLength get)]
