@@ -9,7 +9,7 @@
 
 (in-ns 'action)
 
-(defn execute-action [ag action]
+(defn execute [ag action]
   (with-deref [ag]
     (let [fag (future (assoc (((ag :actions) action) ag)
                         :action (if (#{:die :fail :pass} action)
@@ -23,19 +23,24 @@
                               :else        "успешно")))
         fag))))
 
+(defn percept 
+  ([ag] (percept ag {}))
+  ([ag perception] (with-deref [ag] ((ag :program) ag perception))))
+
 (defn percept-and-execute
   ([ag] (percept-and-execute ag {}))
-  ([ag percept] (with-deref [ag]
-                  (let [action ((ag :program) ag percept)]
-                    (execute-action ag action)))))
+  ([ag perception] (with-deref [ag]
+                     (let [action (percept ag perception)]
+                       (execute ag action)))))
 
 (defn after
-  ([action ag] (= action (:action ag)))
+  ([action ag] (with-deref [ag] (= action (:action ag))))
   ([status action ag] 
-     (and (after action ag)
-          (case status
-                :successful (not (fail? ag))
-                :failed     (fail? ag)))))
+     (with-deref [ag]
+       (and (after action ag)
+            (case status
+                  :successful ((no fail?) ag)
+                  :failed     (fail? ag))))))
 
 (defn pass [ag]
   ag)

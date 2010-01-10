@@ -10,10 +10,10 @@
 (in-ns 'test.env)
 
 (deftest env-test
-  (let [a (default-agent :name 'mate :tag 1)
-        b (default-agent :name 'feed :tag 1)
-        c (default-agent :name 'kill :tag 2)
-        d (default-agent :name 'rept :tag 2)]
+  (let [a (default-agent nil :name 'mate :tag 1)
+        b (default-agent nil :name 'feed :tag 1)
+        c (default-agent nil :name 'kill :tag 2)
+        d (default-agent nil :name 'rept :tag 2)]
     (bind a b c d)
 
     (is (same env a b c d @a @b @c @d))

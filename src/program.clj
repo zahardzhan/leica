@@ -10,6 +10,6 @@
 
 (in-ns 'program)
 
-(defn missing [key] (comp no key derefed))
+(defn missing [key] (comp not key derefed))
 
 (def else (constantly true))

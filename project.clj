@@ -8,10 +8,6 @@
                  [commons-httpclient "3.1"]
                  [commons-logging "1.1.1"]
                  [org.htmlparser/htmlparser "1.6"]]
-  :source-path "src/clojure/"
-  :compile-path "classes/"
-  :library-path "lib/"
-  :test-path "test/clojure/"
   ;; :namespaces - a list of namespaces on which to perform AOT-compilation.
   ;; :main - specify a namespace to use as main for an executable jar.
   )
