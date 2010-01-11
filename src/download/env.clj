@@ -17,7 +17,7 @@
 (defnk download-agent
   "Агент для скачивания."  
   [rules line :working-path nil, :done-path nil, :progress-agent nil,
-   :debug false]
+   :termination empty-fn, :debug false]
   (let [[address, {actions :actions, program :program}]
         (match line rules {:action list})]
     (when (and address actions program)
@@ -33,6 +33,7 @@
         :type ::download-agent
         :actions actions
         :program program
+        :termination termination
         :debug debug))))
 
 (defn address [ag] (-> ag derefed :address))
@@ -60,7 +61,7 @@
 
 (defn next-alive-untagged-after [ag]
   (next-after-when (fn-and alive? (no tag) (partial same type-dispatch ag))
-                   ag (env ag)))
+                   (self ag) (env ag)))
 
 (defn alive-unfailed-with-same-tag [ag]
   (some (fn-and alive? (no fail?) (partial same tag ag) identity)
@@ -68,15 +69,11 @@
 
 (defn next-alive-with-same-tag-after [ag]
   (next-after-when (fn-and alive? (partial same tag ag))
-                   ag (env ag)))
-
-(defmacro run? [ag]
-  `(let [a# ~ag] 
-     (when-not (debug? a#) (run a#)))) ;; через bind ?
+                   (self ag) (env ag)))
 
 (defmethod done ::download-agent [ag]
-  (or (run? (or (alive-unfailed-with-same-tag ag)
-                (next-alive-with-same-tag-after ag)))
+  (or (when-not (debug? ag) (run (or (alive-unfailed-with-same-tag ag)
+                                     (next-alive-with-same-tag-after ag))))
       (when (termination? ag) (terminate ag)))
   ag)
 
@@ -85,20 +82,21 @@
 
         ((no tag) ag)
         (let [new-state (action/percept-and-execute ag)]
-          (cond (dead? new-state) (done ag)
-                (fail? new-state) (do (sleep ag timeout-after-fail)
-                                      (run? ag))
-                (tag new-state) (do (run? (next-alive-untagged-after ag))
-                                    (run? ag))
-                :else (run? ag))
+          (cond (dead? new-state) (done *agent*)
+                (fail? new-state) (do (sleep *agent* timeout-after-fail)
+                                      (when-not (debug? ag) (run *agent*)))
+                (tag new-state) (when-not (debug? ag)
+                                  (run (next-alive-untagged-after ag))
+                                  (run *agent*))
+                :else (when-not (debug? ag) (run *agent*)))
           new-state)
 
         (tag-locked-in-env? ag) ag
 
         :else (let [new-state 
                     (with-locked-tag ag (action/percept-and-execute ag))]
-                (cond (dead? new-state) (done ag)
-                      (fail? new-state) (do (sleep ag timeout-after-fail)
-                                            (done ag))
-                      :else (run? ag))
+                (cond (dead? new-state) (done *agent*)
+                      (fail? new-state) (do (sleep *agent* timeout-after-fail)
+                                            (done *agent*))
+                      :else (when-not (debug? ag) (run *agent*)))
                 new-state)))
