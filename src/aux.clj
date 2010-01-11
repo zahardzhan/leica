@@ -69,8 +69,9 @@
 (defn same [f & xs]
   (apply = (map f xs)))
 
-(defn file? [x]
-  (instance? java.io.File x))
+(defn file? [x] (and (instance? java.io.File x) (.isFile x)))
+
+(defn directory? [x] (and (instance? java.io.File x) (.isDirectory x)))
 
 (defn push [coll x]
   (concat coll (list x)))
