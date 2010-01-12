@@ -73,6 +73,8 @@
 
 (defn directory? [x] (and (instance? java.io.File x) (.isDirectory x)))
 
+(defn list-files [x] (and (directory? x) (seq (.listFiles x))))
+
 (defn push [coll x]
   (concat coll (list x)))
 

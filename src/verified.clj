@@ -53,16 +53,12 @@
       pathfile)))
 
 (defn upload-files [paths]
-  (let [[dirs files]  (->> paths
-                           (map path)
-                           (remove nil?)
-                           (split-with directory?))
-        files-in-dirs (->> dirs
-                           (map file-seq)
-                           (flatten)
-                           (remove directory?))]
-    (->> (concat files files-in-dirs)
-         (map upload-file)
-         (remove nil?)
-         (distinct)
-         (sort))))
+  (->> paths
+       (map path)
+       (map (fn-or (fn-and file? identity)
+                   (fn-and directory? (comp sort list-files))
+                   (constantly nil)))
+       (flatten)
+       (map upload-file)
+       (remove nil?)
+       (distinct)))
