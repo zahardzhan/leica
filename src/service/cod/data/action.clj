@@ -21,38 +21,38 @@
 
 (in-ns 'service.cod.data.action)
 
-(defn report [ag]
-  (when-let [#^File report-file ((deref (related-env ag)) :report-file)]
-    (duck/with-out-append-writer report-file
-      (print (format-link-for-forum (ag :name) (ag :address)))))
-  ag)
+;; (defn report [ag]
+;;   (when-let [#^File report-file ((deref (related-env ag)) :report-file)]
+;;     (duck/with-out-append-writer report-file
+;;       (print (format-link-for-forum (ag :name) (ag :address)))))
+;;   ag)
 
-(defn upload [ag]
-  (let [domain (((deref (related-env ag)) :account) :domain)
-        referer (str "http://" domain "/cabinet/upload/")
-        #^HttpClient client (new HttpClient)
-        #^PostMethod post (PostMethod. referer)
-        parts (into-array Part
-                          [(StringPart. "action" "file_upload")
-                           (FilePart.   "sfile"  (transliterate (ag :name))
-                                        (ag :file))
-                           (StringPart. "agree"  "1")
-                           (StringPart. "password" (or (ag :password) ""))
-                           (StringPart. "description" (or (ag :description) ""))])]
-    (datacod.account/with-auth client ((deref (related-env ag)) :account)
-      (.addRequestHeader post "Referer" referer)
-      (try (.setRequestEntity
-            post (MultipartRequestEntity. parts (.getParams post)))
-           (log/info (str "Начата загрузка " (ag :name)))
-           (if (= HttpStatus/SC_MOVED_TEMPORARILY (.executeMethod client post))
-             (if-let [location (.. post (getResponseHeader "Location") (getValue))]
-               (do (log/info (str "Закончена загрузка " (ag :name)))
-                   (assoc ag :address (str "http://" domain location) :fail false))
-               (do (log/info (str "Загрузка не может быть закончена " (ag :name)))
-                   (action/die ag)))
-             (do (log/info (str "Прервана загрузка " (ag :name)))
-                 (action/fail ag)))
-           (catch Exception exc
-             (do (log/info (str "Прервана загрузка " (ag :name)))
-                 (action/fail ag)))
-           (finally (.releaseConnection post))))))
+;; (defn upload [ag]
+;;   (let [domain (((deref (related-env ag)) :account) :domain)
+;;         referer (str "http://" domain "/cabinet/upload/")
+;;         #^HttpClient client (new HttpClient)
+;;         #^PostMethod post (PostMethod. referer)
+;;         parts (into-array Part
+;;                           [(StringPart. "action" "file_upload")
+;;                            (FilePart.   "sfile"  (transliterate (ag :name))
+;;                                         (ag :file))
+;;                            (StringPart. "agree"  "1")
+;;                            (StringPart. "password" (or (ag :password) ""))
+;;                            (StringPart. "description" (or (ag :description) ""))])]
+;;     (datacod.account/with-auth client ((deref (related-env ag)) :account)
+;;       (.addRequestHeader post "Referer" referer)
+;;       (try (.setRequestEntity
+;;             post (MultipartRequestEntity. parts (.getParams post)))
+;;            (log/info (str "Начата загрузка " (ag :name)))
+;;            (if (= HttpStatus/SC_MOVED_TEMPORARILY (.executeMethod client post))
+;;              (if-let [location (.. post (getResponseHeader "Location") (getValue))]
+;;                (do (log/info (str "Закончена загрузка " (ag :name)))
+;;                    (assoc ag :address (str "http://" domain location) :fail false))
+;;                (do (log/info (str "Загрузка не может быть закончена " (ag :name)))
+;;                    (action/die ag)))
+;;              (do (log/info (str "Прервана загрузка " (ag :name)))
+;;                  (action/fail ag)))
+;;            (catch Exception exc
+;;              (do (log/info (str "Прервана загрузка " (ag :name)))
+;;                  (action/fail ag)))
+;;            (finally (.releaseConnection post))))))

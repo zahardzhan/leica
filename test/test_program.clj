@@ -10,6 +10,7 @@
 (in-ns 'test-program)
 
 (deftest missing-test
-  (are [key val] (true? ((missing key) val))
-       :a {:a 1}
-       :a {:b 1}))
+  (is (false? ((missing :a) {:a 1})))
+  (is (false? ((missing :a) (atom {:a 1}))))
+  (is (true?  ((missing :a) {:b 1})))
+  (is (true?  ((missing :a) (atom {:b 1})))))

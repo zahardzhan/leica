@@ -2,4 +2,4 @@
 
 path=`ls -l $0`
 path=${path##* }
-java -jar ${path%/*}/leica.jar $*
+java -jar ${path%/*}/leica-standalone.jar $*

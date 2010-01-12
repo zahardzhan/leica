@@ -3,11 +3,11 @@
 
 (ns #^{:doc "Тесты вспомогательных функций."
        :author "Роман Захаров"}
-  test.aux
+  test-aux
   (:use :reload aux)
   (:use clojure.test))
 
-(in-ns 'test.aux)
+(in-ns 'test-aux)
 
 (deftest next-after-when-test
   (let [xs [{:a 1} {:a 0} {:a 2} {:b 1}]]
@@ -40,5 +40,3 @@
          :agent [a]
          :agent [a 1 2 3]
          :asdf  [@a])))
-
-(run-tests)
