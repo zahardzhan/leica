@@ -1,7 +1,7 @@
 META-INF/*
 classes/*
 lib/*
-leica.jar
+*.jar
 *.swp
 *~
 *#

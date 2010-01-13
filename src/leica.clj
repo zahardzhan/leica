@@ -81,7 +81,7 @@ leica [ключи] -a домен:почтовый@адрес:пароль [фа�
         (let [lines (duck/read-lines jobs-file)
               progress-agent (progress/console-progress-agent)
               terminator (fn [_] (System/exit 0))
-              agents (doseq [line lines]
+              agents (for [line lines]
                        (download.env/download-agent 
                         rules/download-rules line
                         :working-path working-path
