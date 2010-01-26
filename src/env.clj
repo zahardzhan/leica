@@ -116,10 +116,10 @@
 
 (defmethod bind nil [x] nil)
 (defmethod bind :agent [x y & zs]
-  (let [unified-env (union #{x y} (env x) (env y) (set zs) (apply union (map env zs)))
-        delayed-env (delay unified-env)]
-    (dosync (doseq [ag unified-env] (ref-set (@ag :env) delayed-env)))
-    unified-env))
+  (let [unified-env (delay (union #{x y} (env x) (env y) 
+                                  (set zs) (apply union (map env zs))))]
+    (dosync (doseq [ag @unified-env] (ref-set (@ag :env) unified-env)))
+    @unified-env))
 
 (defmethod run nil [ag] nil)
 (defmethod run :agent [ag] (send-off ag run))

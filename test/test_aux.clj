@@ -40,3 +40,14 @@
          :agent [a]
          :agent [a 1 2 3]
          :asdf  [@a])))
+
+;; user=>  (defprotocol p (foo [this]))
+;; p
+;; user=>  (deftype a [f] p (foo []))
+;; #'user/a
+;; user=> (foo (a nil))
+;; nil
+;; user=> (deftype a [f] :as this p (foo [] [this]))
+;; #'user/a
+;; user=> (foo (a nil))
+;; [#:a{:f nil}] 

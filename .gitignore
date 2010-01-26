@@ -1,6 +1,8 @@
 META-INF/*
+autodoc/*
 classes/*
 lib/*
+*.pro
 *.jar
 *.swp
 *~
