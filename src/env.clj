@@ -4,7 +4,7 @@
 (ns #^{:doc
        "Агенты и окружение.
 
-  Агенты здесь - это сущности, наблюдающие за своим окружением
+  Агенты - это сущности, наблюдающие за своим окружением
   и действующие в нём, при этом их поведение рационально в том смысле, что 
   они способны к пониманию и их действия всегда направлены на достижение 
   какой-либо цели.
@@ -104,8 +104,14 @@
 
   Окружение агента - это ссылка на задержанное множество всех агентов
   с которыми связан агент."
-  [state :type ::default-agent, :name nil, :actions {}, :program empty-fn, :tag nil,
-   :debug false, :termination empty-fn]
+  [state, 
+   :type ::default-agent, 
+   :name nil,
+   :actions {},
+   :program empty-fn,
+   :tag nil,
+   :debug false,
+   :termination empty-fn]
   (let [a (agent (merge state {:type type,
                                :name name,
                                :actions actions,

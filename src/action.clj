@@ -1,7 +1,10 @@
 ;;; -*- mode: clojure; coding: utf-8 -*-
 ;;; authors: Roman Zaharov <zahardzhan@gmail.com>
 
-(ns #^{:doc "Базовые действия агента."
+(ns #^{:doc "Действия агента.
+
+  Действие агента это функция одного аргумента, обычно с побочным эффектом, -
+  принимает тело агента и возвращает новое."
        :author "Роман Захаров"}
   action
   (:require [clojure.contrib.logging :as log])
