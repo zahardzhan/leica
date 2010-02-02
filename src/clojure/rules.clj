@@ -39,8 +39,8 @@
               {:actions 
                (merge (:actions *default-download-rule*)
                       {:get-link   datacod.action/get-link-and-name
-                       :get-tag    (partial action/get-tag [#"files3?.dsv.data.cod.ru"
-                                                            #"files2.dsv.data.cod.ru"])})})]
+                       :get-tag    (partial action/get-tag [#"files3?.*.data.cod.ru"
+                                                            #"files2.*.data.cod.ru"])})})]
       [#"http://[\w\.]*data.cod.ru/\d+"
        (merge *default-download-rule*
               {:actions
