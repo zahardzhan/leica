@@ -2,8 +2,8 @@
   :description "Multithreaded downloader for data.cod.ru"
   :url "http://github.com/zahardzhan/leica"
   :autodoc {:name "Лейка", :page-title "Документация API Лейки"}
-  :dependencies     [[org.clojure/clojure "1.1.0-master-SNAPSHOT"]
-                     [org.clojure/clojure-contrib "1.1.0-master-SNAPSHOT"]
+  :dependencies     [[org.clojure/clojure "1.2.0-master-SNAPSHOT"]
+                     [org.clojure/clojure-contrib "1.2.0-master-SNAPSHOT"]
                      [commons-codec "1.4"]
                      [commons-httpclient "3.1"]
                      [commons-logging "1.1.1"]

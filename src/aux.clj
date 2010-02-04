@@ -20,8 +20,10 @@
   ([x y] nil)
   ([x y & z] nil))
 
-(def #{:doc "Псевдоним функции complement."}
-     no complement)
+(defn no
+  "Более функциональная альтернатива функции complement."
+  ([f] (complement f))
+  ([f & xs] (apply (no f) xs)))
 
 (defn fn-and
   "Пересечение функций возвращает функцию эквивалентную (fn [x] (and (f x) (g x) ... )"
@@ -101,18 +103,15 @@
 
 (defmulti join-paths "Склеивает пути файлов."
   {:arglists '([file-path-1 file-path-2])}
-  #([(class %1) (class %2)]))
-;; (fn [p1 p2] [(class p1) (class p2)]))
+  (fn [p1 p2] [(class p1) (class p2)]))
 
-(defmethod join-paths [String String] [p1 p2]
-  (str (File. (File. p1) p2)))
-
-(defmethod join-paths [File String] [p1 p2]
-  (str (File. p1 p2)))
+(defmethod join-paths [String String] [p1 p2] (File. (File. p1) p2))
+(defmethod join-paths [File String] [p1 p2] (File. p1 p2))
+(defmethod join-paths [File File] [p1 p2] (File. p1 (.getName p2)))
 
 (defn move-file "Перемещает файл в указанную директорию."
   [#^File source-file #^File dest-dir]
-  (let [#^File dest-file (File. dest-dir (.getName source-file))]
+  (let [#^File dest-file (join-paths dest-dir source-file)]
     (when (. source-file renameTo dest-file)
       dest-file)))
 

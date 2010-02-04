@@ -11,8 +11,18 @@
 
 (in-ns 'download.test-env)
 
+(def adr-1 "http://dsv.data.cod.ru/624250")
+(def adr-2 "http://dsv.data.cod.ru/629381")
+
+(comment
+(def a (download-agent download-rules adr-2
+                       :working-path (File. "/home/haru/inbox/dsv")
+                       :done-path (File. "/home/haru/inbox/dsv/done")
+                       :debug false))
+)
+
 (deftest download-test
-  (let [a (download-agent download-rules "http://dsv.data.cod.ru/578008"
+  (let [a (download-agent download-rules adr-2
                           :working-path (File. "/home/haru/inbox/dsv")
                           :done-path (File. "/home/haru/inbox/dsv/done")
                           :debug true)]
@@ -32,16 +42,10 @@
 (deftest async-download-test
   (let [wp (File. "/home/haru/inbox/dsv")
         dp (File. "/home/haru/inbox/dsv/done")
-        ;; terminator (fn [ag] (doseq [a (env ag)]
-        ;;                       (is (action/after :successful :move-to-done-path a))
-        ;;                       (is (.exists (file a)))
-        ;;                       (when (.exists (file a)) (.delete (file a)))))
-        a (download-agent download-rules "http://dsv.data.cod.ru/578008"
-                          :working-path wp, :done-path dp;, :termination terminator
-                          )
-        b (download-agent download-rules "http://dsv.data.cod.ru/580124"
-                          :working-path wp, :done-path dp;, :termination terminator
-                          )]
+        a (download-agent download-rules adr-1
+                          :working-path wp, :done-path dp)
+        b (download-agent download-rules adr-2
+                          :working-path wp, :done-path dp)]
 
     (println "Тест асинхронного скачивания.")
     

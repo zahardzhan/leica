@@ -55,7 +55,7 @@
           (visitTag
            [tag]
            (cond (instance? LinkTag tag)
-                 (when-let [parsed-link (re-find #"http://files[\d\w\.]*data.cod.ru/.+"
+                 (when-let [parsed-link (re-find #"http://files[-\d\w\.]*data.cod.ru/.+"
                                               (.extractLink tag))]
                    (reset! link parsed-link))
 

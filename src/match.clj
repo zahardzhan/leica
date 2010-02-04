@@ -38,9 +38,3 @@
           (when-let [result (matcher (rule-pattern rule) sample)]
             (action result (rule-response rule))))
         rules))
-
-(defn case [sample & rules]
-  (loop [[pattern response & rs] rules]
-    (if (default-matcher pattern sample)
-      response
-      (when rs (recur rs)))))

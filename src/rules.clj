@@ -29,8 +29,8 @@
      [[#"http://dsv.data.cod.ru/\d{6}"
        (merge-with merge default-download-agent-control-part 
                    {:actions {:get-link service.cod.data.download.action/get-link-and-name
-                              :get-tag  (partial download.action/get-tag [#"files3?.dsv.data.cod.ru"
-                                                                          #"files2.dsv.data.cod.ru"])}})]
+                              :get-tag  (partial download.action/get-tag [#"files3?.dsv.*.data.cod.ru"
+                                                                          #"files2.dsv.*.data.cod.ru"])}})]
       [#"http://[\w\.]*data.cod.ru/\d+"
        (merge-with merge default-download-agent-control-part
                    {:actions {:get-link service.cod.data.download.action/get-link-and-name}})]

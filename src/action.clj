@@ -8,7 +8,7 @@
        :author "Роман Захаров"}
   action
   (:require [clojure.contrib.logging :as log])
-  (:use aux match env))
+  (:use aux env))
 
 (in-ns 'action)
 

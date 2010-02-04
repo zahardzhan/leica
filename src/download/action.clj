@@ -67,7 +67,7 @@
          (finally (.releaseConnection head)))))
 
 (defn get-file [{:as ag :keys [name, #^File working-path]}]
-  (assoc ag :file (new File (join-paths working-path name)) :fail false))
+  (assoc ag :file (join-paths working-path name) :fail false))
 
 (defn download [{:as ag :keys [name tag length progress-agent
                                #^URI link, #^File file]}]
