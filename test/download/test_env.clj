@@ -18,7 +18,7 @@
 (def a (download-agent download-rules adr-2
                        :working-path (File. "/home/haru/inbox/dsv")
                        :done-path (File. "/home/haru/inbox/dsv/done")
-                       :debug false))
+                       :debug true))
 )
 
 (deftest download-test
