@@ -3,11 +3,11 @@
 
 (ns #^{:doc "Тест базовых функций программы агента."
        :author "Роман Захаров"}
-  test-program
+  test.program
   (:use :reload aux match program)
   (:use clojure.test))
 
-(in-ns 'test-program)
+(in-ns 'test.program)
 
 (deftest missing-test
   (is (false? ((missing :a) {:a 1})))

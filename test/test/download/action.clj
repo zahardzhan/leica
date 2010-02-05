@@ -3,12 +3,12 @@
 
 (ns #^{:doc "Тесты действий агентов."
        :author "Роман Захаров"}
-  download.test-action
+  test.download.action
   (:use :reload aux action download.action)
   (:use clojure.test)
   (:import (org.apache.commons.httpclient URI)))
 
-(in-ns 'download.test-action)
+(in-ns 'test.download.action)
 
 (deftest get-name-test
   (let [ag {:type :env/default-agent}]

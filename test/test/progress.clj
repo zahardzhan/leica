@@ -3,11 +3,11 @@
 
 (ns #^{:doc "Тесты отображения прогресса."
        :author "Роман Захаров"}
-  test-progress
+  test.progress
   (:use :reload progress)
   (:use clojure.test))
 
-(in-ns 'test-progress)
+(in-ns 'test.progress)
 
 ;; (deftest console-progress-test
 ;;   (let [a (console-progress-agent)]

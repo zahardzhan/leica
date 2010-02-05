@@ -3,12 +3,12 @@
 
 (ns #^{:doc "Тесты проверки файловых путей."
        :author "Роман Захаров"}
-  test-verified
+  test.verified
   (:use :reload aux verified)
   (:use clojure.test)
   (:import java.io.File))
 
-(in-ns 'test-verified)
+(in-ns 'test.verified)
 
 ;; (upload-files ["/home/haru/etc/emacs/rc"
 ;;                "/home/haru/inbox/dsv"

@@ -3,11 +3,11 @@
 
 (ns #^{:doc "Тесты окружения."
        :author "Роман Захаров"}
-  test-leica
+  test.leica
   (:use :reload aux match)
   (:use clojure.test))
 
-(in-ns 'test-leica)
+(in-ns 'test.leica)
 
 ;; (deftest upload-test
 ;;   (let [account (datacod.account/datacod-account

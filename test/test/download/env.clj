@@ -3,13 +3,13 @@
 
 (ns #^{:doc "Тест скачивающих агентов."
        :author "Роман Захаров"}
-  download.test-env
+  test.download.env
   (:use :reload aux match env download.env rules)
   (:use clojure.test clojure.set clojure.contrib.seq-utils)
   (:require :reload action)
   (:import java.io.File))
 
-(in-ns 'download.test-env)
+(in-ns 'test.download.env)
 
 (def adr-1 "http://dsv.data.cod.ru/624250")
 (def adr-2 "http://dsv.data.cod.ru/629381")

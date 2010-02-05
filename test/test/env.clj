@@ -3,11 +3,11 @@
 
 (ns #^{:doc "Тесты окружения."
        :author "Роман Захаров"}
-  test-env
+  test.env
   (:use :reload aux match env)
   (:use clojure.test clojure.set clojure.contrib.seq-utils))
 
-(in-ns 'test-env)
+(in-ns 'test.env)
 
 (deftest env-test
   (let [a (default-agent nil :name 'mate :tag 1)
