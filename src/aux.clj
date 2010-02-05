@@ -21,25 +21,30 @@
   ([x y & z] nil))
 
 (defn no
-  "Более функциональная альтернатива функции complement."
+  "Более функциональная альтернатива функции complement.
+
+  Например: (no f) => (complement f)
+            (no f x y ...) => ((complement f) x y ...)"
   ([f] (complement f))
   ([f & xs] (apply (no f) xs)))
 
 (defn fn-and
-  "Пересечение функций возвращает функцию эквивалентную (fn [x] (and (f x) (g x) ... )"
+  "Пересечение функций возвращает функцию эквивалентную 
+  (fn [x ...] (and (f x ...) (g x ...) ...))"
   [f & fs]
   (if-not fs
     f
     (let [chain (apply fn-and fs)]
-      (fn [x] (and (f x) (chain x))))))
+      (fn [& xs] (and (apply f xs) (apply chain xs))))))
 
 (defn fn-or
-  "Объединение функций возвращает функцию эквивалентную (fn [x] (or (f x) (g x) ... )"
+  "Объединение функций возвращает функцию эквивалентную
+  (fn [x ...] (or (f x ...) (g x ...) ...))"
   [f & fs]
   (if-not fs
     f
     (let [chain (apply fn-or fs)]
-      (fn [x] (or (f x) (chain x))))))
+      (fn [& xs] (or (apply f xs) (apply chain xs))))))
 
 (defn agent? "Является ли аргумент агентом языка Clojure."
   [x] (instance? clojure.lang.Agent x))

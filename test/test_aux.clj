@@ -22,12 +22,16 @@
        "Twitter в ударе" "Twitter v udare"))
 
 (deftest fn-test
-  (are [f fs arg result] (= result ((apply f fs) arg))
-       fn-and [pos? even?]  2 true
-       fn-and [pos? even?] -2 false
+  (are [f fs arg result] (= (apply (apply f fs) arg)
+                            result)
 
-       fn-or  [pos? even?] -2 true
-       fn-or  [pos? odd?]  -2 false))
+       fn-and [pos? even?]  [2] true
+       fn-and [pos? even?] [-2] false
+       fn-and [+ *]        [1 3] 3
+
+       fn-or  [pos? even?] [-2] true
+       fn-or  [pos? odd?]  [-2] false
+       fn-or  [+ *]        [1 3] 4))
 
 (deftest with-deref-test  
   (let [x (atom 1), y (agent 2), z (delay 3)]
@@ -40,14 +44,3 @@
          :agent [a]
          :agent [a 1 2 3]
          :asdf  [@a])))
-
-;; user=>  (defprotocol p (foo [this]))
-;; p
-;; user=>  (deftype a [f] p (foo []))
-;; #'user/a
-;; user=> (foo (a nil))
-;; nil
-;; user=> (deftype a [f] :as this p (foo [] [this]))
-;; #'user/a
-;; user=> (foo (a nil))
-;; [#:a{:f nil}] 
