@@ -149,29 +149,29 @@
 (defmulti bind 
   "Связывает агентов и их окружения в единое окружение."
   {:arglists '([ag1 ag2 & ags])}
-  agent-or-type-dispatch)
+  (fn-or agent-dispatch type-dispatch))
 
 (defmulti run
   "Запуск агента на выполнение действий.
   При включенном в окружении дебаге агент выполнит только одно действие."
   {:arglists '([ag])}
-  agent-or-type-dispatch)
+  (fn-or agent-dispatch type-dispatch))
 
 (defmulti done
   "Процедура вызывается самим агентом, когда он заканчивает свою работу."
   {:arglists '([ag])}
-  agent-or-type-dispatch)
+  (fn-or agent-dispatch type-dispatch))
 
 (defmulti stop
   "Останавливает выполнение действий агентом."
   {:arglists '([ag])}
-  agent-or-type-dispatch)
+  (fn-or agent-dispatch type-dispatch))
 
 (defmulti sleep
   "Усыпляет агента на некоторое время (в миллисекундах).
   Агент может спать только до/после выполнения действия."
   {:arglists '([ag])}
-  agent-or-type-dispatch)
+  (fn-or agent-dispatch type-dispatch))
 
 (defn self 
   "Возвращает самого агента, в качестве аргумента принимается агент или тело агента."

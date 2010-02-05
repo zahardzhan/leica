@@ -57,21 +57,22 @@
 (defmacro with-deref 
   "Разыменовывает и захватывает идентификаторы ссылок/агентов/санок/обещаний, и
   выполняет код тела макроса."
-  [[ref & refs] & body] 
-     (cond (not ref)        `(do ~@body)
-           (not (seq refs)) `(let [~ref (derefed ~ref)]
-                               (do ~@body))
-           (seq refs)       `(let [~ref (derefed ~ref)]
-                               (with-deref [~@refs] ~@body))))
+  [[ref & refs] & body]
+  (if ref
+    `(let [~ref (derefed ~ref)]
+       (with-deref ~refs ~@body))
+    `(do ~@body)))
+
+(defn agent-dispatch
+  "Диспетчер возвращает ключ :agent, если первый аргумент - агент."
+  ([] nil)
+  ([a & xs] (when (agent? a) :agent)))
 
 (defn type-dispatch
-  "Диспетчер по ключу типа (:type) в хэше внутри агента."
-  [a & xs] (when a (:type (derefed a))))
-
-(defn agent-or-type-dispatch
-  "Диспетчер по агенту/типу агента. Если аргумент - агент, возвращает ключ :agent,
-  если аргумент - тело агента (хэш) - возвращает ключ типа."
-  [a & xs] (when a (if (agent? a) :agent (type-dispatch a))))
+  "Диспетчер возвращает тип первого аргумента.
+  Для хэша тип - значение для ключа :type. Если аргумент ссылка - разыменовывает."
+  ([] nil)
+  ([x & xs] (:type (derefed x))))
 
 (defn same
   "Возвращает true, если функция f для всех аргументов xs возвращает

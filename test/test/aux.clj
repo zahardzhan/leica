@@ -33,14 +33,25 @@
        fn-or  [pos? odd?]  [-2] false
        fn-or  [+ *]        [1 3] 4))
 
-(deftest with-deref-test  
-  (let [x (atom 1), y (agent 2), z (delay 3)]
+(deftest with-deref-test
+  (let [x (atom 1), y (agent 2), z (delay 3), w 4]
+    (is (= nil (with-deref [])))
+    (is (= 1 (with-deref [x] x)))
+    (is (= [1 4] (with-deref [x y w] [x w])))
     (is (= [1 2 3] (with-deref [x y z] [x y z])))))
 
-(deftest agent-or-type-dispatch-test
-  (let [a (agent {:type :asdf})]
-    (are [x y] (= x (apply agent-or-type-dispatch y))
-         nil    [nil]
-         :agent [a]
-         :agent [a 1 2 3]
-         :asdf  [@a])))
+(deftest dispatch-test
+  (let [a (agent {:type :TYPE})]
+    (are [dispatch result x] (= (apply dispatch x) result)
+         agent-dispatch    nil      []
+         agent-dispatch    :agent   [a]
+         agent-dispatch    :agent   [a 1 2 3]
+
+         type-dispatch     nil      []
+         type-dispatch     :TYPE    [@a]
+         type-dispatch     :TYPE    [a]
+         type-dispatch     :TYPE    [a 1 2 3]
+
+         (fn-or agent-dispatch type-dispatch) nil      []
+         (fn-or agent-dispatch type-dispatch) :agent   [a 1 2 3]
+         (fn-or agent-dispatch type-dispatch) :TYPE    [@a 1 2 3])))
