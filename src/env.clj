@@ -30,6 +30,16 @@
 
 (in-ns 'env)
 
+(defn precedence "Каким по-счёту был создан агент."
+  [ag] (-> ag derefed :precedence))
+
+(defn- increasing-precedence? [x y]
+  (< (precedence x) (precedence y)))
+
+(defn- sorted-set-by-inc-precedence [& xs] 
+  (apply (partial sorted-set-by (comparator increasing-precedence?)) xs))
+
+(let [precedence-counter (atom 0)]
 (defnk default-agent
   "Конструктор базового агента, основа для всех производных агентов.
   Тело агента представляет собой простой хэш с ключами-свойствами.
@@ -90,6 +100,10 @@
   Метка режима отладки агента, в котором агент действует пошагово,
   тоесть run не вызывает рекурсивно сама себя.
 
+  :precedence
+
+  Каким по счёту был создан этот агент.
+
   :termination continuation
 
   Продолжение вызываемое после смерти всех агентов и остановки окружения.
@@ -103,7 +117,8 @@
   :env (ref (delay #{sorted set of agents}))
 
   Окружение агента - это ссылка на задержанное множество всех агентов
-  с которыми связан агент."
+  с которыми связан агент. Множество агентов в окружении сортируется по
+  порядку создания агентов."
   [state, 
    :type ::default-agent, 
    :name nil,
@@ -123,12 +138,13 @@
                                :tag tag,
                                :tag-lock (atom false),
                                :debug debug,
+                               :precedence (swap! precedence-counter inc)
                                :termination termination}))]
     (send a assoc 
           :self (delay a)
-          :env (ref (delay #{a})))
+          :env (ref (delay (sorted-set-by-inc-precedence a))))
     (await a)
-    a))
+    a)))
 
 (defmulti bind 
   "Связывает агентов и их окружения в единое окружение."
@@ -166,8 +182,9 @@
 
 (defmethod bind nil [x] nil)
 (defmethod bind :agent [x y & zs]
-  (let [unified-env (delay (union #{x y} (env x) (env y) 
-                                  (set zs) (apply union (map env zs))))]
+  (let [unified-env (delay (union (env x) (env y) (apply union (map env zs))
+                                  (sorted-set-by-inc-precedence x y)
+                                  (apply sorted-set-by-inc-precedence zs)))]
     (dosync (doseq [ag @unified-env] (ref-set (@ag :env) unified-env)))
     @unified-env))
 
