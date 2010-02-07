@@ -4,7 +4,7 @@
 (ns #^{:doc "Вспомогательные функции."
        :author "Роман Захаров"}
   aux
-  (:use match clojure.contrib.seq-utils)
+  (:use clojure.contrib.seq-utils)
   (:import java.io.File))
 
 ;; Задержаные вычисления не печатаются
@@ -142,19 +142,18 @@
   (str "[b]" name "[/b]: [url=" address "]" address "[/url]" \newline))
 
 (defn http-error-status-handler [status fatal not-fatal]
-  (match status
-         [[#{400  ;; Bad Request - неправильный запрос
-             403  ;; Forbidden - нет доступа
-             404  ;; Not Found - документ не найден
-             405  ;; Method Not Allowed
-             406  ;; None Acceptable
-             409  ;; Conflict
-             410} ;; Gone
-           fatal]
-          [#{408  ;; Request Timeout
-             500  ;; Internal Server Error - внутренняя ошибка скрипта
-             501  ;; Not Implemented
-             502  ;; Bad Gateway
-             503  ;; Service Unavailable
-             504} ;; Gateway Timeout
-           not-fatal]]))
+  (case status
+        400 fatal     ;; Bad Request - неправильный запрос
+        403 fatal     ;; Forbidden - нет доступа
+        404 fatal     ;; Not Found - документ не найден
+        405 fatal     ;; Method Not Allowed
+        406 fatal     ;; None Acceptable
+        409 fatal     ;; Conflict
+        410 fatal     ;; Gone
+        408 not-fatal ;; Request Timeout
+        500 not-fatal ;; Internal Server Error - внутренняя ошибка скрипта
+        501 not-fatal ;; Not Implemented
+        502 not-fatal ;; Bad Gateway
+        503 not-fatal ;; Service Unavailable
+        504 not-fatal ;; Gateway Timeout
+        ))

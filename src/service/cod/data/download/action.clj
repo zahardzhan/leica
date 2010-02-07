@@ -9,6 +9,7 @@
             [clojure.contrib.logging :as log])
   (:use aux action env [service.cod.data.account :only (parse-page)])
   (:import (java.io File InterruptedIOException)
+           java.net.ConnectException
            (org.apache.commons.httpclient 
             URI HttpClient HttpStatus ConnectTimeoutException NoHttpResponseException)
            (org.apache.commons.httpclient.methods GetMethod)
@@ -30,6 +31,9 @@
                  (do (log/info (str "Невозможно получить имя файла и ссылку с адреса " address))
                      (die ag))))               
              ((http-error-status-handler status die fail) ag)))
+         (catch ConnectException e
+           (do (log/info (str "Время ожидания соединения с сервером истекло для " address))
+               (fail ag)))
          (catch ConnectTimeoutException e
            (do (log/info (str "Время ожидания соединения с сервером истекло для " address))
                (fail ag)))

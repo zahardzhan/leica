@@ -9,8 +9,7 @@
        :author "Роман Захаров"}
   leica
   (:gen-class)
-  (:use aux match
-        clojure.contrib.command-line)
+  (:use aux clojure.contrib.command-line)
   (:require env download.env progress rules verified
             [clojure.contrib.duck-streams :as duck]
             [clojure.contrib.logging :as log])
@@ -81,13 +80,14 @@ leica [ключи] -a домен:почтовый@адрес:пароль [фа�
         (let [lines (duck/read-lines jobs-file)
               progress-agent (progress/console-progress-agent)
               terminator (fn [_] (System/exit 0))
-              agents (for [line lines]
-                       (download.env/download-agent 
-                        rules/download-rules line
-                        :working-path working-path
-                        :done-path (when (not= working-path done-path) done-path)
-                        :progress-agent progress-agent
-                        :termination terminator))]
+              agents (filter env/env-agent?
+                             (for [line lines]
+                               (download.env/download-agent 
+                                rules/download-rules line
+                                :working-path working-path
+                                :done-path (when (not= working-path done-path) done-path)
+                                :progress-agent progress-agent
+                                :termination terminator)))]
           (apply env/bind agents)
           (dorun (map env/run agents)))))))
     

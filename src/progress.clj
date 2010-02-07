@@ -4,7 +4,7 @@
 (ns #^{:doc "Агент для отображения прогресса (состояния процесса)."
        :author "Роман Захаров"}
   progress
-  (:use aux match [clojure.contrib seq-utils test-is]))
+  (:use aux [clojure.contrib seq-utils test-is]))
 
 (in-ns 'progress)
 
@@ -18,12 +18,12 @@
 (defmulti show-progress
   "Показать прогресс загрузочного агента.
    Формат сообщения: {:tag :name :progress :total :time}"
-  agent-or-type-dispatch)
+  (fn-or agent-dispatch type-dispatch))
 
 (defmulti hide-progress
   "Спрятать показ прогресса загрузочного агента.
    Формат сообщения: tag"
-  agent-or-type-dispatch)
+  (fn-or agent-dispatch type-dispatch))
 
 (defmethod show-progress :agent [ag message]
   (send-off ag show-progress message))

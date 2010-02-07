@@ -6,7 +6,7 @@
   service.cod.data.account
   (:require [clojure.contrib.duck-streams :as duck]
             [clojure.contrib.logging :as log])
-  (:use aux match clojure.contrib.seq-utils)
+  (:use aux clojure.contrib.seq-utils)
   (:import (java.io File FileOutputStream)
 
            (org.apache.commons.httpclient URI HttpClient HttpStatus)

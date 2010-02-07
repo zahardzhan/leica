@@ -4,7 +4,7 @@
 (ns #^{:doc "Агент для скачивания."
        :author "Роман Захаров"}
   download.env
-  (:use env aux match clojure.contrib.def)
+  (:use env aux clojure.contrib.def)
   (:require :reload action)
   (:import java.io.File)
   (:import org.apache.commons.httpclient.URI))
@@ -20,10 +20,12 @@
   [rules line :working-path nil, :done-path nil, :progress-agent nil,
    :termination empty-fn, :debug false]
   (let [[address, {actions :actions, program :program}]
-        (match line rules {:action list})]
+        (some (fn [[pattern rule]] (when-let [address (re-find pattern line)]
+                                     (list address rule)))
+              rules)]
     (when (and address actions program)
       (default-agent
-        {:address (URI. address) ; адрес задания
+        {:address (URI. address)        ; адрес задания
          :link nil      ; прямая ссылка на файл, который нужно скачать
          :file nil      ; файл в который сохраняется скачанное
          :length nil    ; размер файла, что нужно скачать

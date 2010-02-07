@@ -4,7 +4,7 @@
 (ns #^{:doc "Программа агента, работающего с data.cod.ru."
        :author "Роман Захаров"}
   service.cod.data.program
-  (:use aux match env program)
+  (:use aux env)
   ;; (:require action upload))
   )
 

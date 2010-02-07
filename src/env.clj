@@ -26,9 +26,12 @@
 
        :author "Роман Захаров"}
   env
-  (:use aux match clojure.set clojure.contrib.def))
+  (:use aux clojure.set clojure.contrib.def))
 
 (in-ns 'env)
+
+(defn env-agent? "Является ли аргумент агентом для окружения."
+  [x] (isa? (type-dispatch x) ::default-agent))
 
 (defn precedence "Каким по-счёту был создан агент."
   [ag] (-> ag derefed :precedence))
@@ -146,11 +149,6 @@
     (await a)
     a)))
 
-(defmulti bind 
-  "Связывает агентов и их окружения в единое окружение."
-  {:arglists '([ag1 ag2 & ags])}
-  (fn-or agent-dispatch type-dispatch))
-
 (defmulti run
   "Запуск агента на выполнение действий.
   При включенном в окружении дебаге агент выполнит только одно действие."
@@ -175,17 +173,21 @@
 
 (defn self 
   "Возвращает самого агента, в качестве аргумента принимается агент или тело агента."
-  [ag] (-> ag derefed :self))
+  [ag] (when (env-agent? ag) (-> ag derefed :self)))
 
 (defn env "Возвращает множество агентов в окружении этого агента (включая его самого)."
-  [ag] (-> ag derefed :env deref force))
+  [ag] (when (env-agent? ag) (-> ag derefed :env deref force)))
 
-(defmethod bind nil [x] nil)
-(defmethod bind :agent [x y & zs]
-  (let [unified-env (delay (union (env x) (env y) (apply union (map env zs))
+(defn bind 
+  "Связывает агентов и их окружения в единое окружение."
+  [x y & zs]
+  (when-not (empty? (filter (no env-agent?) (concat [x] [y] zs)))
+    (throw (Throwable. "Один из аргументов - не агент для окружения.")))
+  (let [
+        unified-env (delay (union (env x) (env y) (apply union (map env zs))
                                   (sorted-set-by-inc-precedence x y)
                                   (apply sorted-set-by-inc-precedence zs)))]
-    (dosync (doseq [ag @unified-env] (ref-set (@ag :env) unified-env)))
+    (dosync (doseq [ag @unified-env :when (env-agent? ag)] (ref-set (@ag :env) unified-env)))
     @unified-env))
 
 (defmethod run nil [ag] nil)

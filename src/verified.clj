@@ -17,6 +17,7 @@
 (defmethod path nil [p] nil)
 
 (defmethod path String [p]
+  ;; Джава не раскрывает путь типа ~
   (let [pathfile (File. (.getCanonicalPath (File. p)))]
     (when (.exists pathfile) pathfile)))
 

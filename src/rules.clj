@@ -7,7 +7,7 @@
   (:use :reload aux)
   (:require :reload 
             action download.action service.cod.data.download.action
-            download.env program download.program))
+            download.env download.program))
 
 (in-ns 'rules)
 

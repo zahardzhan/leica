@@ -5,8 +5,9 @@
        :author "Роман Захаров"}
   download.action
   (:require progress [clojure.contrib.logging :as log])
-  (:use action aux env match)
+  (:use action aux env)
   (:import (java.io File FileOutputStream InputStream InterruptedIOException)
+           java.net.ConnectException
            (org.apache.commons.httpclient 
             URI HttpClient HttpStatus
             ConnectTimeoutException NoHttpResponseException)
@@ -52,6 +53,9 @@
                (do (log/info (str "Невозможно узнать размер файла " name))
                    (die ag)))
              ((http-error-status-handler status die fail) ag)))
+         (catch ConnectException e
+           (do (log/info (str "Время ожидания соединения с сервером истекло для " name))
+               (fail ag)))
          (catch ConnectTimeoutException e
            (do (log/info (str "Время ожидания соединения с сервером истекло для " name))
                (fail ag)))
@@ -106,6 +110,9 @@
                        (.flush output)
                        (log/info (str "Закончена загрузка " name))
                        (assoc ag :fail false)))))
+           (catch ConnectException e
+             (do (log/info (str "Время ожидания соединения с сервером истекло для " name))
+                 (fail ag)))
            (catch ConnectTimeoutException e
              (do (log/info (str "Время ожидания соединения с сервером истекло для " name))
                  (fail ag)))
