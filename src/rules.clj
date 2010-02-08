@@ -26,13 +26,10 @@
 (def #^{:doc "Таблица действий агентов для скачивания для конкретных адресов.
   Хосты упорядочены от частного к общему."}
      download-rules
-     [[#"http://dsv.data.cod.ru/\d{6}"
+     [[#"http://[\w\.\-]*.data.cod.ru/\d+"
        (merge-with merge default-download-agent-control-part 
                    {:actions {:get-link service.cod.data.download.action/get-link-and-name
                               :get-tag  (partial download.action/get-tag [#"files3?.dsv.*.data.cod.ru"
                                                                           #"files2.dsv.*.data.cod.ru"])}})]
-      [#"http://[\w\.]*data.cod.ru/\d+"
-       (merge-with merge default-download-agent-control-part
-                   {:actions {:get-link service.cod.data.download.action/get-link-and-name}})]
       [#"http://77.35.112.8[1234]/.+" default-download-agent-control-part]
       [#"http://dsvload.net/ftpupload/.+" default-download-agent-control-part]])

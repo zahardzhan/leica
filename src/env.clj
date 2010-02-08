@@ -180,15 +180,16 @@
 
 (defn bind 
   "Связывает агентов и их окружения в единое окружение."
-  [x y & zs]
-  (when-not (empty? (filter (no env-agent?) (concat [x] [y] zs)))
-    (throw (Throwable. "Один из аргументов - не агент для окружения.")))
-  (let [
-        unified-env (delay (union (env x) (env y) (apply union (map env zs))
-                                  (sorted-set-by-inc-precedence x y)
-                                  (apply sorted-set-by-inc-precedence zs)))]
-    (dosync (doseq [ag @unified-env :when (env-agent? ag)] (ref-set (@ag :env) unified-env)))
-    @unified-env))
+  ([] nil)
+  ([x] (env x))
+  ([x y & zs]
+     (when-not (empty? (filter (no env-agent?) (concat [x] [y] zs)))
+       (throw (Throwable. "Один из аргументов - не агент для окружения.")))
+     (let [unified-env (delay (union (env x) (env y) (apply union (map env zs))
+                                     (sorted-set-by-inc-precedence x y)
+                                     (apply sorted-set-by-inc-precedence zs)))]
+       (dosync (doseq [ag @unified-env :when (env-agent? ag)] (ref-set (@ag :env) unified-env)))
+       @unified-env)))
 
 (defmethod run nil [ag] nil)
 (defmethod run :agent [ag] (send-off ag run))
