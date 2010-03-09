@@ -1,5 +1,0 @@
-#!/bin/sh
-
-path=`ls -l $0`
-path=${path##* }
-java -jar ${path%/*}/leica-standalone.jar $*
