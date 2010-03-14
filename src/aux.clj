@@ -11,6 +11,8 @@
 (defmethod print-method clojure.lang.Delay [x w]
   ((get-method print-method Object) x w))
 
+(def agent? (partial instance? clojure.lang.Agent))
+
 (defn same [f & xs]
   (apply = (map f xs)))
 
