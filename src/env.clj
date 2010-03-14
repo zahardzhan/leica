@@ -1,224 +1,96 @@
 ;;; -*- mode: clojure; coding: utf-8 -*-
 ;;; authors: Roman Zaharov <zahardzhan@gmail.com>
 
-(ns #^{:doc
-       "Агенты и окружение.
-
-  Агенты - это сущности, наблюдающие за своим окружением
-  и действующие в нём, при этом их поведение рационально в том смысле, что 
-  они способны к пониманию и их действия всегда направлены на достижение 
-  какой-либо цели.
-
-  Агенты конструируются из базового агента с помощью конструктора
-  default-agent, который вызывается внутри конструкторов производных агентов.
-
-  После создания агент должен быть связан с другими агентами в окружение.
-  Связывание производится процедурой bind, все агенты синхронно ссылаются
-  на новое, общее для связываемых агентов окружение, которое представляет
-  собой задержанное множество связанных агентов. Задержка используется
-  из-за самореферентности агентов в окружении.
-
-  После связывания агенты запускаются процедурой run. Многие агенты 
-  взаимоблокирующие, поэтому они сами определяют порядок, в котором они будут
-  выполнять дейтсвия.
-
-  Процедура stop останавливает выполнение действий агентом (не реализовано)."
-
-       :author "Роман Захаров"}
-  env
-  (:use aux clojure.set clojure.contrib.def))
+(ns env
+  (:use aux clojure.set)
+  (:require fn))
 
 (in-ns 'env)
 
-(defn env-agent? "Является ли аргумент агентом для окружения."
-  [x] (isa? (type-dispatch x) ::default-agent))
+(declare precedence)
 
-(defn precedence "Каким по-счёту был создан агент."
-  [ag] (-> ag derefed :precedence))
+(defn- become [x y] y)
 
-(defn- increasing-precedence? [x y]
-  (< (precedence x) (precedence y)))
+(defn- set-sorted-by-precedence [& xs] 
+  (apply (partial sorted-set-by 
+                  (comparator (fn [x y] (with-deref [x y]
+                                          (< (precedence x) (precedence y))))))
+         xs))
 
-(defn- sorted-set-by-inc-precedence [& xs] 
-  (apply (partial sorted-set-by (comparator increasing-precedence?)) xs))
+(defn agent? [x]
+  (isa? (type (derefed x)) ::agent))
 
 (let [precedence-counter (atom 0)]
-(defnk default-agent
-  "Конструктор базового агента, основа для всех производных агентов.
-  Тело агента представляет собой простой хэш с ключами-свойствами.
-  Для расширения тела агента конструктор принимает аргумент 
+  (defn make-agent
+    [& state] 
+    {:post [agent?]}
+    (let [state (apply array-map state)
+          subtype (or (:subtype state) ::agent)
+          state (dissoc state :subtype)]
+      (agent state
+             :validator map?
+             :meta {:subtype subtype
+                    :precedence (swap! precedence-counter inc)
+                    :env (ref (delay {:agents (set-sorted-by-precedence)}))
+                    :alive true
+                    :fail false}))))
 
-  state - хэш с дополнительными свойставами, который сливается с
-    основным телом агента.
+(defn precedence [ag]
+  (derefed ag meta :precedence))
 
-  Остальные ключи конструктора определяют некоторые базовы свойства агента.
+(defn this [ag] {:pre  [agent?]
+                 :post [agent?]}
+  (derefed ag :this force))
 
-  :type key
+(defn env [ag] {:pre  [agent?]
+                :post [map?]}
+  (derefed ag :env deref force))
 
-  Тип агента по-умолчанию это ::default-agent, все производные типы 
-  агентов должны наследовать от этого типа.
+(defn bind
+  {:post [map?]}
+  ([x] {:pre [agent?]}
+     (env x))
+  ([x y & zs] {:pre  [(agent? x) (agent? y) (every? agent? zs)]}
+     (let [unified (delay {:agents (union (:agents (env x))
+                                          (:agents (env y))
+                                          (apply union (map (comp :agents env) zs))
+                                          (set-sorted-by-precedence x y)
+                                          (apply set-sorted-by-precedence zs))})]
+       (dosync (doseq [ag (derefed unified :agents) :when (agent? ag)]
+                 (ref-set (@ag :env) unified)))
+       (force unified))))
 
-  :name string
+(defn percept [ag] {:pre  [agent?]
+                    :post [fn?]}
+  (with-deref [ag]
+    ((:program ag) ag)))
 
-  Имя агента.
-
-  :actions {:action-name function}
-  
-  Хэш с действиями агента. Каждое действие - это функция от тела агента, 
-  возвращающая новое тело агента.
-
-  :action :action-name-key
-
-  Последнее действие агента. После создания агента это :create.
-
-  :percept nil
-
-  Последнее восприятие агента.
-
-  :program function
-
-  Агент находится в некотором состоянии и управляется агентской программой.
-  Простая агентная программа может быть описана как функция, которая отображает 
-  результат восприятия на дальнейшее действие.
-
-  :alive boolean
- 
-  Определяет, жив ли агент.
-
-  :fail boolean
-
-  Определяет, удачно ли агент выполнил предыдущее действие.
-
-  :tag nil
-
-  Идентификатор по которому определяются общие с другими агентами ресурсы.
-
-  :tag-lock (atom boolean)
-
-  Атомн-замок тага (atom bool) запирается на время выполнения агентом
-  действия, блокирующего действия агентов с тем же тагом.
-
-  :debug debug
-
-  Метка режима отладки агента, в котором агент действует пошагово,
-  тоесть run не вызывает рекурсивно сама себя.
-
-  :precedence
-
-  Каким по счёту был создан этот агент.
-
-  :termination continuation
-
-  Продолжение вызываемое после смерти всех агентов и остановки окружения.
-
-  Также, в теле агента есть две особых ссылки:
-
-  :self (delay agent)
-
-  Задержанная ссылка на самого себя.
-
-  :env (ref (delay #{sorted set of agents}))
-
-  Окружение агента - это ссылка на задержанное множество всех агентов
-  с которыми связан агент. Множество агентов в окружении сортируется по
-  порядку создания агентов."
-  [state, 
-   :type ::default-agent, 
-   :name nil,
-   :actions {},
-   :program empty-fn,
-   :tag nil,
-   :debug false,
-   :termination empty-fn]
-  (let [a (agent (merge state {:type type,
-                               :name name,
-                               :actions actions,
-                               :action :create,
-                               :percept nil,
-                               :program program,
-                               :alive true,
-                               :fail false,
-                               :tag tag,
-                               :tag-lock (atom false),
-                               :debug debug,
-                               :precedence (swap! precedence-counter inc)
-                               :termination termination}))]
-    (send a assoc 
-          :self (delay a)
-          :env (ref (delay (sorted-set-by-inc-precedence a))))
-    (await a)
-    a)))
+(defn execute [action] {:pre  [fn?]
+                        :post [agent?]}
+  (deref (future (action))))
 
 (defmulti run
-  "Запуск агента на выполнение действий.
-  При включенном в окружении дебаге агент выполнит только одно действие."
-  {:arglists '([ag])}
-  (fn-or agent-dispatch type-dispatch))
-
-(defmulti done
-  "Процедура вызывается самим агентом, когда он заканчивает свою работу."
-  {:arglists '([ag])}
-  (fn-or agent-dispatch type-dispatch))
-
-(defmulti stop
-  "Останавливает выполнение действий агентом."
-  {:arglists '([ag])}
-  (fn-or agent-dispatch type-dispatch))
-
-(defmulti sleep
-  "Усыпляет агента на некоторое время (в миллисекундах).
-  Агент может спать только до/после выполнения действия."
-  {:arglists '([ag])}
-  (fn-or agent-dispatch type-dispatch))
-
-(defn self 
-  "Возвращает самого агента, в качестве аргумента принимается агент или тело агента."
-  [ag] (when (env-agent? ag) (-> ag derefed :self)))
-
-(defn env "Возвращает множество агентов в окружении этого агента (включая его самого)."
-  [ag] (when (env-agent? ag) (-> ag derefed :env deref force)))
-
-(defn bind 
-  "Связывает агентов и их окружения в единое окружение."
-  ([] nil)
-  ([x] (env x))
-  ([x y & zs]
-     (when-not (empty? (filter (no env-agent?) (concat [x] [y] zs)))
-       (throw (Throwable. "Один из аргументов - не агент для окружения.")))
-     (let [unified-env (delay (union (env x) (env y) (apply union (map env zs))
-                                     (sorted-set-by-inc-precedence x y)
-                                     (apply sorted-set-by-inc-precedence zs)))]
-       (dosync (doseq [ag @unified-env :when (env-agent? ag)] (ref-set (@ag :env) unified-env)))
-       @unified-env)))
+  {:arglists '([ag])} 
+  type)
 
 (defmethod run nil [ag] nil)
-(defmethod run :agent [ag] (send-off ag run))
-(defmethod run ::default-agent [ag] ag)
 
-(defmethod done nil [ag] nil)
-(defmethod done :agent [ag] (send-off ag done))
-(defmethod done ::default-agent [ag] ag)
+(defmethod run clojure.lang.Agent [ag] 
+  (send-off ag run))
 
-(defmethod sleep nil [ag] nil)
-(defmethod sleep :agent [ag millis] (send-off ag sleep millis))
-(defmethod sleep ::default-agent [ag millis] (Thread/sleep millis) ag)
+(defmethod run ::agent [ag]
+  (with-deref [ag]
+    (execute (percept ag))))
 
-(defn run-env "Запустить агентов в окружении."
-  [ag] (doseq [a (env ag)] (run a)))
+(defn fail? [ag]
+  (derefed ag :fail))
 
-(defn alive? "Жив ли агент?"
-  [ag] (-> ag derefed :alive))
+(defn alive? [ag]
+  (derefed ag :alive))
 
-(defn dead? "Мёртв ли агент?" 
-  [ag] (-> ag derefed :alive not))
+(defn dead? (fn/not alive?))
 
-(defn fail? "Агент провалил предыдущее действие?"
-  [ag] (-> ag derefed :fail))
-
-(defn debug? "Окружение/агент в режиме дебага?"
-  [ag] (-> ag derefed :debug))
-
-(defn termination? "Агент и его окружение закончило свою работу?"
+(defn termination?
   [ag] (or (empty? (env ag))
            (every? dead? (env ag))))
 
@@ -256,3 +128,43 @@
      (let [result# (do ~@body)]
        (unlock-tag ~ag)
        result#)))
+
+;;; -*- mode: clojure; coding: utf-8 -*-
+;;; authors: Roman Zaharov <zahardzhan@gmail.com>
+
+(ns #^{:doc "Действия агента.
+
+  Действие агента это функция одного аргумента, обычно с побочным эффектом, -
+  принимает тело агента и возвращает новое."
+       :author "Роман Захаров"}
+  action
+  (:require [clojure.contrib.logging :as log])
+  (:use aux env))
+
+(in-ns 'action)
+
+
+(defn after
+  "Возвращает true, если последнее действие агента совпадает с аргументом.
+  В качестве статуса `status' можно указать ключи:
+  :successful - удачное завершение последнего действия и
+  :failed - неудачное. "
+  ([action ag] (with-deref [ag] (= action (:action ag))))
+  ([status action ag] 
+     (with-deref [ag]
+       (and (after action ag)
+            (case status
+                  :successful ((no fail?) ag)
+                  :failed     (fail? ag))))))
+
+(defn pass [ag] ag)
+
+(defn ok [ag] (assoc ag :fail false))
+ 
+(defn fail [ag] (assoc ag :fail true))
+ 
+(defn die [ag] (assoc ag :alive false))
+
+(defn sleep [ag millis]
+  (with-return ag
+    (Thread/sleep millis)))

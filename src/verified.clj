@@ -17,7 +17,7 @@
 (defmethod path nil [p] nil)
 
 (defmethod path String [p]
-  ;; Джава не раскрывает путь типа ~
+  ;; XXX Джава не раскрывает путь типа ~
   (let [pathfile (File. (.getCanonicalPath (File. p)))]
     (when (.exists pathfile) pathfile)))
 
@@ -57,7 +57,7 @@
   (->> paths
        (map path)
        (map (fn-or (fn-and file? identity)
-                   (fn-and directory? (comp sort list-files))
+                   (fn-and directory? (comp sort files-in-directory))
                    (constantly nil)))
        (flatten)
        (map upload-file)
