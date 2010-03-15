@@ -2,9 +2,14 @@
 ;;; authors: Roman Zaharov <zahardzhan@gmail.com>
 
 (ns download.agent
-  (:use :reload agent aux)
-  (:require [clojure.contrib.logging :as log]) ;; progress
-  (:require :reload service.cod.data.download.action)
+  (:use :reload aux agent)
+  (:require :reload service.download)
+  (:require [clojure.contrib.logging :as log]
+            [clojure.contrib.duck-streams :as duck]
+
+            service.cod.data.account
+            ;; progress
+            )
   (:import (java.io File
                     FileOutputStream
                     InputStream
@@ -27,55 +32,209 @@
 
 (in-ns 'download.agent)
 
-(derive ::download :env/dummy)
+(defmulti ok       :service)
+(defmulti fail     :service)
+(defmulti die      :service)
+(defmulti pass     :service)
+(defmulti sleep    :service)
+(defmulti get-link :service)
+(defmulti get-name :service)
+(defmulti get-tag  :service)
+(defmulti get-file :service)
+(defmulti get-length :service)
+(defmulti move-to-done-path :service)
+(defmulti download :service)
+
+(def connection-timeout 30000)
+(def head-request-timeout 30000)
+(def get-request-timeout 30000)
+
+(derive ::download :agent/dummy)
 
 (defn download-agent
   [& state]
-  (let [{:keys [rules line working-path done-path]}
-        (apply hash-map state)]
-    (make-agent :aim ::download
-                ;; :address (URI. address)
-                :link nil
-                :file nil
-                :length nil
-                :working-path working-path
-                :done-path done-path)))
+  (let [{:keys [line services working-path done-path]
+         :or {services service.download/services}}
+        (apply hash-map state)
 
-(def default-download-agent-control-part 
-     {:program download.program/reflex
-      :actions {:get-link          download.action/get-link
-                :get-name          download.action/get-name
-                :get-tag           download.action/get-tag
-                :get-file          download.action/get-file
-                :get-length        download.action/get-length
-                :move-to-done-path download.action/move-to-done-path
-                :download          download.action/download
-                :die               action/die
-                :pass              action/pass}})
+        {:keys [service address]}
+        (service.download/match-service line services)]
 
-(def #^{:doc "Таблица действий агентов для скачивания для конкретных адресов.
-  Хосты упорядочены от частного к общему."}
-     download-rules
-     [[#"http://[\w\.\-]*.data.cod.ru/\d+"
-       (merge-with merge default-download-agent-control-part 
-                   {:actions {:get-link service.cod.data.download.action/get-link-and-name
-                              :get-tag  (partial download.action/get-tag [#"files3?.dsv.*.data.cod.ru"
-                                                                          #"files2.dsv.*.data.cod.ru"])}})]
-      [#"http://77.35.112.8[1234]/.+" default-download-agent-control-part]
-      [#"http://dsvload.net/ftpupload/.+" default-download-agent-control-part]])
+    (when (and service address)
+      (make-agent :aim ::download
+                  :alive true
+                  :fail false
+                  :service service
+                  :services (delay services)
+                  :address (URI. address)
+                  :working-path working-path
+                  :done-path done-path
+                  :link nil
+                  :file nil
+                  :length nil))))
 
+;; (download-agent :line "asdf http://dsv-region.data.cod.ru/8324 asdf")
 
-(defn pass [ag] ag)
+(defmethod pass :default [ag] ag)
 
-(defn ok [ag] (assoc ag :fail false))
+(defmethod ok :default [ag]
+  (assoc ag :fail false))
  
-(defn fail [ag] (assoc ag :fail true))
+(defmethod fail :default [ag]
+  (assoc ag :fail true))
  
-(defn die [ag] (assoc ag :alive false))
+(defmethod die :default [ag]
+  (assoc ag :alive false))
 
-(defn sleep [ag millis]
+(defmethod sleep :default [ag millis]
   (with-return ag
     (Thread/sleep millis)))
+
+(defmethod get-link :default [{:as ag :keys [#^URI address]}]
+  (ok (assoc ag :link address)))
+
+(defmethod get-link :service.download/cod.data [{:as ag :keys [#^URI address]}]
+  (let [#^HttpClient client (new HttpClient)
+        #^GetMethod get (GetMethod. (str address))]
+    (.. client getHttpConnectionManager getParams 
+        (setConnectionTimeout connection-timeout))
+    (.. get getParams (setSoTimeout get-request-timeout))
+    (try (let [status (.executeMethod client get)]
+           (if (= status HttpStatus/SC_OK)
+             (let [parsed (service.cod.data.account/parse-page
+                           (duck/slurp* (.getResponseBodyAsStream get)))]
+               (if (and (parsed :name) (parsed :link))
+                 (assoc ag :name (parsed :name) :link (parsed :link) :fail false)
+                 (do (log/info (str "Невозможно получить имя файла и ссылку с адреса " address))
+                     (die ag))))               
+             (die ag)))
+         (catch ConnectException e
+           (do (log/info (str "Время ожидания соединения с сервером истекло для " address))
+               (fail ag)))
+         (catch ConnectTimeoutException e
+           (do (log/info (str "Время ожидания соединения с сервером истекло для " address))
+               (fail ag)))
+         (catch InterruptedIOException e
+           (do (log/info (str "Время ожидания ответа сервера истекло для " address))
+               (fail ag)))
+         (catch NoHttpResponseException e
+           (do (log/info (str "Сервер не отвечает на запрос для " address))
+               (fail ag)))
+         (catch Exception e 
+           (do (log/info (str "Ошибка во время получения имени файла и ссылки с адреса " address))
+               (fail ag)))
+         (finally (.releaseConnection get)))))
+ 
+(defmethod get-name :default [{:as ag :keys [#^URI link]}]
+  (ok (assoc ag :name (second (re-find #"/([^/]+)$" (.getPath link))))))
+
+(defmethod move-to-done-path :default [{:as ag :keys [#^File file, #^File done-path]}]
+  (if-let [moved (move-file file done-path)]
+    (ok (assoc ag :file moved))
+    (die ag)))
+
+(defmethod get-tag :default [{:as ag :keys [#^URI link services]}]
+  (let [tags (@services :tags)
+        tag (or (when tags
+                  (some (fn [tag] (when (re-find tag (str link))
+                                    (str tag)))
+                        (if (sequential? tags) tags [tags])))
+                (.getHost link))]
+    (if tag
+      (ok (assoc ag :tag tag))
+      (die ag))))
+
+(defmethod get-length :default [{:as ag :keys [name, #^URI link]}]
+  (let [#^HttpClient client (new HttpClient)
+        #^HeadMethod head (HeadMethod. (str link))]
+    (.. client getHttpConnectionManager getParams 
+        (setConnectionTimeout connection-timeout))
+    (.. head getParams (setSoTimeout head-request-timeout))
+    (try (let [status (.executeMethod client head)]
+           (.releaseConnection head)
+           (if (= status HttpStatus/SC_OK)
+             (if-let [length (.. head (getResponseHeader "Content-Length") (getValue))]
+               (assoc ag :length (Integer/parseInt length) :fail false)
+               (do (log/info (str "Невозможно узнать размер файла " name))
+                   (die ag)))
+             (die ag)))
+         (catch ConnectException e
+           (do (log/info (str "Время ожидания соединения с сервером истекло для " name))
+               (fail ag)))
+         (catch ConnectTimeoutException e
+           (do (log/info (str "Время ожидания соединения с сервером истекло для " name))
+               (fail ag)))
+         (catch InterruptedIOException e
+           (do (log/info (str "Время ожидания ответа сервера истекло для " name))
+               (fail ag)))
+         (catch NoHttpResponseException e
+           (do (log/info (str "Сервер не отвечает на запрос для " name))
+               (fail ag)))
+         (catch Exception e 
+           (do (log/info (str "Ошибка во время получения длины файла " name))
+               (fail ag)))
+         (finally (.releaseConnection head)))))
+
+(defmethod get-file :default [{:as ag :keys [name, #^File working-path]}]
+  (ok (assoc ag :file (join-paths working-path name))))
+
+(defmethod download :default [{:as ag :keys [name tag length progress-agent
+                                             #^URI link, #^File file]}]
+  (let [#^HttpClient client (new HttpClient)
+        #^GetMethod get (GetMethod. (str link))
+        buffer-size 4096]
+    (when (and link file)
+      (.. client getHttpConnectionManager getParams 
+          (setConnectionTimeout connection-timeout))
+      (.. get getParams (setSoTimeout get-request-timeout))
+		(.setRequestHeader get "Range" (str "bytes=" (file-length file) \-))
+      (try (.executeMethod client get)
+           (let [content-length (.getResponseContentLength get)]
+             (cond (not content-length)
+                   (do (log/info (str "Невозможно проверить файл перед загрузкой " name))
+                       (fail ag))
+
+                   (not= content-length (- length (file-length file)))
+                   (do (log/info (str "Размер получаемого файла не совпадает с ожидаемым " name))
+                       (fail ag))
+
+                   :else
+                   (with-open [#^InputStream input (.getResponseBodyAsStream get)
+                               #^FileOutputStream output (FileOutputStream. file true)]
+                     (log/info (str "Начата загрузка " name))
+                     (let [buffer (make-array Byte/TYPE buffer-size)]
+                       (loop [progress (file-length file)]
+                         (let [size (.read input buffer)]
+                           (when (pos? size)
+                             (do (.write output buffer 0 size)
+                                 (when progress-agent
+                                   (send progress-agent progress/show-progress
+                                         {:tag tag :name name :progress progress
+                                          :total length :time nil}))
+                                 (recur (+ progress size))))))
+                       (.flush output)
+                       (log/info (str "Закончена загрузка " name))
+                       (assoc ag :fail false)))))
+           (catch ConnectException e
+             (do (log/info (str "Время ожидания соединения с сервером истекло для " name))
+                 (fail ag)))
+           (catch ConnectTimeoutException e
+             (do (log/info (str "Время ожидания соединения с сервером истекло для " name))
+                 (fail ag)))
+           (catch InterruptedIOException e
+             (do (log/info (str "Время ожидания ответа сервера истекло для " name))
+                 (fail ag)))
+           (catch NoHttpResponseException e
+             (do (log/info (str "Сервер не отвечает на запрос для " name))
+                 (fail ag)))
+           (catch Exception e 
+             (do (log/info (str "Ошибка во время загрузки " name))
+                 (fail ag)))
+           (finally (when progress-agent
+                      (send progress-agent progress/hide-progress tag))
+                    (.releaseConnection get))))))
+
+
 
 (defn lock-tag "Замкнуть (заблокировать) таг агента."
   [ag] (reset! (tag-lock ag) true))
@@ -123,113 +282,7 @@
 (def default-get-request-timeout 60000)
 (def default-connection-timeout 50000)
 
-(defn get-link [{:as ag :keys [#^URI address]}]
-  (assoc ag :link address :fail false))
- 
-(defn get-name [{:as ag :keys [#^URI link]}]
-  (assoc ag :name (second (re-find #"/([^/]+)$" (.getPath link))) :fail false))
 
-(defn move-to-done-path [{:as ag :keys [#^File file, #^File done-path]}]
-  (if-let [moved (move-file file done-path)]
-    (assoc ag :file moved :fail false)
-    (die ag)))
-
-(defn get-tag [pattern {:as ag :keys [#^URI link]}]
-  (when-let [tag (or (if pattern
-                       (some (fn [pat] (if (re-find pat (str link)) (str pat)))
-                             (if (sequential? pattern) pattern [pattern])))
-                     (.getHost link))]
-    (assoc ag :tag tag :fail false)))
-
-(defn get-length [{:as ag :keys [name, #^URI link]}]
-  (let [#^HttpClient client (new HttpClient)
-        #^HeadMethod head (HeadMethod. (str link))]
-    (.. client getHttpConnectionManager getParams 
-        (setConnectionTimeout default-connection-timeout))
-    (.. head getParams (setSoTimeout default-head-request-timeout))
-    (try (let [status (.executeMethod client head)]
-           (.releaseConnection head)
-           (if (= status HttpStatus/SC_OK)
-             (if-let [length (.. head (getResponseHeader "Content-Length") (getValue))]
-               (assoc ag :length (Integer/parseInt length) :fail false)
-               (do (log/info (str "Невозможно узнать размер файла " name))
-                   (die ag)))
-             ((http-error-status-handler status die fail) ag)))
-         (catch ConnectException e
-           (do (log/info (str "Время ожидания соединения с сервером истекло для " name))
-               (fail ag)))
-         (catch ConnectTimeoutException e
-           (do (log/info (str "Время ожидания соединения с сервером истекло для " name))
-               (fail ag)))
-         (catch InterruptedIOException e
-           (do (log/info (str "Время ожидания ответа сервера истекло для " name))
-               (fail ag)))
-         (catch NoHttpResponseException e
-           (do (log/info (str "Сервер не отвечает на запрос для " name))
-               (fail ag)))
-         (catch Exception e 
-           (do (log/info (str "Ошибка во время получения длины файла " name))
-               (fail ag)))
-         (finally (.releaseConnection head)))))
-
-(defn get-file [{:as ag :keys [name, #^File working-path]}]
-  (assoc ag :file (join-paths working-path name) :fail false))
-
-(defn download [{:as ag :keys [name tag length progress-agent
-                               #^URI link, #^File file]}]
-  (let [#^HttpClient client (new HttpClient)
-        #^GetMethod get (GetMethod. (str link))
-        buffer-size 4096]
-    (when (and link file)
-      (.. client getHttpConnectionManager getParams 
-          (setConnectionTimeout default-connection-timeout))
-      (.. get getParams (setSoTimeout default-get-request-timeout))
-		(.setRequestHeader get "Range" (str "bytes=" (file-length file) \-))
-      (try (.executeMethod client get)
-           (let [content-length (.getResponseContentLength get)]
-             (cond (not content-length)
-                   (do (log/info (str "Невозможно проверить файл перед загрузкой " name))
-                       (fail ag))
-
-                   (not= content-length (- length (file-length file)))
-                   (do (log/info (str "Размер получаемого файла не совпадает с ожидаемым " name))
-                       (fail ag))
-
-                   :else
-                   (with-open [#^InputStream input (.getResponseBodyAsStream get)
-                               #^FileOutputStream output (FileOutputStream. file true)]
-                     (log/info (str "Начата загрузка " name))
-                     (let [buffer (make-array Byte/TYPE buffer-size)]
-                       (loop [progress (file-length file)]
-                         (let [size (.read input buffer)]
-                           (when (pos? size)
-                             (do (.write output buffer 0 size)
-                                 (when progress-agent
-                                   (send progress-agent progress/show-progress
-                                         {:tag tag :name name :progress progress
-                                          :total length :time nil}))
-                                 (recur (+ progress size))))))
-                       (.flush output)
-                       (log/info (str "Закончена загрузка " name))
-                       (assoc ag :fail false)))))
-           (catch ConnectException e
-             (do (log/info (str "Время ожидания соединения с сервером истекло для " name))
-                 (fail ag)))
-           (catch ConnectTimeoutException e
-             (do (log/info (str "Время ожидания соединения с сервером истекло для " name))
-                 (fail ag)))
-           (catch InterruptedIOException e
-             (do (log/info (str "Время ожидания ответа сервера истекло для " name))
-                 (fail ag)))
-           (catch NoHttpResponseException e
-             (do (log/info (str "Сервер не отвечает на запрос для " name))
-                 (fail ag)))
-           (catch Exception e 
-             (do (log/info (str "Ошибка во время загрузки " name))
-                 (fail ag)))
-           (finally (when progress-agent
-                      (send progress-agent progress/hide-progress tag))
-                    (.releaseConnection get))))))
 
 (defn next-alive-untagged-after [ag]
   (next-after-when (fn-and alive? (no tag) (partial same type-dispatch ag))
