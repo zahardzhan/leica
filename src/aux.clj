@@ -13,6 +13,8 @@
 
 (def agent? (partial instance? clojure.lang.Agent))
 
+(def ref? (partial instance? clojure.lang.Ref))
+
 (defn same [f & xs]
   (apply = (map f xs)))
 

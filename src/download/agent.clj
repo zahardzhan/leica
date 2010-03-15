@@ -45,6 +45,7 @@
 (defmulti move-to-done-path :service)
 (defmulti download :service)
 
+(def timeout-after-fail 3000)
 (def connection-timeout 30000)
 (def head-request-timeout 30000)
 (def get-request-timeout 30000)
@@ -90,10 +91,10 @@
   (with-return ag
     (Thread/sleep millis)))
 
-(defmethod get-link :default [{:as ag :keys [#^URI address]}]
+(defmethod get-link :default [{:as ag :keys [address]}]
   (ok (assoc ag :link address)))
 
-(defmethod get-link :service.download/cod.data [{:as ag :keys [#^URI address]}]
+(defmethod get-link :service.download/cod.data [{:as ag :keys [address]}]
   (let [#^HttpClient client (new HttpClient)
         #^GetMethod get (GetMethod. (str address))]
     (.. client getHttpConnectionManager getParams 
@@ -125,7 +126,7 @@
                (fail ag)))
          (finally (.releaseConnection get)))))
  
-(defmethod get-name :default [{:as ag :keys [#^URI link]}]
+(defmethod get-name :default [{:as ag :keys [link]}]
   (ok (assoc ag :name (second (re-find #"/([^/]+)$" (.getPath link))))))
 
 (defmethod move-to-done-path :default [{:as ag :keys [#^File file, #^File done-path]}]
@@ -133,7 +134,7 @@
     (ok (assoc ag :file moved))
     (die ag)))
 
-(defmethod get-tag :default [{:as ag :keys [#^URI link services]}]
+(defmethod get-tag :default [{:as ag :keys [link services]}]
   (let [tags (@services :tags)
         tag (or (when tags
                   (some (fn [tag] (when (re-find tag (str link))
@@ -144,7 +145,7 @@
       (ok (assoc ag :tag tag))
       (die ag))))
 
-(defmethod get-length :default [{:as ag :keys [name, #^URI link]}]
+(defmethod get-length :default [{:as ag :keys [name link]}]
   (let [#^HttpClient client (new HttpClient)
         #^HeadMethod head (HeadMethod. (str link))]
     (.. client getHttpConnectionManager getParams 
@@ -175,11 +176,10 @@
                (fail ag)))
          (finally (.releaseConnection head)))))
 
-(defmethod get-file :default [{:as ag :keys [name, #^File working-path]}]
+(defmethod get-file :default [{:as ag :keys [name working-path]}]
   (ok (assoc ag :file (join-paths working-path name))))
 
-(defmethod download :default [{:as ag :keys [name tag length progress-agent
-                                             #^URI link, #^File file]}]
+(defmethod download :default [{:as ag :keys [name tag length link file]}]
   (let [#^HttpClient client (new HttpClient)
         #^GetMethod get (GetMethod. (str link))
         buffer-size 4096]
@@ -278,11 +278,6 @@
     (.exists (File. (done-path ag) (.getName (file ag))))))
 
 
-(def default-head-request-timeout 60000)
-(def default-get-request-timeout 60000)
-(def default-connection-timeout 50000)
-
-
 
 (defn next-alive-untagged-after [ag]
   (next-after-when (fn-and alive? (no tag) (partial same type-dispatch ag))
@@ -302,9 +297,9 @@
       (when (termination? ag) (terminate ag)))
   ag)
 
-(def timeout-after-fail 3000)
 
-(defmethod run ::download [ag]
+
+(defn run [ag]
   (let [reflex (fn [ag]
                  (cond (dead? ag)             :pass
                        (no :address ag)  :die
