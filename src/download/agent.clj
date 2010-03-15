@@ -3,13 +3,13 @@
 
 (ns download.agent
   (:use :reload aux agent)
-  (:require :reload service.download)
   (:require [clojure.contrib.logging :as log]
             [clojure.contrib.duck-streams :as duck]
 
+            fn
+
             service.cod.data.account
-            ;; progress
-            )
+            progress)
   (:import (java.io File
                     FileOutputStream
                     InputStream
@@ -32,6 +32,50 @@
 
 (in-ns 'download.agent)
 
+(defn match-service [line services]
+  (some (fn [[service {address-pattern :address}]]
+          (when-let [address (re-find address-pattern line)]
+            {:service service :address address}))
+        services))
+
+(def *services*
+     {::cod.data
+      {:address #"http://[\w\.\-]*.data.cod.ru/\d+"
+       :tags #{#"files3?.dsv.*.data.cod.ru" #"files2.dsv.*.data.cod.ru"}}
+
+      ::77.35.112.8*
+      {:address #"http://77.35.112.8[1234]/.+"}
+
+      ::dsvload.net.ftpupload
+      {:address #"http://dsvload.net/ftpupload/.+"}})
+
+(derive ::download :agent/dummy)
+
+(defn download-agent
+  [& state]
+  (let [{:keys [line services working-path done-path]
+         :or {services *services*}}
+        (apply hash-map state)
+
+        {:keys [service address]}
+        (when line (match-service line services))]
+
+    (when (and service address)
+      (make-agent :aim ::download
+                  :service service
+                  :services (delay services)
+                  :address (URI. address)
+                  :working-path working-path
+                  :done-path done-path
+                  :alive true
+                  :fail false
+                  :link nil
+                  :file nil
+                  :length nil))))
+
+(defmulti run  type)
+(defmulti stop type)
+
 (defmulti ok       :service)
 (defmulti fail     :service)
 (defmulti die      :service)
@@ -45,36 +89,10 @@
 (defmulti move-to-done-path :service)
 (defmulti download :service)
 
-(def timeout-after-fail 3000)
-(def connection-timeout 30000)
+(def timeout-after-fail   3000)
+(def connection-timeout   30000)
 (def head-request-timeout 30000)
-(def get-request-timeout 30000)
-
-(derive ::download :agent/dummy)
-
-(defn download-agent
-  [& state]
-  (let [{:keys [line services working-path done-path]
-         :or {services service.download/services}}
-        (apply hash-map state)
-
-        {:keys [service address]}
-        (service.download/match-service line services)]
-
-    (when (and service address)
-      (make-agent :aim ::download
-                  :alive true
-                  :fail false
-                  :service service
-                  :services (delay services)
-                  :address (URI. address)
-                  :working-path working-path
-                  :done-path done-path
-                  :link nil
-                  :file nil
-                  :length nil))))
-
-;; (download-agent :line "asdf http://dsv-region.data.cod.ru/8324 asdf")
+(def get-request-timeout  30000)
 
 (defmethod pass :default [ag] ag)
 
@@ -94,7 +112,7 @@
 (defmethod get-link :default [{:as ag :keys [address]}]
   (ok (assoc ag :link address)))
 
-(defmethod get-link :service.download/cod.data [{:as ag :keys [address]}]
+(defmethod get-link ::cod.data [{:as ag :keys [address]}]
   (let [#^HttpClient client (new HttpClient)
         #^GetMethod get (GetMethod. (str address))]
     (.. client getHttpConnectionManager getParams 
@@ -179,7 +197,8 @@
 (defmethod get-file :default [{:as ag :keys [name working-path]}]
   (ok (assoc ag :file (join-paths working-path name))))
 
-(defmethod download :default [{:as ag :keys [name tag length link file]}]
+(defmethod download :default [{:as ag :keys [name tag length link file
+                                             progress-agent]}]
   (let [#^HttpClient client (new HttpClient)
         #^GetMethod get (GetMethod. (str link))
         buffer-size 4096]
@@ -234,109 +253,108 @@
                       (send progress-agent progress/hide-progress tag))
                     (.releaseConnection get))))))
 
+(defn out-of-space-on-work-path? [{:keys [working-path length file]}]
+  (when (and working-path length file)
+    (< (.getUsableSpace working-path)
+       (- length (file-length file)))))
 
+(defn out-of-space-on-done-path? [{:keys [done-path length]}]
+  (when (and done-path length)
+    (< (.getUsableSpace done-path) length)))
 
-(defn lock-tag "Замкнуть (заблокировать) таг агента."
-  [ag] (reset! (tag-lock ag) true))
+(defn fully-loaded? [{:keys [length file]}]
+  (when (and length file)
+    (<= length (file-length file))))
 
-(defn unlock-tag "Снять замок (блокировку) с тага агента." 
-  [ag] (reset! (tag-lock ag) false))
-
-(defn tag-locked-in-env? 
-  "Замкнут (заблокирован) ли хоть один агент в окружении с таким же тагом?"
-  [ag] (or (tag-locked? ag)
-           (some (fn-and (partial same tag ag) tag-locked? (constantly true))
-                 (env ag))))
-
-(defmacro with-locked-tag
-  "Замыкает (блокирует) таг агента на время выполнения им действия, блокирующего
-  действия других агентов в окружении с таким же тагом."
-  [ag & body]
-  `(when-not (tag-locked-in-env? ~ag)
-     (lock-tag ~ag)
-     (let [result# (do ~@body)]
-       (unlock-tag ~ag)
-       result#)))
-
-
-
-(defn out-of-space-on-work-path? [ag]
-  (when (and (working-path ag) (length ag) (file ag))
-    (< (.getUsableSpace (working-path ag))
-       (- (length ag) (file-length (file ag))))))
-
-(defn out-of-space-on-done-path? [ag]
-  (when (and (done-path ag) (length ag))
-    (< (.getUsableSpace (done-path ag)) (length ag))))
-
-(defn fully-loaded? [ag]
-  (when (and (length ag) (file ag))
-    (<= (length ag) (file-length (file ag)))))
-
-(defn already-on-done-path? [ag]
-  (when (and (done-path ag) (file ag))
-    (.exists (File. (done-path ag) (.getName (file ag))))))
-
-
+(defn already-on-done-path? [{:keys [done-path file]}]
+  (when (and done-path file)
+    (.exists (File. done-path (.getName file)))))
 
 (defn next-alive-untagged-after [ag]
-  (next-after-when (fn-and alive? (no tag) (partial same type-dispatch ag))
-                   (self ag) (env ag)))
+  (next-after-when #(and (derefed % :alive)
+                         (derefed % :tag not)
+                         (same aim ag %))
+                   ag (agents ag)))
 
-(defn alive-unfailed-with-same-tag [ag]
-  (some (fn-and alive? (no fail?) (partial same tag ag) identity)
-        (env ag)))
+(defn alive-unfailed-with-same-tag-as [ag]
+  (some #(and (derefed % :alive)
+              (derefed % :fail not)
+              (same :tag (derefed ag) (derefed %))
+              %)
+        (agents ag)))
 
 (defn next-alive-with-same-tag-after [ag]
-  (next-after-when (fn-and alive? (partial same tag ag))
-                   (self ag) (env ag)))
+  (next-after-when #(and (derefed % :alive)
+                         (same :tag (derefed ag) (derefed %)))
+                   ag (agents ag)))
 
-(defmethod done ::download-agent [ag]
-  (or (when-not (debug? ag) (run (or (alive-unfailed-with-same-tag ag)
-                                     (next-alive-with-same-tag-after ag))))
-      (when (termination? ag) (terminate ag)))
-  ag)
+;; (defn lock-tag
+;;   [ag] (reset! (tag-lock ag) true))
 
+;; (defn unlock-tag
+;;   [ag] (reset! (tag-lock ag) false))
 
+;; (defn tag-locked-in-env? 
+;;   [ag] (or (tag-locked? ag)
+;;            (some (fn-and (partial same tag ag) tag-locked? (constantly true))
+;;                  (env ag))))
 
-(defn run [ag]
-  (let [reflex (fn [ag]
-                 (cond (dead? ag)             :pass
-                       (no :address ag)  :die
-                       (no :actions ag)  :die
-                       (no :link ag)     :get-link
-                       (no :tag ag)      :get-tag
-                       (no :name ag)     :get-name
-                       (no :file ag)     :get-file
-                       (already-on-done-path? ag) :die
-                       (no :length ag)   :get-length
-                       (out-of-space-on-work-path? ag) :die
+;; (defmacro with-locked-tag
+;;   "Замыкает (блокирует) таг агента на время выполнения им действия, блокирующего
+;;   действия других агентов в окружении с таким же тагом."
+;;   [ag & body]
+;;   `(when-not (tag-locked-in-env? ~ag)
+;;      (lock-tag ~ag)
+;;      (let [result# (do ~@body)]
+;;        (unlock-tag ~ag)
+;;        result#)))
+
+(defn reflex [{:as ag :keys [alive address link tag name file length done-path]}]
+  (cond (not alive)       #(pass ag)
+        (not address)     #(die ag)
+        (not link)        #(get-link ag)
+        (not tag)         #(get-tag ag)
+        (not name)        #(get-name ag)
+        (not file)        #(get-file ag)
+        (already-on-done-path? ag)          #(die ag)
+        (not length)      #(get-length ag)
+        (out-of-space-on-work-path? ag)     #(die ag)
         
-                       (fully-loaded? ag) 
-                       (cond (out-of-space-on-done-path? ag) :die
-                             (:done-path ag)  :move-to-done-path
-                             :else :die)
+        (fully-loaded? ag) (cond (out-of-space-on-done-path? ag) #(die ag)
+                                 done-path #(move-to-done-path ag)
+                                 :else #(die ag))
 
-                       :else                   :download))]
-    (cond (dead? ag) ag
+        :else #(download ag)))
 
-          ((no tag) ag)
-          (let [new-state (action/percept-and-execute ag)]
-            (cond (dead? new-state) (done *agent*)
-                  (fail? new-state) (do (sleep *agent* timeout-after-fail)
-                                        (when-not (debug? ag) (run *agent*)))
-                  (tag new-state) (when-not (debug? ag)
-                                    (run (next-alive-untagged-after ag))
-                                    (run *agent*))
-                  :else (when-not (debug? ag) (run *agent*)))
-            new-state)
+(defmethod run clojure.lang.Agent [ag]
+  (send-off ag run))
 
-          (tag-locked-in-env? ag) ag
+;; (defmethod run clojure.lang.PersistentArrayMap [ag]
+;;   (let [done (fn [ag]
+;;                (or (run (or (alive-unfailed-with-same-tag-as *agent*)
+;;                             (next-alive-with-same-tag-after *agent*)))
+;;                    (when (termination? ag) (terminate ag)))
+;;   ag)
 
-          :else (let [new-state 
-                      (with-locked-tag ag (action/percept-and-execute ag))]
-                  (cond (dead? new-state) (done *agent*)
-                        (fail? new-state) (do (sleep *agent* timeout-after-fail)
-                                              (done *agent*))
-                        :else (when-not (debug? ag) (run *agent*)))
-                  new-state))))
+;;     (cond (dead? ag) ag
+
+;;           ((no tag) ag)
+;;           (let [new-state (action/percept-and-execute ag)]
+;;             (cond (dead? new-state) (done *agent*)
+;;                   (fail? new-state) (do (sleep *agent* timeout-after-fail)
+;;                                         (when-not (debug? ag) (run *agent*)))
+;;                   (tag new-state) (when-not (debug? ag)
+;;                                     (run (next-alive-untagged-after ag))
+;;                                     (run *agent*))
+;;                   :else (when-not (debug? ag) (run *agent*)))
+;;             new-state)
+
+;;           (tag-locked-in-env? ag) ag
+
+;;           :else (let [new-state 
+;;                       (with-locked-tag ag (action/percept-and-execute ag))]
+;;                   (cond (dead? new-state) (done *agent*)
+;;                         (fail? new-state) (do (sleep *agent* timeout-after-fail)
+;;                                               (done *agent*))
+;;                         :else (when-not (debug? ag) (run *agent*)))
+;;                   new-state))))
