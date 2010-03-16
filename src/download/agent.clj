@@ -110,7 +110,15 @@
 (defn status!
   [stat ag] 
   (with-return ag
-    (swap! (derefed ag :status) (constantly stat))))  
+    (swap! (derefed ag :status) (constantly stat))))
+
+;; (defmacro with-status
+;;   [ag & body]
+;;   `(when-not (tag-locked-in-env? ~ag)
+;;      (lock-tag ~ag)
+;;      (let [result# (do ~@body)]
+;;        (unlock-tag ~ag)
+;;        result#)))
 
 (defn created? [ag] (status :created ag))
 (defn running? [ag] (status :running ag))
@@ -310,46 +318,30 @@
   (next-after-when (fn/and alive? (partial same tag ag))
                    ag (agents ag)))
 
-;; (defn lock-tag
-;;   [ag] (reset! (tag-lock ag) true))
-
-;; (defn unlock-tag
-;;   [ag] (reset! (tag-lock ag) false))
-
 ;; (defn tag-locked-in-env? 
 ;;   [ag] (or (tag-locked? ag)
 ;;            (some (fn-and (partial same tag ag) tag-locked? (constantly true))
 ;;                  (env ag))))
 
-;; (defmacro with-locked-tag
-;;   "Замыкает (блокирует) таг агента на время выполнения им действия, блокирующего
-;;   действия других агентов в окружении с таким же тагом."
-;;   [ag & body]
-;;   `(when-not (tag-locked-in-env? ~ag)
-;;      (lock-tag ~ag)
-;;      (let [result# (do ~@body)]
-;;        (unlock-tag ~ag)
-;;        result#)))
-
 (defmacro action [name body]
   `(with-meta ~body {:action ~name}))
 
 (defn reflex [{:as ag :keys [alive address link tag name file length done-path]}]
-  (cond (not alive)       (action :pass     #(pass ag))
-        (not address)     (action :die      #(die ag))
-        (not link)        (action :get-link #(get-link ag))
-        (not tag)         (action :get-tag  #(get-tag ag))
-        (not name)        (action :get-name #(get-name ag))
-        (not file)        (action :get-file #(get-file ag))
-        (already-on-done-path? ag)          #(die ag)
-        (not length)      (action :get-length #(get-length ag))
-        (out-of-space-on-work-path? ag)     #(die ag)
+  (cond (not alive)       (action :pass     #(pass %))
+        (not address)     (action :die      #(die %))
+        (not link)        (action :get-link #(get-link %))
+        (not tag)         (action :get-tag  #(get-tag %))
+        (not name)        (action :get-name #(get-name %))
+        (not file)        (action :get-file #(get-file %))
+        (already-on-done-path? ag)          #(die %)
+        (not length)      (action :get-length #(get-length %))
+        (out-of-space-on-work-path? ag)     #(die %)
         
-        (fully-loaded? ag) (cond (out-of-space-on-done-path? ag) #(die ag)
-                                 done-path #(move-to-done-path ag)
-                                 :else #(die ag))
+        (fully-loaded? ag) (cond (out-of-space-on-done-path? ag) #(die %)
+                                 done-path #(move-to-done-path %)
+                                 :else #(die %))
 
-        :else (action :download #(download ag))))
+        :else (action :download #(download %))))
 
 (defmethod run clojure.lang.Agent [ag]
   (send-off ag run))
