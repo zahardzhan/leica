@@ -32,7 +32,7 @@
   ([] nil)
   ([x] (if (instance? clojure.lang.IDeref x) (deref x) x))
   ([x f] (f (derefed x)))
-  ([x f & fs] ((apply comp (reverse fs)) (derefed x f))))
+  ([x f & fs] ((apply comp f fs) (derefed x))))
 
 (defmacro with-deref 
   "Разыменовывает и захватывает идентификаторы ссылок/агентов/санок/обещаний, и

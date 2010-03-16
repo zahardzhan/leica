@@ -53,6 +53,8 @@
 (def *services*
      {::cod.data
       {:address #"http://[\w\.\-]*.data.cod.ru/\d+"
+       ;; :link (URI. (re-find #"http://files[-\d\w\.]*data.cod.ru/[^\"]+" page) true)
+       ;; :name (second (re-find #"<b title=\".*\">(.*)</b>" page))
        :tags #{#"files3?.dsv.*.data.cod.ru" #"files2.dsv.*.data.cod.ru"}}
 
       ::77.35.112.8*
@@ -74,13 +76,13 @@
 
     (when (and service address)
       (make-agent :aim ::download
+                  :status (atom :created)
                   :service service
                   :services (delay services)
                   :address (URI. address)
                   :working-path working-path
                   :done-path done-path
-                  :alive true
-                  :fail false
+                  :tag nil
                   :link nil
                   :file nil
                   :length nil))))
@@ -88,10 +90,10 @@
 (defmulti run  type)
 (defmulti stop type)
 
-(defmulti ok       :service)
+(defmulti pass     :service)
+(defmulti idle     :service)
 (defmulti fail     :service)
 (defmulti die      :service)
-(defmulti pass     :service)
 (defmulti sleep    :service)
 (defmulti get-link :service)
 (defmulti get-name :service)
@@ -101,29 +103,64 @@
 (defmulti move-to-done-path :service)
 (defmulti download :service)
 
+(defn status 
+  ([ag] (derefed ag deref :status))
+  ([stat ag] (= stat (status ag))))
+
+(defn status!
+  [stat ag] 
+  (with-return ag
+    (swap! (derefed ag :status) (constantly stat))))  
+
+(defn created? [ag] (status :created ag))
+(defn running? [ag] (status :running ag))
+(defn stopped? [ag] (status :stopped ag))
+(defn idle?    [ag] (status :idle ag))
+(defn fail?    [ag] (status :fail ag))
+(defn dead?    [ag] (status :dead ag))
+(defn alive?   [ag] (not (dead? ag)))
+(defn ok?      [ag] (and (alive? ag) (not (fail? ag))))
+
+(defmethod pass :default [ag] ag)
+(defmethod idle :default [ag] (status! :idle false))
+(defmethod fail :default [ag] (status! :fail ag)) 
+(defmethod die  :default [ag] (status! :dead ag))
+
+(defn services [ag]
+  (derefed ag force :services))
+
+(defn tag [ag]
+  (derefed ag :tag))
+
 (def buffer-size 4096)
 (def timeout-after-fail   3000)
 (def connection-timeout   30000)
 (def head-request-timeout 30000)
 (def get-request-timeout  30000)
 
-(defmethod pass :default [ag] ag)
+(defn out-of-space-on-work-path? [{:keys [working-path length file]}]
+  (when (and working-path length file)
+    (< (.getUsableSpace working-path)
+       (- length (file-length file)))))
 
-(defmethod ok :default [ag]
-  (assoc ag :fail false))
- 
-(defmethod fail :default [ag]
-  (assoc ag :fail true))
- 
-(defmethod die :default [ag]
-  (assoc ag :alive false))
+(defn out-of-space-on-done-path? [{:keys [done-path length]}]
+  (when (and done-path length)
+    (< (.getUsableSpace done-path) length)))
+
+(defn fully-loaded? [{:keys [length file]}]
+  (when (and length file)
+    (<= length (file-length file))))
+
+(defn already-on-done-path? [{:keys [done-path file]}]
+  (when (and done-path file)
+    (.exists (File. done-path (.getName file)))))
 
 (defmethod sleep :default [ag millis]
   (with-return ag
     (Thread/sleep millis)))
 
 (defmethod get-link :default [{:as ag :keys [address]}]
-  (ok (assoc ag :link address)))
+  (idle (assoc ag :link address)))
 
 (defmethod get-link ::cod.data [{:as ag :keys [address]}]
   (let [#^HttpClient client (new HttpClient)
@@ -158,14 +195,14 @@
          (finally (.releaseConnection get)))))
  
 (defmethod get-name :default [{:as ag :keys [link]}]
-  (ok (assoc ag :name (second (re-find #"/([^/]+)$" (.getPath link))))))
+  (idle (assoc ag :name (second (re-find #"/([^/]+)$" (.getPath link))))))
 
 (defmethod get-name ::cod.data [ag]
   (get-link ag))
 
 (defmethod move-to-done-path :default [{:as ag :keys [#^File file, #^File done-path]}]
   (if-let [moved (move-file file done-path)]
-    (ok (assoc ag :file moved))
+    (idle (assoc ag :file moved))
     (die ag)))
 
 (defmethod get-tag :default [{:as ag :keys [link service services]}]
@@ -176,7 +213,7 @@
                         tags))
                 (.getHost link))]
     (if tag
-      (ok (assoc ag :tag tag))
+      (idle (assoc ag :tag tag))
       (die ag))))
 
 (defmethod get-length :default [{:as ag :keys [name link]}]
@@ -211,7 +248,7 @@
          (finally (.releaseConnection head)))))
 
 (defmethod get-file :default [{:as ag :keys [name working-path]}]
-  (ok (assoc ag :file (join-paths working-path name))))
+  (idle (assoc ag :file (join-paths working-path name))))
 
 (defmethod download :default [{:as ag :keys [name tag length link file]}]
   (let [#^HttpClient client (new HttpClient)
@@ -261,39 +298,16 @@
                  (fail ag)))
            (finally (.releaseConnection get))))))
 
-(defn out-of-space-on-work-path? [{:keys [working-path length file]}]
-  (when (and working-path length file)
-    (< (.getUsableSpace working-path)
-       (- length (file-length file)))))
-
-(defn out-of-space-on-done-path? [{:keys [done-path length]}]
-  (when (and done-path length)
-    (< (.getUsableSpace done-path) length)))
-
-(defn fully-loaded? [{:keys [length file]}]
-  (when (and length file)
-    (<= length (file-length file))))
-
-(defn already-on-done-path? [{:keys [done-path file]}]
-  (when (and done-path file)
-    (.exists (File. done-path (.getName file)))))
-
 (defn next-alive-untagged-after [ag]
-  (next-after-when #(and (derefed % :alive)
-                         (derefed % :tag not)
-                         (same aim ag %))
+  (next-after-when (fn/and alive? (fn/not tag) (partial same aim ag))
                    ag (agents ag)))
 
 (defn alive-unfailed-with-same-tag-as [ag]
-  (some #(and (derefed % :alive)
-              (derefed % :fail not)
-              (same :tag (derefed ag) (derefed %))
-              %)
+  (some (fn/and alive? (fn/not fail) (partial same tag ag))
         (agents ag)))
 
 (defn next-alive-with-same-tag-after [ag]
-  (next-after-when #(and (derefed % :alive)
-                         (same :tag (derefed ag) (derefed %)))
+  (next-after-when (fn/and alive? (partial same tag ag))
                    ag (agents ag)))
 
 ;; (defn lock-tag
@@ -321,10 +335,10 @@
   `(with-meta ~body {:action ~name}))
 
 (defn reflex [{:as ag :keys [alive address link tag name file length done-path]}]
-  (cond (not alive)       (action :pass #(pass ag))
-        (not address)     (action :die #(die ag))
+  (cond (not alive)       (action :pass     #(pass ag))
+        (not address)     (action :die      #(die ag))
         (not link)        (action :get-link #(get-link ag))
-        (not tag)         (action :get-tag #(get-tag ag))
+        (not tag)         (action :get-tag  #(get-tag ag))
         (not name)        (action :get-name #(get-name ag))
         (not file)        (action :get-file #(get-file ag))
         (already-on-done-path? ag)          #(die ag)
