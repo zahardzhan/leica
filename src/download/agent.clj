@@ -101,6 +101,7 @@
 (defmulti move-to-done-path :service)
 (defmulti download :service)
 
+(def buffer-size 4096)
 (def timeout-after-fail   3000)
 (def connection-timeout   30000)
 (def head-request-timeout 30000)
@@ -212,11 +213,9 @@
 (defmethod get-file :default [{:as ag :keys [name working-path]}]
   (ok (assoc ag :file (join-paths working-path name))))
 
-(defmethod download :default [{:as ag :keys [name tag length link file
-                                             progress-agent]}]
+(defmethod download :default [{:as ag :keys [name tag length link file]}]
   (let [#^HttpClient client (new HttpClient)
-        #^GetMethod get (GetMethod. (str link))
-        buffer-size 4096]
+        #^GetMethod get (GetMethod. (str link))]
     (when (and link file)
       (.. client getHttpConnectionManager getParams 
           (setConnectionTimeout connection-timeout))
@@ -240,11 +239,7 @@
                        (loop [progress (file-length file)]
                          (let [size (.read input buffer)]
                            (when (pos? size)
-                             (do (.write output buffer 0 size)
-                                 (when progress-agent
-                                   (send progress-agent progress/show-progress
-                                         {:tag tag :name name :progress progress
-                                          :total length :time nil}))
+                             (do (.write output buffer 0 size)                                 
                                  (recur (+ progress size))))))
                        (.flush output)
                        (log/info (str "Закончена загрузка " name))
@@ -264,9 +259,7 @@
            (catch Exception e 
              (do (log/info (str "Ошибка во время загрузки " name))
                  (fail ag)))
-           (finally (when progress-agent
-                      (send progress-agent progress/hide-progress tag))
-                    (.releaseConnection get))))))
+           (finally (.releaseConnection get))))))
 
 (defn out-of-space-on-work-path? [{:keys [working-path length file]}]
   (when (and working-path length file)
@@ -324,22 +317,25 @@
 ;;        (unlock-tag ~ag)
 ;;        result#)))
 
+(defmacro action [name body]
+  `(with-meta ~body {:action ~name}))
+
 (defn reflex [{:as ag :keys [alive address link tag name file length done-path]}]
-  (cond (not alive)       #(pass ag)
-        (not address)     #(die ag)
-        (not link)        #(get-link ag)
-        (not tag)         #(get-tag ag)
-        (not name)        #(get-name ag)
-        (not file)        #(get-file ag)
+  (cond (not alive)       (action :pass #(pass ag))
+        (not address)     (action :die #(die ag))
+        (not link)        (action :get-link #(get-link ag))
+        (not tag)         (action :get-tag #(get-tag ag))
+        (not name)        (action :get-name #(get-name ag))
+        (not file)        (action :get-file #(get-file ag))
         (already-on-done-path? ag)          #(die ag)
-        (not length)      #(get-length ag)
+        (not length)      (action :get-length #(get-length ag))
         (out-of-space-on-work-path? ag)     #(die ag)
         
         (fully-loaded? ag) (cond (out-of-space-on-done-path? ag) #(die ag)
                                  done-path #(move-to-done-path ag)
                                  :else #(die ag))
 
-        :else #(download ag)))
+        :else (action :download #(download ag))))
 
 (defmethod run clojure.lang.Agent [ag]
   (send-off ag run))
@@ -374,13 +370,15 @@
 ;;                         :else (when-not (debug? ag) (run *agent*)))
 ;;                   new-state))))
 
-;; http://dsv.data.cod.ru/694636
+
 (comment
-(def d (download-agent :line "http://dsv.data.cod.ru/694636"))
+(def d (download-agent :line "http://dsv.data.cod.ru/694636" 
+                       :working-path (File. "/home/haru/inbox/")))
+(:action (meta (reflex @d)))
+d
 (send d get-link)
-(get-tag @d)
-              #(get-name ag)
-            #(get-file ag)
-
-
+(send d get-tag)
+(send d get-file)
+(send d get-length)
+(send d download)
 )
