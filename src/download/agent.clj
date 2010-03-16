@@ -1,5 +1,18 @@
 ;;; -*- mode: clojure; coding: utf-8 -*-
-;;; authors: Roman Zaharov <zahardzhan@gmail.com>
+
+;; Copyright (C) 2010 Roman Zaharov <zahardzhan@gmail.com>
+
+;; This program is free software: you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation, either version 3 of the License, or
+;; (at your option) any later version.
+
+;; This program is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+;; GNU General Public License for more details.
+;; You should have received a copy of the GNU General Public License
+;; along with this program. If not, see http://www.gnu.org/licenses/
 
 (ns download.agent
   (:use :reload aux agent)
@@ -7,7 +20,6 @@
             [clojure.contrib.duck-streams :as duck]
 
             fn
-
             service.cod.data.account
             progress)
   (:import (java.io File
@@ -147,17 +159,20 @@
 (defmethod get-name :default [{:as ag :keys [link]}]
   (ok (assoc ag :name (second (re-find #"/([^/]+)$" (.getPath link))))))
 
+(defmethod get-name ::cod.data [ag]
+  (get-link ag))
+
 (defmethod move-to-done-path :default [{:as ag :keys [#^File file, #^File done-path]}]
   (if-let [moved (move-file file done-path)]
     (ok (assoc ag :file moved))
     (die ag)))
 
-(defmethod get-tag :default [{:as ag :keys [link services]}]
-  (let [tags (@services :tags)
+(defmethod get-tag :default [{:as ag :keys [link service services]}]
+  (let [tags (seq (-> services force service :tags))
         tag (or (when tags
                   (some (fn [tag] (when (re-find tag (str link))
                                     (str tag)))
-                        (if (sequential? tags) tags [tags])))
+                        tags))
                 (.getHost link))]
     (if tag
       (ok (assoc ag :tag tag))
@@ -358,3 +373,14 @@
 ;;                                               (done *agent*))
 ;;                         :else (when-not (debug? ag) (run *agent*)))
 ;;                   new-state))))
+
+;; http://dsv.data.cod.ru/694636
+(comment
+(def d (download-agent :line "http://dsv.data.cod.ru/694636"))
+(send d get-link)
+(get-tag @d)
+              #(get-name ag)
+            #(get-file ag)
+
+
+)
