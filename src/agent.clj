@@ -36,16 +36,16 @@
   {:post [ref?]}
   (let [{:keys [agents]
          :or {agents (set-sorted-by-precedence)}}
-        (apply array-map state)]
+        (apply hash-map state)]
     (ref {:agents agents})))
 
 (let [precedence-counter (atom 0)]
   (defn make-agent [& state]
     {:post [agent?]}
-    (let [state (apply array-map state)]
+    (let [state (apply hash-map state)]
       (agent (dissoc state :aim)
              :validator map?
-             :meta {:aim (or (:aim state) ::dummy)
+             :meta {:aim (or (:aim state) ::agent)
                     :precedence (swap! precedence-counter inc)
                     :env (ref (make-env))}))))
 

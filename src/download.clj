@@ -14,7 +14,7 @@
 ;; You should have received a copy of the GNU General Public License
 ;; along with this program. If not, see http://www.gnu.org/licenses/
 
-(ns download.agent
+(ns download
   (:use :reload aux agent)
   (:require [clojure.contrib.logging :as log]
             [clojure.contrib.duck-streams :as duck]
@@ -42,7 +42,7 @@
 
            (org.apache.commons.httpclient.util EncodingUtil)))
 
-(in-ns 'download.agent)
+(in-ns 'download)
 
 (defn match-service [line services]
   (some (fn [[service {address-pattern :address}]]
@@ -51,7 +51,7 @@
         services))
 
 (def *services*
-     {::cod.data
+     {::data.cod.ru
       {:address #"http://[\w\.\-]*.data.cod.ru/\d+"
        ;; :link (URI. (re-find #"http://files[-\d\w\.]*data.cod.ru/[^\"]+" page) true)
        ;; :name (second (re-find #"<b title=\".*\">(.*)</b>" page))
@@ -63,9 +63,9 @@
       ::dsvload.net.ftpupload
       {:address #"http://dsvload.net/ftpupload/.+"}})
 
-(derive ::download :agent/dummy)
+(derive ::agent :agent/agent)
 
-(defn download-agent
+(defn make-download-agent
   [& state]
   (let [{:keys [line services working-path done-path]
          :or {services *services*}}
@@ -75,8 +75,8 @@
         (when line (match-service line services))]
 
     (when (and service address)
-      (make-agent :aim ::download
-                  :status (atom :created)
+      (make-agent :aim ::agent
+                  :status (atom :idle)
                   :service service
                   :services (delay services)
                   :address (URI. address)
@@ -103,34 +103,30 @@
 (defmulti move-to-done-path :service)
 (defmulti download :service)
 
-(defn status 
-  ([ag] (derefed ag deref :status))
-  ([stat ag] (= stat (status ag))))
+(defn status [ag]
+  (derefed ag deref :status))
 
-(defn status!
-  [stat ag] 
+(defn status? [current-status ag]
+  (cond (keyword? current-status) (= (status ag) current-status)
+        (set? current-status) (keyword? (current-status (status ag)))))
+
+(defn- status! [new-status ag]
+  {:pre [(({:idle    #{:running}
+            :fail    #{:running}
+            :dead    #{}
+            :running #{:stoping :idle :fail :dead}
+            :stoping #{:idle :fail :dead}}
+           (status ag)) new-status)]}
   (with-return ag
-    (swap! (derefed ag :status) (constantly stat))))
+    (reset! (derefed ag :status) new-status)))
 
-;; (defmacro with-status
-;;   [ag & body]
-;;   `(when-not (tag-locked-in-env? ~ag)
-;;      (lock-tag ~ag)
-;;      (let [result# (do ~@body)]
-;;        (unlock-tag ~ag)
-;;        result#)))
-
-(defn created? [ag] (status :created ag))
-(defn running? [ag] (status :running ag))
-(defn stopped? [ag] (status :stopped ag))
-(defn idle?    [ag] (status :idle ag))
-(defn fail?    [ag] (status :fail ag))
-(defn dead?    [ag] (status :dead ag))
-(defn alive?   [ag] (not (dead? ag)))
-(defn ok?      [ag] (and (alive? ag) (not (fail? ag))))
+(def dead?  (partial status? :dead))
+(def alive? (complement dead?))
+(def run?   (partial status? #{:running :stoping}))
+(def ok?    (partial status? #{:idle :fail}))
 
 (defmethod pass :default [ag] ag)
-(defmethod idle :default [ag] (status! :idle false))
+(defmethod idle :default [ag] (status! :idle ag))
 (defmethod fail :default [ag] (status! :fail ag)) 
 (defmethod die  :default [ag] (status! :dead ag))
 
@@ -170,7 +166,7 @@
 (defmethod get-link :default [{:as ag :keys [address]}]
   (idle (assoc ag :link address)))
 
-(defmethod get-link ::cod.data [{:as ag :keys [address]}]
+(defmethod get-link ::data.cod.ru [{:as ag :keys [address]}]
   (let [#^HttpClient client (new HttpClient)
         #^GetMethod get (GetMethod. (str address))]
     (.. client getHttpConnectionManager getParams 
@@ -181,9 +177,9 @@
              (let [parsed (service.cod.data.account/parse-page
                            (duck/slurp* (.getResponseBodyAsStream get)))]
                (if (and (parsed :name) (parsed :link))
-                 (assoc ag :name (parsed :name) :link (parsed :link) :fail false)
+                 (idle (assoc ag :name (parsed :name) :link (parsed :link)))
                  (do (log/info (str "Невозможно получить имя файла и ссылку с адреса " address))
-                     (die ag))))               
+                     (die ag))))
              (die ag)))
          (catch ConnectException e
            (do (log/info (str "Время ожидания соединения с сервером истекло для " address))
@@ -205,7 +201,7 @@
 (defmethod get-name :default [{:as ag :keys [link]}]
   (idle (assoc ag :name (second (re-find #"/([^/]+)$" (.getPath link))))))
 
-(defmethod get-name ::cod.data [ag]
+(defmethod get-name ::data.cod.ru [ag]
   (get-link ag))
 
 (defmethod move-to-done-path :default [{:as ag :keys [#^File file, #^File done-path]}]
@@ -234,10 +230,10 @@
            (.releaseConnection head)
            (if (= status HttpStatus/SC_OK)
              (if-let [length (.. head (getResponseHeader "Content-Length") (getValue))]
-               (assoc ag :length (Integer/parseInt length) :fail false)
+               (idle (assoc ag :length (Integer/parseInt length)))
                (do (log/info (str "Невозможно узнать размер файла " name))
                    (die ag)))
-             (die ag)))
+             (fail ag)))
          (catch ConnectException e
            (do (log/info (str "Время ожидания соединения с сервером истекло для " name))
                (fail ag)))
@@ -324,67 +320,91 @@
 ;;                  (env ag))))
 
 (defmacro action [name body]
-  `(with-meta ~body {:action ~name}))
+  `(with-meta #(~body %) {:action ~name}))
 
-(defn reflex [{:as ag :keys [alive address link tag name file length done-path]}]
-  (cond (not alive)       (action :pass     #(pass %))
-        (not address)     (action :die      #(die %))
-        (not link)        (action :get-link #(get-link %))
-        (not tag)         (action :get-tag  #(get-tag %))
-        (not name)        (action :get-name #(get-name %))
-        (not file)        (action :get-file #(get-file %))
-        (already-on-done-path? ag)          #(die %)
-        (not length)      (action :get-length #(get-length %))
-        (out-of-space-on-work-path? ag)     #(die %)
+(defn- reflex [{:as ag :keys [address link tag name file length done-path]}]
+  (cond (dead? ag)        (action :pass     pass)
+        (not address)     (action :die      die)
+        (not link)        (action :get-link get-link)
+        (not tag)         (action :get-tag  get-tag)
+        (not name)        (action :get-name get-name)
+        (not file)        (action :get-file get-file)
+        (already-on-done-path? ag)          die
+        (not length)      (action :get-length get-length)
+        (out-of-space-on-work-path? ag)     die
         
-        (fully-loaded? ag) (cond (out-of-space-on-done-path? ag) #(die %)
-                                 done-path #(move-to-done-path %)
-                                 :else #(die %))
+        (fully-loaded? ag) (cond (out-of-space-on-done-path? ag) die
+                                 done-path move-to-done-path
+                                 :else die)
 
-        :else (action :download #(download %))))
+        :else (action :download download)))
 
-(defmethod run clojure.lang.Agent [ag]
-  (send-off ag run))
+(defn- execute [ag action]
+  (with-deref [ag]
+    (try (status! :running ag)
+         (let [fag (future (action ag))]
+           (try (with-deref [fag]
+                  (cond (run? fag) (idle fag)
+                        :else fag))
+                (catch Exception _ (fail ag))))
+         (catch AssertionError _ ag))))
 
-;; (defmethod run clojure.lang.PersistentArrayMap [ag]
-;;   (let [done (fn [ag]
-;;                (or (run (or (alive-unfailed-with-same-tag-as *agent*)
-;;                             (next-alive-with-same-tag-after *agent*)))
-;;                    (when (termination? ag) (terminate ag)))
-;;   ag)
+(defn- done [ag]
+  (with-return ag
+    (or (run (or (alive-unfailed-with-same-tag-as *agent*)
+                 (next-alive-with-same-tag-after *agent*)))
+        ;; (when (termination? ag) (terminate ag)))))
+        )))
 
-;;     (cond (dead? ag) ag
+(defmethod run clojure.lang.Agent [ag & opts]
+  (send-off ag run opts))
 
-;;           ((no tag) ag)
-;;           (let [new-state (action/percept-and-execute ag)]
-;;             (cond (dead? new-state) (done *agent*)
-;;                   (fail? new-state) (do (sleep *agent* timeout-after-fail)
-;;                                         (when-not (debug? ag) (run *agent*)))
-;;                   (tag new-state) (when-not (debug? ag)
-;;                                     (run (next-alive-untagged-after ag))
-;;                                     (run *agent*))
-;;                   :else (when-not (debug? ag) (run *agent*)))
-;;             new-state)
+(defmethod run clojure.lang.PersistentHashMap [ag & opts]
+  (cond (dead? ag) ag
 
-;;           (tag-locked-in-env? ag) ag
+        :else (execute ag (reflex ag))))
 
-;;           :else (let [new-state 
-;;                       (with-locked-tag ag (action/percept-and-execute ag))]
-;;                   (cond (dead? new-state) (done *agent*)
-;;                         (fail? new-state) (do (sleep *agent* timeout-after-fail)
-;;                                               (done *agent*))
-;;                         :else (when-not (debug? ag) (run *agent*)))
-;;                   new-state))))
+        ;; ((no tag) ag)
+        ;; (let [new-state (action/percept-and-execute ag)]
+        ;;   (cond (dead? new-state) (done *agent*)
+        ;;         (fail? new-state) (do (sleep *agent* timeout-after-fail)
+        ;;                               (when-not (debug? ag) (run *agent*)))
+        ;;         (tag new-state) (when-not (debug? ag)
+        ;;                           (run (next-alive-untagged-after ag))
+        ;;                           (run *agent*))
+        ;;         :else (when-not (debug? ag) (run *agent*)))
+        ;;   new-state)
+
+        ;; (tag-locked-in-env? ag) ag
+
+        ;; :else (let [new-state 
+        ;;             (with-locked-tag ag (action/percept-and-execute ag))]
+        ;;         (cond (dead? new-state) (done *agent*)
+        ;;               (fail? new-state) (do (sleep *agent* timeout-after-fail)
+        ;;                                     (done *agent*))
+        ;;               :else (when-not (debug? ag) (run *agent*)))
+        ;;         new-state)))))
 
 
 (comment
-(def d (download-agent :line "http://dsv.data.cod.ru/694636" 
-                       :working-path (File. "/home/haru/inbox/")))
+(def d (make-download-agent :line "http://dsv.data.cod.ru/720957"
+                            :working-path (File. "/home/haru/inbox/")))
 (:action (meta (reflex @d)))
+(execute @d (reflex @d))
+(def gl (run (run (run @d))))
+gl
+
+(do
+  (reset! (gl :status) :idle)
+  (execute gl get-length))
+
+(:action (meta (reflex gl)))
+(run gl)
 d
-(send d get-link)
-(send d get-tag)
-(send d get-file)
-(send d get-length)
-(send d download)
+(agent-error d)
+(send-off d get-link)
+(send-off d get-tag)
+(send-off d get-file)
+(send-off d get-length)
+(send-off d download)
 )
