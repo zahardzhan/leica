@@ -55,7 +55,7 @@
       {:address #"http://[\w\.\-]*.data.cod.ru/\d+"
        ;; :link (URI. (re-find #"http://files[-\d\w\.]*data.cod.ru/[^\"]+" page) true)
        ;; :name (second (re-find #"<b title=\".*\">(.*)</b>" page))
-       :tags #{#"files3?.dsv.*.data.cod.ru" #"files2.dsv.*.data.cod.ru"}}
+       :hosts #{#"files3?.dsv.*.data.cod.ru" #"files2.dsv.*.data.cod.ru"}}
 
       ::77.35.112.8*
       {:address #"http://77.35.112.8[1234]/.+"}
@@ -65,35 +65,136 @@
 
 (derive ::agent :agent/agent)
 
-(defn make-download-agent
-  [& state]
-  (let [{:keys [line services working-path done-path]
-         :or {services *services*}}
-        (apply hash-map state)
+(defprotocol Downloading
+  (status [d])
+  (status! [d new-status])
+  (status? [d current-status])
 
-        {:keys [service address]}
-        (when line (match-service line services))]
+  (dead? [d])
+  (alive? [d])
+  (run? [d])
+  (does-nothing? [d])
+  (ok? [d])
+  (idle? [d])
+  (fail? [d])
+
+  (pass [d])
+  (idle! [d])
+  (fail! [d]) 
+  (die! [d])
+
+  (services [d])
+  
+  (out-of-space-on-work-path? [d])
+  (out-of-space-on-done-path? [d])
+  (fully-loaded? [d])
+  (already-on-done-path? [d])
+
+  (execute [d action]))
+  
+(deftype Download [status-atom services- service
+                   address working-path done-path 
+                   host link file length]
+
+  clojure.lang.IPersistentMap
+  
+  Downloading
+  (status [this] @status-atom)
+
+  (status!
+   [this new-status]
+   {:pre [(({:idle    #{:running}
+             :fail    #{:running}
+             :dead    #{}
+             :running #{:stoping :idle :fail :dead}
+             :stoping #{:idle :fail :dead}}
+            (status this)) new-status)]}
+   (with-return this
+     (reset! status-atom new-status)))
+
+  (status?
+   [this current-status]
+   (cond (keyword? current-status) (= (status this) current-status)
+         (set? current-status) (keyword? (current-status (status this)))))
+
+  (dead? [this] (status? this :dead))
+  
+  (alive? [this] (not (dead? this)))
+
+  (run? [this] (status? this #{:running :stoping}))
+  
+  (does-nothing? [this])
+  
+  (ok? [this] (status? this #{:idle :fail}))
+  
+  (idle? [this])
+  
+  (fail? [this])
+
+  (pass [this] this)
+
+  (idle! [this] (status! this :idle))
+
+  (fail! [this] (status! this :fail))
+
+  (die! [this] (status! this :dead))
+
+  (services [this] @services-)
+
+  (out-of-space-on-work-path?
+   [this]
+   (when (and working-path length file)
+     (< (.getUsableSpace working-path)
+        (- length (file-length file)))))
+
+  (out-of-space-on-done-path?
+   [this]
+   (when (and done-path length)
+     (< (.getUsableSpace done-path) length)))
+
+  (fully-loaded?
+   [this]
+   (when (and length file)
+     (<= length (file-length file))))
+
+  (already-on-done-path?
+   [this]
+   (when (and done-path file)
+     (.exists (File. done-path (.getName file)))))
+
+  (execute
+   [this action]
+   (try (status! this :running)
+        (let [fag (future (action this))]
+          (try (with-deref [fag]
+                 (cond (run? fag) (idle! fag)
+                       :else fag))
+               (catch Exception _ (fail! this))))
+        (catch AssertionError _ this))))
+
+(defn make-download-agent
+  [address-line & {:as opts :keys [services working-path done-path]
+                   :or {services *services*}}]
+
+  (let [{:keys [service address]}
+        (when address-line (match-service address-line services))]
 
     (when (and service address)
-      (make-agent :aim ::agent
-                  :status (atom :idle)
-                  :service service
-                  :services (delay services)
-                  :address (URI. address)
-                  :working-path working-path
-                  :done-path done-path
-                  :tag nil
-                  :link nil
-                  :file nil
-                  :length nil))))
+      (make-agent {:status (atom :idle)
+                   :service service
+                   :services (delay services)
+                   :address (URI. address)
+                   :working-path working-path
+                   :done-path done-path
+                   :host nil
+                   :link nil
+                   :file nil
+                   :length nil}
+                  :tag ::agent))))
 
 (defmulti run  type)
 (defmulti stop type)
 
-(defmulti pass     :service)
-(defmulti idle     :service)
-(defmulti fail     :service)
-(defmulti die      :service)
 (defmulti sleep    :service)
 (defmulti get-link :service)
 (defmulti get-name :service)
@@ -103,61 +204,11 @@
 (defmulti move-to-done-path :service)
 (defmulti download :service)
 
-(defn status [ag]
-  (derefed ag deref :status))
-
-(defn status? [current-status ag]
-  (cond (keyword? current-status) (= (status ag) current-status)
-        (set? current-status) (keyword? (current-status (status ag)))))
-
-(defn- status! [new-status ag]
-  {:pre [(({:idle    #{:running}
-            :fail    #{:running}
-            :dead    #{}
-            :running #{:stoping :idle :fail :dead}
-            :stoping #{:idle :fail :dead}}
-           (status ag)) new-status)]}
-  (with-return ag
-    (reset! (derefed ag :status) new-status)))
-
-(def dead?  (partial status? :dead))
-(def alive? (complement dead?))
-(def run?   (partial status? #{:running :stoping}))
-(def ok?    (partial status? #{:idle :fail}))
-
-(defmethod pass :default [ag] ag)
-(defmethod idle :default [ag] (status! :idle ag))
-(defmethod fail :default [ag] (status! :fail ag)) 
-(defmethod die  :default [ag] (status! :dead ag))
-
-(defn services [ag]
-  (derefed ag force :services))
-
-(defn tag [ag]
-  (derefed ag :tag))
-
 (def buffer-size 4096)
 (def timeout-after-fail   3000)
 (def connection-timeout   30000)
 (def head-request-timeout 30000)
 (def get-request-timeout  30000)
-
-(defn out-of-space-on-work-path? [{:keys [working-path length file]}]
-  (when (and working-path length file)
-    (< (.getUsableSpace working-path)
-       (- length (file-length file)))))
-
-(defn out-of-space-on-done-path? [{:keys [done-path length]}]
-  (when (and done-path length)
-    (< (.getUsableSpace done-path) length)))
-
-(defn fully-loaded? [{:keys [length file]}]
-  (when (and length file)
-    (<= length (file-length file))))
-
-(defn already-on-done-path? [{:keys [done-path file]}]
-  (when (and done-path file)
-    (.exists (File. done-path (.getName file)))))
 
 (defmethod sleep :default [ag millis]
   (with-return ag
@@ -338,16 +389,6 @@
                                  :else die)
 
         :else (action :download download)))
-
-(defn- execute [ag action]
-  (with-deref [ag]
-    (try (status! :running ag)
-         (let [fag (future (action ag))]
-           (try (with-deref [fag]
-                  (cond (run? fag) (idle fag)
-                        :else fag))
-                (catch Exception _ (fail ag))))
-         (catch AssertionError _ ag))))
 
 (defn- done [ag]
   (with-return ag
