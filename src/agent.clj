@@ -19,45 +19,51 @@
 
 (in-ns 'agent)
 
-(def aim (comp :aim meta))
+(defn tag [ag]
+  (-> ag meta :tag))
 
-(def precedence (comp :precedence meta))
+(defn precedence [ag]
+  (-> ag meta :precedence))
 
-(def env (comp deref deref :env meta))
+(defn env [ag]
+  (-> ag meta :env deref))
 
-(def agents (comp :agents env))
+(defn surrounding [ag]
+  (-> ag env deref :agents))
 
 (defn- set-sorted-by-precedence [& xs] 
   (apply (partial sorted-set-by 
                   (comparator #(< (precedence %1) (precedence %2))))
          xs))
 
-(defn- make-env [& state]
-  {:post [ref?]}
-  (let [{:keys [agents]
-         :or {agents (set-sorted-by-precedence)}}
-        (apply hash-map state)]
-    (ref {:agents agents})))
+(defn- make-env [& {:as state :keys [agents]}]
+  (ref (merge state {:agents (or (apply set-sorted-by-precedence agents)
+                                 (set-sorted-by-precedence))})))
 
 (let [precedence-counter (atom 0)]
-  (defn make-agent [& state]
-    {:post [agent?]}
-    (let [state (apply hash-map state)]
-      (agent (dissoc state :aim)
-             :validator map?
-             :meta {:aim (or (:aim state) ::agent)
-                    :precedence (swap! precedence-counter inc)
-                    :env (ref (make-env))}))))
+  (defn make-agent [state & {:as opts
+                             :keys [tag meta validator
+                                    error-handler error-mode]
+                             :or {tag ::agent}}]
+    (let [a (agent state
+                   :meta meta
+                   :validator validator
+                   :error-handler error-handler
+                   :error-mode error-mode)]
+      (with-return a
+        (alter-meta! a assoc
+                     :tag tag
+                     :precedence (swap! precedence-counter inc))
+        (alter-meta! a assoc :env (ref (make-env :agents [a])))))))
 
 (defn bind
-  {:post [map?]}
+  {:post [ref?]}
   ([x y & zs] {:pre  [(agent? x) (agent? y) (every? agent? zs)]}
-     (let [unified (make-env 
-                    :agents (union (agents x)
-                                   (agents y)
-                                   (apply union (map agents zs))
-                                   (set-sorted-by-precedence x y)
-                                   (apply set-sorted-by-precedence zs)))]
-       (dosync (doseq [ag (derefed unified :agents)]
-                 (ref-set (:env (meta ag)) unified)))
-       (force unified))))
+     (let [unified (make-env :agents (union (surrounding x)
+                                            (surrounding y)
+                                            (apply union (map surrounding zs))
+                                            (set-sorted-by-precedence x y)
+                                            (apply set-sorted-by-precedence zs)))]
+       (with-return unified
+         (dosync (doseq [ag (@unified :agents)]
+                   (ref-set ((meta ag) :env) unified)))))))
