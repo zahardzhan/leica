@@ -63,7 +63,7 @@
       ::dsvload.net.ftpupload
       {:address #"http://dsvload.net/ftpupload/.+"}})
 
-(defprotocol An-Download-agent
+(defprotocol Download-agent-protocol
   (status [ag])
   (status! [ag new-status])
   (status? [ag current-status])
@@ -92,7 +92,7 @@
 
   clojure.lang.IPersistentMap
   
-  An-Download-agent
+  Download-agent-protocol
   (status [ag] @status-atom)
 
   (status!
@@ -183,43 +183,26 @@
 ;;               :else (when-not (debug? ag) (run *agent*)))
 ;;         new-state)))))
 
-(defmulti pass :service)
-(defmulti idle :service)
-(defmulti fail :service)
-(defmulti die  :service)
-(defmulti sleep    :service)
-(defmulti get-link :service)
-(defmulti get-name :service)
-(defmulti get-tag  :service)
-(defmulti get-file :service)
-(defmulti get-length :service)
+(defmulti pass              :service)
+(defmulti idle              :service)
+(defmulti fail              :service)
+(defmulti die               :service)
+(defmulti sleep             :service)
+(defmulti get-link          :service)
+(defmulti get-name          :service)
+(defmulti get-link-and-name :service)
+(defmulti get-tag           :service)
+(defmulti get-file          :service)
+(defmulti get-length        :service)
 (defmulti move-to-done-path :service)
-(defmulti download :service)
+(defmulti download          :service)
 
-(defmacro action [name body]
-  `(with-meta #(~body %) {:action ~name}))
-
-(defn- individual-reflex-strategy [{:as ag :keys [address link tag name file length done-path]}]
-  (cond (dead? ag)        (action :pass     pass)
-        (not address)     (action :die      die)
-        (not link)        (action :get-link get-link)
-        (not tag)         (action :get-tag  get-tag)
-        (not name)        (action :get-name get-name)
-        (not file)        (action :get-file get-file)
-        (already-on-done-path? ag)          die
-        (not length)      (action :get-length get-length)
-        (out-of-space-on-work-path? ag)     die
-        
-        (fully-loaded? ag) (cond (out-of-space-on-done-path? ag) die
-                                 done-path move-to-done-path
-                                 :else die)
-
-        :else (action :download download)))
+(defmulti reflex            :service)
 
 (defn make-download-agent
   [address-line & {:as opts :keys [services strategy working-path done-path]
                    :or {services *services*
-                        strategy individual-reflex-strategy}}]
+                        strategy reflex}}]
 
   (let [{:keys [service address]}
         (when address-line (match-service address-line services))]
@@ -228,38 +211,86 @@
       (make-agent (Download-agent (atom :idle)
                                   (delay services)
                                   service
-                                  individual-reflex-strategy
+                                  strategy
                                   (URI. address)
                                   working-path
                                   done-path
                                   nil nil nil nil)))))
 
-(def buffer-size 4096)
+(defmethod reflex :default
+  [{:as ag :keys [address link tag name file length done-path]}]
+  (cond (dead? ag)                 pass
+        (not address)              die
+        (not link)                 get-link
+        (not tag)                  get-tag
+        (not name)                 get-name
+        (not file)                 get-file
+        (already-on-done-path? ag) die
+        (not length)               get-length
+        (out-of-space-on-work-path? ag) die
+        
+        (fully-loaded? ag)
+        (cond (out-of-space-on-done-path? ag) die
+              done-path            move-to-done-path
+              :else                die)
+
+        :else                      download))
+
+(defmethod reflex ::data.cod.ru
+  [{:as ag :keys [address link tag name file length done-path]}]
+  (cond (dead? ag)                 pass
+        (not address)              die
+        (or (not link) (not name)) get-link-and-name
+        (not tag)                  get-tag
+        (not file)                 get-file
+        (already-on-done-path? ag) die
+        (not length)               get-length
+        (out-of-space-on-work-path? ag) die
+        
+        (fully-loaded? ag)
+        (cond (out-of-space-on-done-path? ag) die
+              done-path            move-to-done-path
+              :else                die)
+
+        :else                      download))
+
+(def buffer-size          4096)
 (def timeout-after-fail   3000)
 (def connection-timeout   30000)
 (def head-request-timeout 30000)
 (def get-request-timeout  30000)
 
-(defmethod pass :default [ag]
+(defmethod pass :default
+  [ag]
   ag)
 
-(defmethod idle :default [ag]
+(defmethod idle :default
+  [ag]
   (status! ag :idle))
 
-(defmethod fail :default [ag]
+(defmethod fail :default
+  [ag]
   (status! ag :fail))
 
-(defmethod die  :default [ag]
+(defmethod die  :default
+  [ag]
   (status! ag :dead))
 
-(defmethod sleep :default [ag millis]
+(defmethod sleep :default
+  [ag millis]
   (with-return ag
     (Thread/sleep millis)))
 
-(defmethod get-link :default [{:as ag :keys [address]}]
+(defmethod get-link :default
+  [{:as ag :keys [address]}]
   (idle (assoc ag :link address)))
 
-(defmethod get-link ::data.cod.ru [{:as ag :keys [address]}]
+(defmethod get-name :default
+  [{:as ag :keys [link]}]
+  (idle (assoc ag :name (second (re-find #"/([^/]+)$" (.getPath link))))))
+
+(defmethod get-link-and-name ::data.cod.ru
+  [{:as ag :keys [address]}]
   (let [#^HttpClient client (new HttpClient)
         #^GetMethod get (GetMethod. (str address))]
     (.. client getHttpConnectionManager getParams 
@@ -291,18 +322,14 @@
                (fail ag)))
          (finally (.releaseConnection get)))))
  
-(defmethod get-name :default [{:as ag :keys [link]}]
-  (idle (assoc ag :name (second (re-find #"/([^/]+)$" (.getPath link))))))
-
-(defmethod get-name ::data.cod.ru [ag]
-  (get-link ag))
-
-(defmethod move-to-done-path :default [{:as ag :keys [#^File file, #^File done-path]}]
+(defmethod move-to-done-path :default
+  [{:as ag :keys [#^File file, #^File done-path]}]
   (if-let [moved (move-file file done-path)]
     (idle (assoc ag :file moved))
     (die ag)))
 
-(defmethod get-tag :default [{:as ag :keys [link service services]}]
+(defmethod get-tag :default
+  [{:as ag :keys [link service services]}]
   (let [tags (seq (-> services force service :tags))
         tag (or (when tags
                   (some (fn [tag] (when (re-find tag (str link))
@@ -313,7 +340,8 @@
       (idle (assoc ag :tag tag))
       (die ag))))
 
-(defmethod get-length :default [{:as ag :keys [name link]}]
+(defmethod get-length :default
+  [{:as ag :keys [name link]}]
   (let [#^HttpClient client (new HttpClient)
         #^HeadMethod head (HeadMethod. (str link))]
     (.. client getHttpConnectionManager getParams 
@@ -344,10 +372,12 @@
                (fail ag)))
          (finally (.releaseConnection head)))))
 
-(defmethod get-file :default [{:as ag :keys [name working-path]}]
+(defmethod get-file :default
+  [{:as ag :keys [name working-path]}]
   (idle (assoc ag :file (join-paths working-path name))))
 
-(defmethod download :default [{:as ag :keys [name tag length link file]}]
+(defmethod download :default
+  [{:as ag :keys [name tag length link file]}]
   (let [#^HttpClient client (new HttpClient)
         #^GetMethod get (GetMethod. (str link))]
     (when (and link file)
