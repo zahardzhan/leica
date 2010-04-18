@@ -160,44 +160,33 @@
 
   (run
    [ag]
-   (execute ag (strategy ag))))
+   (execute ag (strategy ag)))
 
-;; ((no tag) ag)
-;; (let [new-state (action/percept-and-execute ag)]
-;;   (cond (dead? new-state) (done *agent*)
-;;         (fail? new-state) (do (sleep *agent* timeout-after-fail)
-;;                               (when-not (debug? ag) (run *agent*)))
-;;         (tag new-state) (when-not (debug? ag)
-;;                           (run (next-alive-untagged-after ag))
-;;                           (run *agent*))
-;;         :else (when-not (debug? ag) (run *agent*)))
-;;   new-state)
+  (run
+   [ag & opts]
+   (execute ag (strategy ag opts))))
 
-;; (tag-locked-in-env? ag) ag
+(defn- service-dispatch
+  ([] nil)
+  ([ag] (:service ag))
+  ([ag & opts] (:service ag)))
 
-;; :else (let [new-state 
-;;             (with-locked-tag ag (action/percept-and-execute ag))]
-;;         (cond (dead? new-state) (done *agent*)
-;;               (fail? new-state) (do (sleep *agent* timeout-after-fail)
-;;                                     (done *agent*))
-;;               :else (when-not (debug? ag) (run *agent*)))
-;;         new-state)))))
+(defmulti pass              service-dispatch)
+(defmulti idle              service-dispatch)
+(defmulti fail              service-dispatch)
+(defmulti die               service-dispatch)
+(defmulti sleep             service-dispatch)
+(defmulti get-link          service-dispatch)
+(defmulti get-name          service-dispatch)
+(defmulti get-link-and-name service-dispatch)
+(defmulti get-host          service-dispatch)
+(defmulti get-file          service-dispatch)
+(defmulti get-length        service-dispatch)
+(defmulti move-to-done-path service-dispatch)
+(defmulti download          service-dispatch)
 
-(defmulti pass              :service)
-(defmulti idle              :service)
-(defmulti fail              :service)
-(defmulti die               :service)
-(defmulti sleep             :service)
-(defmulti get-link          :service)
-(defmulti get-name          :service)
-(defmulti get-link-and-name :service)
-(defmulti get-tag           :service)
-(defmulti get-file          :service)
-(defmulti get-length        :service)
-(defmulti move-to-done-path :service)
-(defmulti download          :service)
-
-(defmulti reflex            :service)
+(defmulti reflex            service-dispatch)
+(defmulti reflex-with-transfer-of-control service-dispatch)
 
 (defn make-download-agent
   [address-line & {:as opts :keys [services strategy working-path done-path]
@@ -218,11 +207,11 @@
                                   nil nil nil nil)))))
 
 (defmethod reflex :default
-  [{:as ag :keys [address link tag name file length done-path]}]
+  [{:as ag :keys [address link host name file length done-path]} & opts]
   (cond (dead? ag)                 pass
         (not address)              die
         (not link)                 get-link
-        (not tag)                  get-tag
+        (not host)                 get-host
         (not name)                 get-name
         (not file)                 get-file
         (already-on-done-path? ag) die
@@ -237,11 +226,11 @@
         :else                      download))
 
 (defmethod reflex ::data.cod.ru
-  [{:as ag :keys [address link tag name file length done-path]}]
+  [{:as ag :keys [address link host name file length done-path]} & opts]
   (cond (dead? ag)                 pass
         (not address)              die
         (or (not link) (not name)) get-link-and-name
-        (not tag)                  get-tag
+        (not host)                 get-host
         (not file)                 get-file
         (already-on-done-path? ag) die
         (not length)               get-length
@@ -253,6 +242,31 @@
               :else                die)
 
         :else                      download))
+
+;; (defmethod reflex-with-transfer-of-control :default
+;;   [ag & opts]
+;;   (cond (dead? ag) pass
+        
+;;         (not (:host ag))
+;;         (let [new-state (action/percept-and-execute ag)]
+;;           (cond (dead? new-state) (done *agent*)
+;;                 (fail? new-state) (do (sleep *agent* timeout-after-fail)
+;;                                       (when-not (debug? ag) (run *agent*)))
+;;                 (host new-state) (when-not (debug? ag)
+;;                                   (run (next-alive-untagged-after ag))
+;;                                   (run *agent*))
+;;                 :else (when-not (debug? ag) (run *agent*)))
+;;           new-state)
+
+;;         (tag-locked-in-env? ag) ag
+
+;;         :else (let [new-state 
+;;                     (with-locked-tag ag (action/percept-and-execute ag))]
+;;                 (cond (dead? new-state) (done *agent*)
+;;                       (fail? new-state) (do (sleep *agent* timeout-after-fail)
+;;                                             (done *agent*))
+;;                       :else (when-not (debug? ag) (run *agent*)))
+;;                 new-state)))
 
 (def buffer-size          4096)
 (def timeout-after-fail   3000)
@@ -328,16 +342,16 @@
     (idle (assoc ag :file moved))
     (die ag)))
 
-(defmethod get-tag :default
+(defmethod get-host :default
   [{:as ag :keys [link service services]}]
-  (let [tags (seq (-> services force service :tags))
-        tag (or (when tags
-                  (some (fn [tag] (when (re-find tag (str link))
-                                    (str tag)))
-                        tags))
+  (let [hosts (seq (-> services force service :hosts))
+        host (or (when hosts
+                  (some (fn [host] (when (re-find host (str link))
+                                    (str host)))
+                        hosts))
                 (.getHost link))]
-    (if tag
-      (idle (assoc ag :tag tag))
+    (if host
+      (idle (assoc ag :host host))
       (die ag))))
 
 (defmethod get-length :default
@@ -377,7 +391,7 @@
   (idle (assoc ag :file (join-paths working-path name))))
 
 (defmethod download :default
-  [{:as ag :keys [name tag length link file]}]
+  [{:as ag :keys [name host length link file]}]
   (let [#^HttpClient client (new HttpClient)
         #^GetMethod get (GetMethod. (str link))]
     (when (and link file)
@@ -470,7 +484,7 @@ gl
 d
 (agent-error d)
 (send-off d get-link)
-(send-off d get-tag)
+(send-off d get-host)
 (send-off d get-file)
 (send-off d get-length)
 (send-off d download)
