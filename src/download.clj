@@ -63,138 +63,130 @@
       ::dsvload.net.ftpupload
       {:address #"http://dsvload.net/ftpupload/.+"}})
 
-(derive ::agent :agent/agent)
+(defprotocol An-Download-agent
+  (status [ag])
+  (status! [ag new-status])
+  (status? [ag current-status])
 
-(defprotocol Downloading
-  (status [d])
-  (status! [d new-status])
-  (status? [d current-status])
+  (dead? [ag])
+  (alive? [ag])
+  (run? [ag])
+  (does-nothing? [ag])
+  (ok? [ag])
+  (idle? [ag])
+  (fail? [ag])
 
-  (dead? [d])
-  (alive? [d])
-  (run? [d])
-  (does-nothing? [d])
-  (ok? [d])
-  (idle? [d])
-  (fail? [d])
-
-  (pass [d])
-  (idle! [d])
-  (fail! [d]) 
-  (die! [d])
-
-  (services [d])
+  (services [ag])
   
-  (out-of-space-on-work-path? [d])
-  (out-of-space-on-done-path? [d])
-  (fully-loaded? [d])
-  (already-on-done-path? [d])
+  (out-of-space-on-work-path? [ag])
+  (out-of-space-on-done-path? [ag])
+  (fully-loaded? [ag])
+  (already-on-done-path? [ag])
 
-  (execute [d action]))
+  (execute [ag action])
+  (run [ag] [ag & opts]))
   
-(deftype Download [status-atom services- service
-                   address working-path done-path 
-                   host link file length]
+(deftype Download-agent [status-atom services- service strategy
+                         address working-path done-path 
+                         host link file length]
 
   clojure.lang.IPersistentMap
   
-  Downloading
-  (status [this] @status-atom)
+  An-Download-agent
+  (status [ag] @status-atom)
 
   (status!
-   [this new-status]
+   [ag new-status]
    {:pre [(({:idle    #{:running}
              :fail    #{:running}
              :dead    #{}
              :running #{:stoping :idle :fail :dead}
              :stoping #{:idle :fail :dead}}
-            (status this)) new-status)]}
-   (with-return this
+            (status ag)) new-status)]}
+   (with-return ag
      (reset! status-atom new-status)))
 
   (status?
-   [this current-status]
-   (cond (keyword? current-status) (= (status this) current-status)
-         (set? current-status) (keyword? (current-status (status this)))))
+   [ag current-status]
+   (cond (keyword? current-status) (= (status ag) current-status)
+         (set? current-status) (keyword? (current-status (status ag)))))
 
-  (dead? [this] (status? this :dead))
+  (dead? [ag] (status? ag :dead))
   
-  (alive? [this] (not (dead? this)))
+  (alive? [ag] (not (dead? ag)))
 
-  (run? [this] (status? this #{:running :stoping}))
+  (run? [ag] (status? ag #{:running :stoping}))
   
-  (does-nothing? [this])
+  (does-nothing? [ag] (status? ag #{:idle :fail}))
   
-  (ok? [this] (status? this #{:idle :fail}))
+  (ok? [ag] (status? ag #{:idle :running :stoping}))
   
-  (idle? [this])
+  (idle? [ag] (status? ag :idle))
   
-  (fail? [this])
+  (fail? [ag] (status? ag :fail))
 
-  (pass [this] this)
-
-  (idle! [this] (status! this :idle))
-
-  (fail! [this] (status! this :fail))
-
-  (die! [this] (status! this :dead))
-
-  (services [this] @services-)
+  (services [ag] @services-)
 
   (out-of-space-on-work-path?
-   [this]
+   [ag]
    (when (and working-path length file)
      (< (.getUsableSpace working-path)
         (- length (file-length file)))))
 
   (out-of-space-on-done-path?
-   [this]
+   [ag]
    (when (and done-path length)
      (< (.getUsableSpace done-path) length)))
 
   (fully-loaded?
-   [this]
+   [ag]
    (when (and length file)
      (<= length (file-length file))))
 
   (already-on-done-path?
-   [this]
+   [ag]
    (when (and done-path file)
      (.exists (File. done-path (.getName file)))))
 
   (execute
-   [this action]
-   (try (status! this :running)
-        (let [fag (future (action this))]
+   [ag action]
+   (try (status! ag :running)
+        (let [fag (future (action ag))]
           (try (with-deref [fag]
-                 (cond (run? fag) (idle! fag)
+                 (cond (run? fag) (status! fag :idle)
                        :else fag))
-               (catch Exception _ (fail! this))))
-        (catch AssertionError _ this))))
+               (catch Exception _ (status! ag :fail))))
+        (catch AssertionError _ ag)))
 
-(defn make-download-agent
-  [address-line & {:as opts :keys [services working-path done-path]
-                   :or {services *services*}}]
+  (run
+   [ag]
+   (execute ag (strategy ag))))
 
-  (let [{:keys [service address]}
-        (when address-line (match-service address-line services))]
+;; ((no tag) ag)
+;; (let [new-state (action/percept-and-execute ag)]
+;;   (cond (dead? new-state) (done *agent*)
+;;         (fail? new-state) (do (sleep *agent* timeout-after-fail)
+;;                               (when-not (debug? ag) (run *agent*)))
+;;         (tag new-state) (when-not (debug? ag)
+;;                           (run (next-alive-untagged-after ag))
+;;                           (run *agent*))
+;;         :else (when-not (debug? ag) (run *agent*)))
+;;   new-state)
 
-    (when (and service address)
-      (make-agent {:status (atom :idle)
-                   :service service
-                   :services (delay services)
-                   :address (URI. address)
-                   :working-path working-path
-                   :done-path done-path
-                   :host nil
-                   :link nil
-                   :file nil
-                   :length nil}
-                  :tag ::agent))))
+;; (tag-locked-in-env? ag) ag
 
-(defmulti run  type)
-(defmulti stop type)
+;; :else (let [new-state 
+;;             (with-locked-tag ag (action/percept-and-execute ag))]
+;;         (cond (dead? new-state) (done *agent*)
+;;               (fail? new-state) (do (sleep *agent* timeout-after-fail)
+;;                                     (done *agent*))
+;;               :else (when-not (debug? ag) (run *agent*)))
+;;         new-state)))))
 
+(defmulti pass :service)
+(defmulti idle :service)
+(defmulti fail :service)
+(defmulti die  :service)
 (defmulti sleep    :service)
 (defmulti get-link :service)
 (defmulti get-name :service)
@@ -204,11 +196,61 @@
 (defmulti move-to-done-path :service)
 (defmulti download :service)
 
+(defmacro action [name body]
+  `(with-meta #(~body %) {:action ~name}))
+
+(defn- individual-reflex-strategy [{:as ag :keys [address link tag name file length done-path]}]
+  (cond (dead? ag)        (action :pass     pass)
+        (not address)     (action :die      die)
+        (not link)        (action :get-link get-link)
+        (not tag)         (action :get-tag  get-tag)
+        (not name)        (action :get-name get-name)
+        (not file)        (action :get-file get-file)
+        (already-on-done-path? ag)          die
+        (not length)      (action :get-length get-length)
+        (out-of-space-on-work-path? ag)     die
+        
+        (fully-loaded? ag) (cond (out-of-space-on-done-path? ag) die
+                                 done-path move-to-done-path
+                                 :else die)
+
+        :else (action :download download)))
+
+(defn make-download-agent
+  [address-line & {:as opts :keys [services strategy working-path done-path]
+                   :or {services *services*
+                        strategy individual-reflex-strategy}}]
+
+  (let [{:keys [service address]}
+        (when address-line (match-service address-line services))]
+
+    (when (and service address)
+      (make-agent (Download-agent (atom :idle)
+                                  (delay services)
+                                  service
+                                  individual-reflex-strategy
+                                  (URI. address)
+                                  working-path
+                                  done-path
+                                  nil nil nil nil)))))
+
 (def buffer-size 4096)
 (def timeout-after-fail   3000)
 (def connection-timeout   30000)
 (def head-request-timeout 30000)
 (def get-request-timeout  30000)
+
+(defmethod pass :default [ag]
+  ag)
+
+(defmethod idle :default [ag]
+  (status! ag :idle))
+
+(defmethod fail :default [ag]
+  (status! ag :fail))
+
+(defmethod die  :default [ag]
+  (status! ag :dead))
 
 (defmethod sleep :default [ag millis]
   (with-return ag
@@ -353,86 +395,40 @@
                  (fail ag)))
            (finally (.releaseConnection get))))))
 
-(defn next-alive-untagged-after [ag]
-  (next-after-when (fn/and alive? (fn/not tag) (partial same aim ag))
-                   ag (agents ag)))
+;; (defn next-alive-untagged-after [ag]
+;;   (next-after-when (fn/and alive? (fn/not tag) (partial same aim ag))
+;;                    ag (agents ag)))
 
-(defn alive-unfailed-with-same-tag-as [ag]
-  (some (fn/and alive? (fn/not fail) (partial same tag ag))
-        (agents ag)))
+;; (defn alive-unfailed-with-same-tag-as [ag]
+;;   (some (fn/and alive? (fn/not fail) (partial same tag ag))
+;;         (agents ag)))
 
-(defn next-alive-with-same-tag-after [ag]
-  (next-after-when (fn/and alive? (partial same tag ag))
-                   ag (agents ag)))
+;; (defn next-alive-with-same-tag-after [ag]
+;;   (next-after-when (fn/and alive? (partial same tag ag))
+;;                    ag (agents ag)))
 
 ;; (defn tag-locked-in-env? 
 ;;   [ag] (or (tag-locked? ag)
 ;;            (some (fn-and (partial same tag ag) tag-locked? (constantly true))
 ;;                  (env ag))))
 
-(defmacro action [name body]
-  `(with-meta #(~body %) {:action ~name}))
-
-(defn- reflex [{:as ag :keys [address link tag name file length done-path]}]
-  (cond (dead? ag)        (action :pass     pass)
-        (not address)     (action :die      die)
-        (not link)        (action :get-link get-link)
-        (not tag)         (action :get-tag  get-tag)
-        (not name)        (action :get-name get-name)
-        (not file)        (action :get-file get-file)
-        (already-on-done-path? ag)          die
-        (not length)      (action :get-length get-length)
-        (out-of-space-on-work-path? ag)     die
-        
-        (fully-loaded? ag) (cond (out-of-space-on-done-path? ag) die
-                                 done-path move-to-done-path
-                                 :else die)
-
-        :else (action :download download)))
-
-(defn- done [ag]
-  (with-return ag
-    (or (run (or (alive-unfailed-with-same-tag-as *agent*)
-                 (next-alive-with-same-tag-after *agent*)))
-        ;; (when (termination? ag) (terminate ag)))))
-        )))
-
-(defmethod run clojure.lang.Agent [ag & opts]
-  (send-off ag run opts))
-
-(defmethod run clojure.lang.PersistentHashMap [ag & opts]
-  (cond (dead? ag) ag
-
-        :else (execute ag (reflex ag))))
-
-        ;; ((no tag) ag)
-        ;; (let [new-state (action/percept-and-execute ag)]
-        ;;   (cond (dead? new-state) (done *agent*)
-        ;;         (fail? new-state) (do (sleep *agent* timeout-after-fail)
-        ;;                               (when-not (debug? ag) (run *agent*)))
-        ;;         (tag new-state) (when-not (debug? ag)
-        ;;                           (run (next-alive-untagged-after ag))
-        ;;                           (run *agent*))
-        ;;         :else (when-not (debug? ag) (run *agent*)))
-        ;;   new-state)
-
-        ;; (tag-locked-in-env? ag) ag
-
-        ;; :else (let [new-state 
-        ;;             (with-locked-tag ag (action/percept-and-execute ag))]
-        ;;         (cond (dead? new-state) (done *agent*)
-        ;;               (fail? new-state) (do (sleep *agent* timeout-after-fail)
-        ;;                                     (done *agent*))
-        ;;               :else (when-not (debug? ag) (run *agent*)))
-        ;;         new-state)))))
-
+;; (defn- done [ag]
+;;   (with-return ag
+;;     (or (run (or (alive-unfailed-with-same-tag-as *agent*)
+;;                  (next-alive-with-same-tag-after *agent*)))
+;;         ;; (when (termination? ag) (terminate ag)))))
+;;         )))
 
 (comment
-(def d (make-download-agent :line "http://dsv.data.cod.ru/720957"
+(def d (make-download-agent "http://dsv.data.cod.ru/745448"
                             :working-path (File. "/home/haru/inbox/")))
-(:action (meta (reflex @d)))
-(execute @d (reflex @d))
+
+(:action (meta (individual-reflex-strategy @d)))
+
+(run (run (run (run (run @d)))))
+
 (def gl (run (run (run @d))))
+
 gl
 
 (do
