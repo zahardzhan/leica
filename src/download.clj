@@ -167,10 +167,13 @@
    (execute ag (strategy ag)))
 
   (run
-   [ag & {:as opts :keys [rec transfer]}]
-   (binding [*rec* rec
-             *transfer* transfer]
-     (execute ag (strategy ag opts)))))
+   [ag & opts]
+   (let [{:keys [rec transfer]
+         :or {rec *rec*, transfer *transfer*}}
+         opts]
+     (binding [*rec* rec
+               *transfer* transfer]
+       (execute ag (strategy ag opts))))))
 
 (defmacro transfering-control [& body]
   `(when (and *agent* *transfer*)
@@ -199,6 +202,12 @@
 
 (defmulti reflex            service-dispatch)
 (defmulti reflex-with-transfer-of-control service-dispatch)
+
+(def buffer-size          4096)
+(def timeout-after-fail   3000)
+(def connection-timeout   30000)
+(def head-request-timeout 30000)
+(def get-request-timeout  30000)
 
 (defn make-download-agent
   [address-line & {:as opts :keys [services strategy working-path done-path]
@@ -296,12 +305,6 @@
                             (fail? ag-) (do (sleep ag- timeout-after-fail)
                                             (transfering-control (done ag- opts)))
                             :else (recursively (send *agent* run opts)))))))
-
-(def buffer-size          4096)
-(def timeout-after-fail   3000)
-(def connection-timeout   30000)
-(def head-request-timeout 30000)
-(def get-request-timeout  30000)
 
 (defmethod pass :default
   [ag]
@@ -476,25 +479,5 @@
 (def d (make-download-agent "http://dsv.data.cod.ru/745448"
                             :working-path (File. "/home/haru/inbox/")))
 
-(:action (meta (individual-reflex-strategy @d)))
-
 (run (run (run (run (run @d)))))
-
-(def gl (run (run (run @d))))
-
-gl
-
-(do
-  (reset! (gl :status) :idle)
-  (execute gl get-length))
-
-(:action (meta (reflex gl)))
-(run gl)
-d
-(agent-error d)
-(send-off d get-link)
-(send-off d get-host)
-(send-off d get-file)
-(send-off d get-length)
-(send-off d download)
 )
