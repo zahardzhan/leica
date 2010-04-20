@@ -85,6 +85,9 @@
 
   (execute [ag action])
   (run [ag] [ag & opts]))
+
+(def *rec*         true)
+(def *transfer*    true)
   
 (deftype Download-agent [status-atom services- service strategy
                          address working-path done-path 
@@ -150,21 +153,32 @@
 
   (execute
    [ag action]
-   (try (status! ag :running)
-        (let [fag (future (action ag))]
-          (try (with-deref [fag]
-                 (cond (run? fag) (status! fag :idle)
-                       :else fag))
-               (catch Exception _ (status! ag :fail))))
-        (catch AssertionError _ ag)))
+   (if (dead? ag) ag
+       (try (status! ag :running)
+            (let [fag (future (action ag))]
+              (try (with-deref [fag]
+                     (cond (run? fag) (status! fag :idle)
+                           :else fag))
+                   (catch Exception _ (status! ag :fail))))
+            (catch AssertionError _ ag))))
 
   (run
    [ag]
    (execute ag (strategy ag)))
 
   (run
-   [ag & opts]
-   (execute ag (strategy ag opts))))
+   [ag & {:as opts :keys [rec transfer]}]
+   (binding [*rec* rec
+             *transfer* transfer]
+     (execute ag (strategy ag opts)))))
+
+(defmacro transfering-control [& body]
+  `(when (and *agent* *transfer*)
+     (do ~@body)))
+
+(defmacro recursively [& body]
+  `(when (and *agent* *rec*)
+     (do ~@body)))
 
 (defn- service-dispatch
   ([] nil)
@@ -204,10 +218,16 @@
                                   done-path
                                   nil nil nil nil)))))
 
+(defn download-agent? [ag]
+  (= :download/Download-agent (type (derefed ag))))
+
+(defn download-env-termination? [env] false)
+
+(defn terminate-download-env [env] false)
+
 (defmethod reflex :default
   [{:as ag :keys [address link host name file length done-path]} & opts]
-  (cond (dead? ag)                 pass
-        (not address)              die
+  (cond (not address)              die
         (not (or link name))       parse-page
         (not host)                 get-host
         (not file)                 get-file
@@ -222,54 +242,60 @@
 
         :else                      download))
 
-;; (defn next-alive-untagged-after [ag]
-;;   (next-after-when (fn/and alive? (fn/not tag) (partial same aim ag))
-;;                    ag (agents ag)))
+(defn some-idle-same-host-as [ag]
+  (some (fn [sag] (with-deref [ag sag] (and (same type ag sag)
+                                            (same :host ag sag)
+                                            (idle? sag)
+                                            sag)))
+        (surrounding ag)))
 
-;; (defn alive-unfailed-with-same-tag-as [ag]
-;;   (some (fn/and alive? (fn/not fail) (partial same tag ag))
-;;         (agents ag)))
+(defn next-alive-same-host-after [ag]
+  (next-after-when (fn [sag] (with-deref [ag sag] (and (same type ag sag)
+                                                       (alive? sag))))
+                   ag (surrounding ag)))
 
-;; (defn next-alive-with-same-tag-after [ag]
-;;   (next-after-when (fn/and alive? (partial same tag ag))
-;;                    ag (agents ag)))
+(defn done [ag & opts]
+  (with-return ag
+    (or (transfering-control (send (or (some-idle-same-host-as *agent*)
+                                       (next-alive-same-host-after *agent*))
+                                   run opts))
+        (when (and *agent* (download-env-termination? (env *agent*)))
+          (terminate-download-env (env *agent*))))))
 
-;; (defn tag-locked-in-env? 
-;;   [ag] (or (tag-locked? ag)
-;;            (some (fn-and (partial same tag ag) tag-locked? (constantly true))
-;;                  (env ag))))
+(defn next-unhosted-and-nothing-doing-after [ag]
+  (next-after-when (fn [sag] (with-deref [ag sag] (and (same type ag sag)
+                                                       (does-nothing? sag)
+                                                       (not (:host sag)))))
+                   ag (surrounding ag)))
 
-;; (defn- done [ag]
-;;   (with-return ag
-;;     (or (run (or (alive-unfailed-with-same-tag-as *agent*)
-;;                  (next-alive-with-same-tag-after *agent*)))
-;;         ;; (when (termination? ag) (terminate ag)))))
-;;         )))
+(defn some-surrounding-agent-running-on-same-host-as [ag]
+  (some (fn [sag] (with-deref [ag sag] (and (same type ag sag)
+                                            (same :host ag sag)
+                                            (run? sag))))
+        (surrounding ag)))
 
-;; (defmethod reflex-with-transfer-of-control :default
-;;   [ag & opts]
-;;   (cond (dead? ag) pass
-        
-;;         (not (:host ag))
-;;         (let [new-state (action/percept-and-execute ag)]
-;;           (cond (dead? new-state) (done *agent*)
-;;                 (fail? new-state) (do (sleep *agent* timeout-after-fail)
-;;                                       (when-not (debug? ag) (run *agent*)))
-;;                 (host new-state) (when-not (debug? ag)
-;;                                    (run (next-alive-untagged-after ag))
-;;                                    (run *agent*))
-;;                 :else (when-not (debug? ag) (run *agent*)))
-;;           new-state)
+(defmethod reflex-with-transfer-of-control :default
+  [ag & opts]
+  (cond (not (:host ag))
+        (fn [ag]
+          (let-return [ag- (reflex ag opts)]
+                      (cond (dead? ag-) (transfering-control (done ag- opts))
+                            (fail? ag-) (do (sleep ag- timeout-after-fail)
+                                            (recursively (send *agent* run opts)))
+                            (:host ag-) (do (transfering-control
+                                             (send (next-unhosted-and-nothing-doing-after ag) run opts))
+                                            (recursively (send *agent* run opts)))
+                            :else (recursively (send *agent* run opts)))))
 
-;;         (tag-locked-in-env? ag) ag
+        (some-surrounding-agent-running-on-same-host-as *agent*) pass
 
-;;         :else (let [new-state 
-;;                     (with-locked-tag ag (action/percept-and-execute ag))]
-;;                 (cond (dead? new-state) (done *agent*)
-;;                       (fail? new-state) (do (sleep *agent* timeout-after-fail)
-;;                                             (done *agent*))
-;;                       :else (when-not (debug? ag) (run *agent*)))
-;;                 new-state)))
+        :else
+        (fn [ag]
+          (let-return [ag- (reflex ag opts)]
+                      (cond (dead? ag-) (transfering-control (done ag- opts))
+                            (fail? ag-) (do (sleep ag- timeout-after-fail)
+                                            (transfering-control (done ag- opts)))
+                            :else (recursively (send *agent* run opts)))))))
 
 (def buffer-size          4096)
 (def timeout-after-fail   3000)
