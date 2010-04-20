@@ -176,9 +176,7 @@
 (defmulti fail              service-dispatch)
 (defmulti die               service-dispatch)
 (defmulti sleep             service-dispatch)
-(defmulti get-link          service-dispatch)
-(defmulti get-name          service-dispatch)
-(defmulti get-link-and-name service-dispatch)
+(defmulti parse-page        service-dispatch)
 (defmulti get-host          service-dispatch)
 (defmulti get-file          service-dispatch)
 (defmulti get-length        service-dispatch)
@@ -210,26 +208,7 @@
   [{:as ag :keys [address link host name file length done-path]} & opts]
   (cond (dead? ag)                 pass
         (not address)              die
-        (not link)                 get-link
-        (not host)                 get-host
-        (not name)                 get-name
-        (not file)                 get-file
-        (already-on-done-path? ag) die
-        (not length)               get-length
-        (out-of-space-on-work-path? ag) die
-        
-        (fully-loaded? ag)
-        (cond (out-of-space-on-done-path? ag) die
-              done-path            move-to-done-path
-              :else                die)
-
-        :else                      download))
-
-(defmethod reflex ::data.cod.ru
-  [{:as ag :keys [address link host name file length done-path]} & opts]
-  (cond (dead? ag)                 pass
-        (not address)              die
-        (or (not link) (not name)) get-link-and-name
+        (not (or link name))       parse-page
         (not host)                 get-host
         (not file)                 get-file
         (already-on-done-path? ag) die
@@ -242,6 +221,30 @@
               :else                die)
 
         :else                      download))
+
+;; (defn next-alive-untagged-after [ag]
+;;   (next-after-when (fn/and alive? (fn/not tag) (partial same aim ag))
+;;                    ag (agents ag)))
+
+;; (defn alive-unfailed-with-same-tag-as [ag]
+;;   (some (fn/and alive? (fn/not fail) (partial same tag ag))
+;;         (agents ag)))
+
+;; (defn next-alive-with-same-tag-after [ag]
+;;   (next-after-when (fn/and alive? (partial same tag ag))
+;;                    ag (agents ag)))
+
+;; (defn tag-locked-in-env? 
+;;   [ag] (or (tag-locked? ag)
+;;            (some (fn-and (partial same tag ag) tag-locked? (constantly true))
+;;                  (env ag))))
+
+;; (defn- done [ag]
+;;   (with-return ag
+;;     (or (run (or (alive-unfailed-with-same-tag-as *agent*)
+;;                  (next-alive-with-same-tag-after *agent*)))
+;;         ;; (when (termination? ag) (terminate ag)))))
+;;         )))
 
 ;; (defmethod reflex-with-transfer-of-control :default
 ;;   [ag & opts]
@@ -253,8 +256,8 @@
 ;;                 (fail? new-state) (do (sleep *agent* timeout-after-fail)
 ;;                                       (when-not (debug? ag) (run *agent*)))
 ;;                 (host new-state) (when-not (debug? ag)
-;;                                   (run (next-alive-untagged-after ag))
-;;                                   (run *agent*))
+;;                                    (run (next-alive-untagged-after ag))
+;;                                    (run *agent*))
 ;;                 :else (when-not (debug? ag) (run *agent*)))
 ;;           new-state)
 
@@ -295,15 +298,13 @@
   (with-return ag
     (Thread/sleep millis)))
 
-(defmethod get-link :default
+(defmethod parse-page :default
   [{:as ag :keys [address]}]
-  (idle (assoc ag :link address)))
+  (idle (assoc ag
+          :link address
+          :name (second (re-find #"/([^/]+)$" (.getPath address))))))
 
-(defmethod get-name :default
-  [{:as ag :keys [link]}]
-  (idle (assoc ag :name (second (re-find #"/([^/]+)$" (.getPath link))))))
-
-(defmethod get-link-and-name ::data.cod.ru
+(defmethod parse-page ::data.cod.ru
   [{:as ag :keys [address]}]
   (let [#^HttpClient client (new HttpClient)
         #^GetMethod get (GetMethod. (str address))]
@@ -312,10 +313,16 @@
     (.. get getParams (setSoTimeout get-request-timeout))
     (try (let [status (.executeMethod client get)]
            (if (= status HttpStatus/SC_OK)
-             (let [parsed (service.cod.data.account/parse-page
-                           (duck/slurp* (.getResponseBodyAsStream get)))]
-               (if (and (parsed :name) (parsed :link))
-                 (idle (assoc ag :name (parsed :name) :link (parsed :link)))
+             (let [page (duck/slurp* (.getResponseBodyAsStream get))
+                   link (URI. (re-find #"http://files[-\d\w\.]*data.cod.ru/[^\"]+" page) true)
+                   name (second (re-find #"<b title=\".*\">(.*)</b>" page))
+                   space (let [[_ space unit]
+                               (re-find #"Вам доступно ([\d\.]+) (\p{javaUpperCase}{2})" page)]
+                           (when (and space unit)
+                             (int (* (Float/parseFloat space)
+                                     ({"ГБ" 1073741824, "МБ" 1048576, "КБ" 1024} unit)))))]
+               (if (and name link)
+                 (idle (assoc ag :name name :link link))
                  (do (log/info (str "Невозможно получить имя файла и ссылку с адреса " address))
                      (die ag))))
              (die ag)))
@@ -438,30 +445,6 @@
              (do (log/info (str "Ошибка во время загрузки " name))
                  (fail ag)))
            (finally (.releaseConnection get))))))
-
-;; (defn next-alive-untagged-after [ag]
-;;   (next-after-when (fn/and alive? (fn/not tag) (partial same aim ag))
-;;                    ag (agents ag)))
-
-;; (defn alive-unfailed-with-same-tag-as [ag]
-;;   (some (fn/and alive? (fn/not fail) (partial same tag ag))
-;;         (agents ag)))
-
-;; (defn next-alive-with-same-tag-after [ag]
-;;   (next-after-when (fn/and alive? (partial same tag ag))
-;;                    ag (agents ag)))
-
-;; (defn tag-locked-in-env? 
-;;   [ag] (or (tag-locked? ag)
-;;            (some (fn-and (partial same tag ag) tag-locked? (constantly true))
-;;                  (env ag))))
-
-;; (defn- done [ag]
-;;   (with-return ag
-;;     (or (run (or (alive-unfailed-with-same-tag-as *agent*)
-;;                  (next-alive-with-same-tag-after *agent*)))
-;;         ;; (when (termination? ag) (terminate ag)))))
-;;         )))
 
 (comment
 (def d (make-download-agent "http://dsv.data.cod.ru/745448"
