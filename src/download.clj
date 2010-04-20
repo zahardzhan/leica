@@ -283,7 +283,7 @@
                             (fail? ag-) (do (sleep ag- timeout-after-fail)
                                             (recursively (send *agent* run opts)))
                             (:host ag-) (do (transfering-control
-                                             (send (next-unhosted-and-nothing-doing-after ag) run opts))
+                                             (send (next-unhosted-and-nothing-doing-after *agent*) run opts))
                                             (recursively (send *agent* run opts)))
                             :else (recursively (send *agent* run opts)))))
 
