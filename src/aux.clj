@@ -48,6 +48,11 @@
   `(do (do ~@body)
        ~expr))
 
+(defmacro let-return 
+  [[form val] & body]
+  `(let [~form ~val]
+     (with-return ~form (do ~@body))))
+
 (defn file? [x]
   (and (instance? java.io.File x) (.isFile x)))
 
