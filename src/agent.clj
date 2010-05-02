@@ -19,51 +19,50 @@
 
 (in-ns 'agent)
 
-(defn tag [ag]
-  (-> ag meta :tag))
+(defprotocol PEnvironment
+  "An abstract description of possible discrete Environments in which Agent(s) 
+can perceive and act."
+  (agents [e] "The Agents belonging to this Environment.")
+  (add-agent [e, ag] "Add an agent to the Environment.")
+  (remove-agent [e, ag] "Remove an agent from the environment.")
+  (done? [e] "True if Environment is finished with its current task(s)."))
 
-(defn precedence [ag]
-  (-> ag meta :precedence))
+(defrecord Environment
+  [#^clojure.lang.Ref -agents]
+  PEnvironment
+  (agents [e] (deref -agents)))
+
+(defn make-env [& {:keys [agents]}]
+  (new Environment (ref (or (set agents) (set nil)))))
+
+(defn make-agent [state & {:as opts
+                           :keys [meta validator error-handler error-mode]}]
+  (let-return [a (agent state
+                        :meta meta
+                        :validator validator
+                        :error-handler error-handler
+                        :error-mode error-mode)]
+              (alter-meta! a assoc :env (ref (make-env :agents [a])))))
+
+(defn env? [e]
+  (extends? PEnvironment (type e)))
+
+(defn env-agent? [a]
+  (and (agent? a) (env? (env a))))
 
 (defn env [ag]
   (-> ag meta :env deref))
 
 (defn surrounding [ag]
-  (-> ag env deref :agents))
-
-(defn- set-sorted-by-precedence [& xs] 
-  (apply (partial sorted-set-by 
-                  (comparator #(< (precedence %1) (precedence %2))))
-         xs))
-
-(defn- make-env [& {:as state :keys [agents]}]
-  (ref (merge state {:agents (or (apply set-sorted-by-precedence agents)
-                                 (set-sorted-by-precedence))})))
-
-(let [precedence-counter (atom 0)]
-  (defn make-agent [state & {:as opts
-                             :keys [tag meta validator
-                                    error-handler error-mode]
-                             :or {tag ::agent}}]
-    (let [a (agent state
-                   :meta meta
-                   :validator validator
-                   :error-handler error-handler
-                   :error-mode error-mode)]
-      (with-return a
-        (alter-meta! a assoc
-                     :tag tag
-                     :precedence (swap! precedence-counter inc))
-        (alter-meta! a assoc :env (ref (make-env :agents [a])))))))
+  (-> ag env agents))
 
 (defn bind
-  {:post [ref?]}
-  ([x y & zs] {:pre  [(agent? x) (agent? y) (every? agent? zs)]}
-     (let [unified (make-env :agents (union (surrounding x)
-                                            (surrounding y)
-                                            (apply union (map surrounding zs))
-                                            (set-sorted-by-precedence x y)
-                                            (apply set-sorted-by-precedence zs)))]
-       (with-return unified
-         (dosync (doseq [ag (@unified :agents)]
-                   (ref-set ((meta ag) :env) unified)))))))
+  {:post [env?]}
+  ([x y & zs] {:pre  [(env-agent? x) (env-agent? y) (every? env-agent? zs)]}
+     (let-return [unified (make-env :agents (union (surrounding x)
+                                                   (surrounding y)
+                                                   (apply union (map surrounding zs))
+                                                   (set [x y])
+                                                   (set zs)))]
+                 (dosync (doseq [ag (agents unified)]
+                           (ref-set ((meta ag) :env) unified))))))

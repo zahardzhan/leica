@@ -50,11 +50,12 @@
             {:service service :address address}))
         services))
 
+;; "(?:ht|f)tp(?:s?)://[0-9a-zA-Z](?:[-.\\w]*[0-9a-zA-Z])*(?::(?:0-9)*)*(?:/?)(?:[a-zA-Z0-9\\-\\.\\?\\,/\\+&%\\$#\\*]*)?"
+;; standalone hyperlink regexp des for parsing
+
 (def *services*
      {::data.cod.ru
       {:address #"http://[\w\.\-]*.data.cod.ru/\d+"
-       ;; :link (URI. (re-find #"http://files[-\d\w\.]*data.cod.ru/[^\"]+" page) true)
-       ;; :name (second (re-find #"<b title=\".*\">(.*)</b>" page))
        :hosts #{#"files3?.dsv.*.data.cod.ru" #"files2.dsv.*.data.cod.ru"}}
 
       ::77.35.112.8*
@@ -89,12 +90,10 @@
 (def *rec*         true)
 (def *transfer*    true)
   
-(deftype Download-agent [status-atom services- service strategy
-                         address working-path done-path 
-                         host link file length]
+(defrecord Download-agent [status-atom services- service strategy
+                           #^URI address working-path done-path 
+                           host link file length]
 
-  clojure.lang.IPersistentMap
-  
   Download-agent-protocol
   (status [ag] @status-atom)
 
@@ -169,7 +168,7 @@
   (run
    [ag & opts]
    (let [{:keys [rec transfer]
-         :or {rec *rec*, transfer *transfer*}}
+          :or {rec *rec*, transfer *transfer*}}
          opts]
      (binding [*rec* rec
                *transfer* transfer]
@@ -218,14 +217,14 @@
         (when address-line (match-service address-line services))]
 
     (when (and service address)
-      (make-agent (Download-agent (atom :idle)
-                                  (delay services)
-                                  service
-                                  strategy
-                                  (URI. address)
-                                  working-path
-                                  done-path
-                                  nil nil nil nil)))))
+      (make-agent (new Download-agent (atom :idle)
+                       (delay services)
+                       service
+                       strategy
+                       (URI. address)
+                       working-path
+                       done-path
+                       nil nil nil nil)))))
 
 (defn download-agent? [ag]
   (= :download/Download-agent (type (derefed ag))))
@@ -476,8 +475,23 @@
            (finally (.releaseConnection get))))))
 
 (comment
+
+(defn strtg1 [ag & opts]
+  (fn [ag]
+    (let-return [ag- ((reflex ag opts) ag)]
+                1)))
+  
 (def d (make-download-agent "http://dsv.data.cod.ru/745448"
-                            :working-path (File. "/home/haru/inbox/")))
+                            :working-path (File. "/home/haru/inbox/")
+                            :strategy strtg1))
+d
+(execute @d ((:strategy @d) @d :rec false :transfer false))
 
 (run (run (run (run (run @d)))))
+
+;; http://dsv.data.cod.ru/749720
+;; http://dsv-region.data.cod.ru/24896
+;; http://dsv.data.cod.ru/749862
+;; http://dsv.data.cod.ru/750796
+;; http://dsv.data.cod.ru/749726
 )
