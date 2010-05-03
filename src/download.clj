@@ -64,128 +64,29 @@
       ::dsvload.net.ftpupload
       {:address #"http://dsvload.net/ftpupload/.+"}})
 
-(defprotocol Downloading
-  (status [ag])
-  (status! [ag new-status])
-  (status? [ag current-status])
-
-  (dead? [ag])
-  (alive? [ag])
-  (run? [ag])
-  (does-nothing? [ag])
-  (ok? [ag])
-  (idle? [ag])
-  (fail? [ag])
-
-  (services [ag])
-  
-  (out-of-space-on-work-path? [ag])
-  (out-of-space-on-done-path? [ag])
-  (fully-loaded? [ag])
-  (already-on-done-path? [ag])
-
-  (execute [ag action])
-  (run [ag] [ag & opts]))
-
-(def *rec*         true)
-(def *transfer*    true)
-  
-(defrecord DownloadAgent
-  [status-atom services- service strategy, #^URI address, working-path done-path 
-   host link file length]
-
-  Downloading
-  (status [ag] @status-atom)
-
-  (status!
-   [ag new-status]
-   {:pre [(({:idle    #{:running}
-             :fail    #{:running}
-             :dead    #{}
-             :running #{:stoping :idle :fail :dead}
-             :stoping #{:idle :fail :dead}}
-            (status ag)) new-status)]}
-   (with-return ag
-     (reset! status-atom new-status)))
-
-  (status?
-   [ag current-status]
-   (cond (keyword? current-status) (= (status ag) current-status)
-         (set? current-status) (keyword? (current-status (status ag)))))
-
-  (dead? [ag] (status? ag :dead))
-  
-  (alive? [ag] (not (dead? ag)))
-
-  (run? [ag] (status? ag #{:running :stoping}))
-  
-  (does-nothing? [ag] (status? ag #{:idle :fail}))
-  
-  (ok? [ag] (status? ag #{:idle :running :stoping}))
-  
-  (idle? [ag] (status? ag :idle))
-  
-  (fail? [ag] (status? ag :fail))
-
-  (services [ag] @services-)
-
-  (out-of-space-on-work-path?
-   [ag]
-   (when (and working-path length file)
-     (< (.getUsableSpace working-path)
-        (- length (file-length file)))))
-
-  (out-of-space-on-done-path?
-   [ag]
-   (when (and done-path length)
-     (< (.getUsableSpace done-path) length)))
-
-  (fully-loaded?
-   [ag]
-   (when (and length file)
-     (<= length (file-length file))))
-
-  (already-on-done-path?
-   [ag]
-   (when (and done-path file)
-     (.exists (File. done-path (.getName file)))))
-
-  (execute
-   [ag action]
-   (if (dead? ag) ag
-       (try (status! ag :running)
-            (let [fag (future (action ag))]
-              (try (with-deref [fag]
-                     (cond (run? fag) (status! fag :idle)
-                           :else fag))
-                   (catch Exception _ (status! ag :fail))))
-            (catch AssertionError _ ag))))
-
-  (run
-   [ag]
-   (execute ag (strategy ag)))
-
-  (run
-   [ag & opts]
-   (let [{:keys [rec transfer]
-          :or {rec *rec*, transfer *transfer*}}
-         opts]
-     (binding [*rec* rec
-               *transfer* transfer]
-       (execute ag (strategy ag opts))))))
-
-(defmacro transfering-control [& body]
-  `(when (and *agent* *transfer*)
-     (do ~@body)))
-
-(defmacro recursively [& body]
-  `(when (and *agent* *rec*)
-     (do ~@body)))
-
 (defn- service-dispatch
   ([] nil)
   ([ag] (:service ag))
   ([ag & opts] (:service ag)))
+
+(defmulti status            service-dispatch)
+(defmulti status!           service-dispatch)
+(defmulti status?           service-dispatch)
+
+(defmulti services          service-dispatch)
+
+(defmulti dead?             service-dispatch)
+(defmulti alive?            service-dispatch)
+(defmulti run?              service-dispatch)
+(defmulti does-nothing?     service-dispatch)
+(defmulti ok?               service-dispatch)
+(defmulti idle?             service-dispatch)
+(defmulti fail?             service-dispatch)
+
+(defmulti out-of-space-on-work-path? service-dispatch)
+(defmulti out-of-space-on-done-path? service-dispatch)
+(defmulti fully-loaded?              service-dispatch)
+(defmulti already-on-done-path?      service-dispatch)
 
 (defmulti pass              service-dispatch)
 (defmulti idle              service-dispatch)
@@ -202,11 +103,10 @@
 (defmulti reflex            service-dispatch)
 (defmulti reflex-with-transfer-of-control service-dispatch)
 
-(def buffer-size          4096)
-(def timeout-after-fail   3000)
-(def connection-timeout   30000)
-(def head-request-timeout 30000)
-(def get-request-timeout  30000)
+(derive ::download-agent :agent/agent)
+
+(defn download-agent? [ag]
+  (isa? (derefed ag type) ::download-agent))
 
 (defn make-download-agent
   [address-line & {:as opts :keys [services strategy working-path done-path]
@@ -217,17 +117,123 @@
         (when address-line (match-service address-line services))]
 
     (when (and service address)
-      (make-agent (new DownloadAgent (atom :idle)
-                       (delay services)
-                       service
-                       strategy
-                       (URI. address)
-                       working-path
-                       done-path
-                       nil nil nil nil)))))
+      (make-agent :type ::download-agent
+                  :status (atom :idle)
+                  :services (delay services)
+                  :service service
+                  :strategy strategy
+                  :address (URI. address)
+                  :working-path working-path
+                  :done-path done-path
+                  :host nil
+                  :link nil
+                  :file nil
+                  :length nil))))
 
-(defn download-agent? [ag]
-  (= :download/DownloadAgent (type (derefed ag))))
+(def *rec*         true)
+(def *transfer*    true)
+
+(defmacro transfering-control [& body]
+  `(when (and *agent* *transfer*)
+     (do ~@body)))
+
+(defmacro recursively [& body]
+  `(when (and *agent* *rec*)
+     (do ~@body)))
+
+(defmethod status :default [ag]
+  (deref (:status ag)))
+
+(defmethod status! :default [ag new-status]
+  {:pre [(({:idle    #{:running}
+            :fail    #{:running}
+            :dead    #{}
+            :running #{:stoping :idle :fail :dead}
+            :stoping #{:idle :fail :dead}}
+           (status ag)) new-status)]}
+  (with-return ag
+    (reset! (:status ag) new-status)))
+
+(defmethod status? :default [ag current-status]
+   (cond (keyword? current-status) (= (status ag) current-status)
+         (set? current-status) (keyword? (current-status (status ag)))))
+
+(defmethod services :default [ag]
+  (force (:services ag)))
+
+(defmethod dead? :default [ag]
+  (status? ag :dead))
+
+(defmethod alive? :default [ag]
+  (not (dead? ag)))
+
+(defmethod run? :default [ag]
+  (status? ag #{:running :stoping}))
+
+(defmethod does-nothing? :default [ag]
+  (status? ag #{:idle :fail}))
+  
+(defmethod ok? :default [ag]
+  (status? ag #{:idle :running :stoping}))
+  
+(defmethod idle? :default [ag]
+  (status? ag :idle))
+  
+(defmethod fail? :default [ag]
+  (status? ag :fail))
+
+(defmethod out-of-space-on-work-path? :default
+  [{:as ag :keys [working-path length file]}]
+  (when (and working-path length file)
+    (< (.getUsableSpace working-path)
+       (- length (file-length file)))))
+
+(defmethod out-of-space-on-done-path? :default
+  [{:as ag :keys [done-path length]}]
+  (when (and done-path length)
+    (< (.getUsableSpace done-path) length)))
+
+(defmethod fully-loaded? :default
+  [{:as ag :keys [length file]}]
+  (when (and length file)
+    (<= length (file-length file))))
+
+(defmethod already-on-done-path? :default
+  [{:as ag :keys [done-path file]}]
+  (when (and done-path file)
+    (.exists (File. done-path (.getName file)))))
+
+(defmethod get-action ::download-agent
+  [ag & opts]
+  ((ag :strategy) ag opts))
+
+(defmethod execute ::download-agent
+  [ag action]
+  (if (dead? ag) ag
+      (try (status! ag :running)
+           (let [fag (future (action ag))]
+             (try (with-deref [fag]
+                    (cond (run? fag) (status! fag :idle)
+                          :else fag))
+                  (catch Exception _ (status! ag :fail))))
+           (catch AssertionError _ ag))))
+
+(defmethod run ::download-agent
+  [ag & opts]
+  (cond (not opts) (execute ag (get-action ag))
+
+        :else (let [{:keys [rec transfer]
+                     :or {rec *rec*, transfer *transfer*}}
+                    opts]
+                (binding [*rec* rec
+                          *transfer* transfer]
+                  (execute ag (get-action ag opts))))))
+
+(def buffer-size          4096)
+(def timeout-after-fail   3000)
+(def connection-timeout   30000)
+(def head-request-timeout 30000)
+(def get-request-timeout  30000)
 
 (defn download-env-termination? [env] false)
 
@@ -483,12 +489,12 @@
   
 (def d (make-download-agent "http://dsv.data.cod.ru/745448"
                             :working-path (File. "/home/haru/inbox/")
-                            :strategy strtg1))
+                            ))
 d
 (execute @d ((:strategy @d) @d :rec false :transfer false))
 
 (run (run (run (run (run @d)))))
 
-http://dsv.data.cod.ru/761489
-http://dsv.data.cod.ru/759561
+;; http://dsv.data.cod.ru/761489
+;; http://dsv.data.cod.ru/759561
 )

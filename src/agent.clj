@@ -77,8 +77,8 @@
 ;;; existing methods) for each of the following functions.  Here are
 ;;; the ones that will change for each new environment:
 
-(defmulti get-percept
-  "Return the percept for this agent."
+(defmulti get-action
+  "Execute agent program, get next action."
   type)
 
 (defmulti legal-actions
