@@ -19,42 +19,96 @@
 
 (in-ns 'agent)
 
-(defprotocol PEnvironment
-  "An abstract description of possible discrete Environments in which Agent(s) 
-can perceive and act."
-  (agents [e] "The Agents belonging to this Environment.")
-  (add-agent [e, ag] "Add an agent to the Environment.")
-  (remove-agent [e, ag] "Remove an agent from the environment.")
-  (done? [e] "True if Environment is finished with its current task(s)."))
+(defn make-env
+  "The world in which agents exist. Add new slots to hold various
+  state information."  
+  [& {:as opts :keys [type agents]}]
+  {:post [(map? %)]}
+  (with-meta (merge (dissoc opts :agents :type)
+                    {:agents (ref (if (seq? (sequence agents))
+                                    (set agents)
+                                    (set nil)))})
+    {:type (or type ::environment)}))
 
-(defrecord Environment
-  [#^clojure.lang.Ref -agents]
-  PEnvironment
-  (agents [e] (deref -agents)))
+(defn env? [e]
+  (isa? ::environment (type e)))
 
-(defn make-env [& {:keys [agents]}]
-  (new Environment (ref (or (set agents) (set nil)))))
+(defn agents "The agents belonging to this environment." [e]
+  (deref (:agents e)))
 
-(defn make-agent [state & {:as opts
-                           :keys [meta validator error-handler error-mode]}]
-  (let-return [a (agent state
+(defn make-agent
+  "An agent is something that perceives and acts. The action will be
+  performed in the environment (if legal). Each agent also has a slot
+  for the agent program, and one for its score as determined by the
+  performance measure. Agents take actions (based on percepts of the
+  agent program) and receive a score (based on the performance
+  measure)."
+  [& {:as opts
+      :keys [type meta validator error-handler error-mode]}]
+  {:post [(agent? %)]}
+  (let-return [a (agent (with-meta (merge (dissoc opts :type :meta :validator
+                                                  :error-handler :error-mode)
+                                          (hash-map))
+                          {:type (or type ::agent)})
                         :meta meta
                         :validator validator
                         :error-handler error-handler
                         :error-mode error-mode)]
-              (alter-meta! a assoc :env (ref (make-env :agents [a])))))
+              (send a assoc :env (delay (ref (make-env :agents [a]))))
+              (await a)))
 
-(defn env? [e]
-  (extends? PEnvironment (type e)))
+(defn env "The environment belonging to this agent." [a]
+  (derefed a :env force deref))
 
 (defn env-agent? [a]
-  (and (agent? a) (env? (env a))))
+  (and (agent? a)
+       (isa? ::agent (type (derefed a)))
+       (env? (env a))))
 
-(defn env [ag]
-  (-> ag meta :env deref))
+(defn surrounding "The agents belonging to environment this agent belonging to." [a]
+  (agents (env a)))
 
-(defn surrounding [ag]
-  (-> ag env agents))
+;;;; Generic Functions that must be defined for each environment and
+;;;; agent type.
+
+;;; For each new type of environment or agent you want to define, you
+;;; will need a define a type that derives from ::agent or
+;;; ::environment, and you will need to write new methods (or inherit
+;;; existing methods) for each of the following functions.  Here are
+;;; the ones that will change for each new environment:
+
+(defmulti get-percept
+  "Return the percept for this agent."
+  type)
+
+(defmulti legal-actions
+  "A list of the action operators that an agent can do."
+  type)
+
+(defmulti performance
+  "Return a number saying how well this agent is doing."
+  type)
+
+(defmulti done?
+  "True if Environment is finished with its current task(s)."
+  type)
+
+(defmulti execute
+  "Agent (if the agent is alive and has specified a legal action)
+  takes the action."
+  type)
+
+(defmulti run
+  "Run agent program and execute an action."
+  type)
+
+(defmulti add-agent
+  "Add an agent to the Environment."
+  type)
+
+(defmulti remove-agent
+  "Remove an agent from the environment."
+  type)
 
 (defn bind
   {:post [env?]}
@@ -65,4 +119,11 @@ can perceive and act."
                                                    (set [x y])
                                                    (set zs)))]
                  (dosync (doseq [ag (agents unified)]
-                           (ref-set ((meta ag) :env) unified))))))
+                           (ref-set @(derefed ag :env) unified))))))
+
+;; (let [a (make-agent :a 1)
+;;       b (make-agent :b 2)
+;;       c (make-agent :c 3)]
+;;   (bind a b)
+;;   (bind a c)
+;;   [(identical? (env b) (env c)) (env c)])
