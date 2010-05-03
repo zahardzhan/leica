@@ -64,7 +64,7 @@
       ::dsvload.net.ftpupload
       {:address #"http://dsvload.net/ftpupload/.+"}})
 
-(defprotocol Download-agent-protocol
+(defprotocol Downloading
   (status [ag])
   (status! [ag new-status])
   (status? [ag current-status])
@@ -90,11 +90,11 @@
 (def *rec*         true)
 (def *transfer*    true)
   
-(defrecord Download-agent [status-atom services- service strategy
-                           #^URI address working-path done-path 
-                           host link file length]
+(defrecord DownloadAgent
+  [status-atom services- service strategy, #^URI address, working-path done-path 
+   host link file length]
 
-  Download-agent-protocol
+  Downloading
   (status [ag] @status-atom)
 
   (status!
@@ -217,7 +217,7 @@
         (when address-line (match-service address-line services))]
 
     (when (and service address)
-      (make-agent (new Download-agent (atom :idle)
+      (make-agent (new DownloadAgent (atom :idle)
                        (delay services)
                        service
                        strategy
@@ -227,7 +227,7 @@
                        nil nil nil nil)))))
 
 (defn download-agent? [ag]
-  (= :download/Download-agent (type (derefed ag))))
+  (= :download/DownloadAgent (type (derefed ag))))
 
 (defn download-env-termination? [env] false)
 
@@ -489,9 +489,6 @@ d
 
 (run (run (run (run (run @d)))))
 
-;; http://dsv.data.cod.ru/749720
-;; http://dsv-region.data.cod.ru/24896
-;; http://dsv.data.cod.ru/749862
-;; http://dsv.data.cod.ru/750796
-;; http://dsv.data.cod.ru/749726
+http://dsv.data.cod.ru/761489
+http://dsv.data.cod.ru/759561
 )
