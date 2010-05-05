@@ -31,7 +31,7 @@
     {:type (or type ::environment)}))
 
 (defn env? [e]
-  (isa? ::environment (type e)))
+  (isa? (type e) ::environment))
 
 (defn agents "The agents belonging to this environment." [e]
   (deref (:agents e)))
@@ -77,38 +77,46 @@
 ;;; existing methods) for each of the following functions.  Here are
 ;;; the ones that will change for each new environment:
 
+(defn type-dispatch
+    ([x] (type x))
+    ([x & args] (type x)))
+
 (defmulti get-action
   "Execute agent program, get next action."
-  type)
+  type-dispatch)
 
 (defmulti legal-actions
   "A list of the action operators that an agent can do."
-  type)
+  type-dispatch)
 
 (defmulti performance
   "Return a number saying how well this agent is doing."
-  type)
+  type-dispatch)
 
 (defmulti done?
   "True if Environment is finished with its current task(s)."
-  type)
+  type-dispatch)
+
+(defmulti terminate
+  "Destroy agent or environment when it is done."
+  type-dispatch)
 
 (defmulti execute
   "Agent (if the agent is alive and has specified a legal action)
   takes the action."
-  type)
+  type-dispatch)
 
 (defmulti run
   "Run agent program and execute an action."
-  type)
+  type-dispatch)
 
 (defmulti add-agent
   "Add an agent to the Environment."
-  type)
+  type-dispatch)
 
 (defmulti remove-agent
   "Remove an agent from the environment."
-  type)
+  type-dispatch)
 
 (defn bind
   {:post [env?]}

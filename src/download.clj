@@ -103,10 +103,21 @@
 (defmulti reflex            service-dispatch)
 (defmulti reflex-with-transfer-of-control service-dispatch)
 
+(derive ::download-environment :agent/environment)
+
+(defn download-env? [e]
+  (and (env? e)
+       (isa? (type e) ::download-environment)))
+
+(defn make-download-env
+  [& {:as opts :keys [type agents]}]
+  (make-env :type ::download-environment))
+
 (derive ::download-agent :agent/agent)
 
 (defn download-agent? [ag]
-  (isa? (derefed ag type) ::download-agent))
+  (and (env-agent? ag)
+       (isa? (derefed ag type) ::download-agent)))
 
 (defn make-download-agent
   [address-line & {:as opts :keys [services strategy working-path done-path]
@@ -129,17 +140,6 @@
                   :link nil
                   :file nil
                   :length nil))))
-
-(def *rec*         true)
-(def *transfer*    true)
-
-(defmacro transfering-control [& body]
-  `(when (and *agent* *transfer*)
-     (do ~@body)))
-
-(defmacro recursively [& body]
-  `(when (and *agent* *rec*)
-     (do ~@body)))
 
 (defmethod status :default [ag]
   (deref (:status ag)))
@@ -222,22 +222,20 @@
   [ag & opts]
   (cond (not opts) (execute ag (get-action ag))
 
-        :else (let [{:keys [rec transfer]
-                     :or {rec *rec*, transfer *transfer*}}
-                    opts]
-                (binding [*rec* rec
-                          *transfer* transfer]
-                  (execute ag (get-action ag opts))))))
+        :else (execute ag (get-action ag opts))))
+
+(defmulti done? ::download-environment
+  [e]
+  (every? dead? (deref-seq (agents e))))
+
+(defmulti terminate ::download-environment
+  [e] nil)
 
 (def buffer-size          4096)
 (def timeout-after-fail   3000)
 (def connection-timeout   30000)
 (def head-request-timeout 30000)
 (def get-request-timeout  30000)
-
-(defn download-env-termination? [env] false)
-
-(defn terminate-download-env [env] false)
 
 (defmethod reflex :default
   [{:as ag :keys [address link host name file length done-path]} & opts]
@@ -482,19 +480,28 @@
 
 (comment
 
-(defn strtg1 [ag & opts]
-  (fn [ag]
-    (let-return [ag- ((reflex ag opts) ag)]
-                1)))
+  (def j nil)
+  (def a (agent nil))
+
+  (defn pj [x] (. System/out print j) x)
+  (defn f1 [x] (send a pj) x)
+
+  (binding [j 2]
+    (send a pj))
+
+  (defn strtg1 [ag & opts]
+    (fn [ag]
+      (let-return [ag- ((reflex ag opts) ag)]
+                  1)))
   
-(def d (make-download-agent "http://dsv.data.cod.ru/745448"
-                            :working-path (File. "/home/haru/inbox/")
-                            ))
-d
-(execute @d ((:strategy @d) @d :rec false :transfer false))
+  (def d (make-download-agent "http://dsv.data.cod.ru/745448"
+                              :working-path (File. "/home/haru/inbox/")
+                              ))
+  d
+  (execute @d ((:strategy @d) @d :rec false :transfer false))
 
-(run (run (run (run (run @d)))))
+  (run (run (run (run (run @d)))))
 
-;; http://dsv.data.cod.ru/761489
-;; http://dsv.data.cod.ru/759561
-)
+  ;; http://dsv.data.cod.ru/761489
+  ;; http://dsv.data.cod.ru/759561
+  )
