@@ -31,9 +31,12 @@
     {:type (or type ::environment)}))
 
 (defn env? [e]
-  (isa? (type e) ::environment))
+  (and (map? e)
+       (isa? (type e) ::environment)))
 
 (defn agents "The agents belonging to this environment." [e]
+  {:pre  [(env? e)]
+   :post [(set? %)]}
   (deref (:agents e)))
 
 (defn make-agent
@@ -48,7 +51,8 @@
   {:pre  [(when-supplied type (keyword? type))
           (when-supplied environment (env? environment))]
    :post [(agent? %)]}
-  (let-return [a (agent (with-meta (merge (dissoc opts :type :env :meta :validator
+  (let-return [a (agent (with-meta (merge (dissoc opts :type :environment
+                                                  :meta :validator
                                                   :error-handler :error-mode)
                                           {:env (delay (ref environment))})
                           {:type (or type ::agent)})
@@ -57,16 +61,40 @@
                         :error-handler error-handler
                         :error-mode error-mode)]))
 
-(defn env "The environment belonging to this agent." [a]
-  (derefed a :env force deref))
-
 (defn env-agent? [a]
   (and (agent? a)
-       (isa? ::agent (type (derefed a)))
-       (env? (env a))))
+       (isa? (derefed a type) ::agent)))
+
+(defn env "The environment belonging to this agent." [a]
+  {:pre  [(env-agent? a)]
+   :post [(or (nil? %) (env? %))]}
+  (derefed a :env force deref))
 
 (defn surrounding "The agents belonging to environment this agent belonging to." [a]
-  (agents (env a)))
+  {:pre  [(env-agent? a)]
+   :post [(set? %)]}
+  (if-let [e (env a)]
+    (agents e)
+    (set nil)))
+
+(defn binded? "Agent is binded to environment and vice-versa?"
+  ([a]   (and ((surrounding a) a) true))
+  ([a e] (and (identical? e (env a)) (binded? a))))
+
+(defn unbind! "Unbind agent from environment and vice-versa." [a]
+  {:pre  [(env-agent? a)]}
+  (with-return a
+    (when (binded? a)
+      (dosync (alter (:agents (env a)) difference #{a})
+              (ref-set (derefed a :env force) nil)))))
+
+(defn bind! "Bind agent to environment and vice-versa." [a e]
+  {:pre  [(env? e) (env-agent? a)]}
+  (with-return e
+    (when-not (binded? a e)
+      (when (binded? a) (unbind! a))
+      (dosync (alter (:agents e) union #{a})
+              (ref-set (derefed a :env force) e)))))
 
 ;;;; Generic Functions that must be defined for each environment and
 ;;;; agent type.
@@ -80,6 +108,12 @@
 (defn type-dispatch
     ([x] (type x))
     ([x & args] (type x)))
+
+(defn type2-dispatch
+  [x y] [(type x) (type y)])
+
+(defn type2-derefed-dispatch
+  [x y] [(derefed x type) (derefed y type)])
 
 (defmulti get-action
   "Execute agent program, get next action."
@@ -112,26 +146,16 @@
 
 (defmulti add-agent
   "Add an agent to the Environment."
-  type-dispatch)
+  type2-derefed-dispatch)
 
 (defmulti remove-agent
   "Remove an agent from the environment."
-  type-dispatch)
+  type2-derefed-dispatch)
 
-(defn bind
-  {:post [env?]}
-  ([x y & zs] {:pre  [(env-agent? x) (env-agent? y) (every? env-agent? zs)]}
-     (let-return [unified (make-env :agents (union (surrounding x)
-                                                   (surrounding y)
-                                                   (apply union (map surrounding zs))
-                                                   (set [x y])
-                                                   (set zs)))]
-                 (dosync (doseq [ag (agents unified)]
-                           (ref-set @(derefed ag :env) unified))))))
+(defmethod add-agent [::environment ::agent] [e a]
+  (with-return e
+    (bind! a e)))
 
-;; (let [a (make-agent :a 1)
-;;       b (make-agent :b 2)
-;;       c (make-agent :c 3)]
-;;   (bind a b)
-;;   (bind a c)
-;;   [(identical? (env b) (env c)) (env c)])
+(defmethod remove-agent [::environment ::agent] [e a]
+  (with-return e
+    (unbind! a)))
