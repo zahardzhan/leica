@@ -24,7 +24,7 @@
   state information."  
   [& {:as opts :keys [type agents]}]
   {:post [(map? %)]}
-  (with-meta (merge (dissoc opts :agents :type)
+  (with-meta (merge (dissoc opts :type :agents)
                     {:agents (ref (if (seq? (sequence agents))
                                     (set agents)
                                     (set nil)))})
@@ -44,18 +44,18 @@
   agent program) and receive a score (based on the performance
   measure)."
   [& {:as opts
-      :keys [type meta validator error-handler error-mode]}]
-  {:post [(agent? %)]}
-  (let-return [a (agent (with-meta (merge (dissoc opts :type :meta :validator
+      :keys [type environment meta validator error-handler error-mode]}]
+  {:pre  [(when-supplied type (keyword? type))
+          (when-supplied environment (env? environment))]
+   :post [(agent? %)]}
+  (let-return [a (agent (with-meta (merge (dissoc opts :type :env :meta :validator
                                                   :error-handler :error-mode)
-                                          (hash-map))
+                                          {:env (delay (ref environment))})
                           {:type (or type ::agent)})
                         :meta meta
                         :validator validator
                         :error-handler error-handler
-                        :error-mode error-mode)]
-              (send a assoc :env (delay (ref (make-env :agents [a]))))
-              (await a)))
+                        :error-mode error-mode)]))
 
 (defn env "The environment belonging to this agent." [a]
   (derefed a :env force deref))
