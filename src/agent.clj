@@ -19,83 +19,6 @@
 
 (in-ns 'agent)
 
-(defn make-env
-  "The world in which agents exist. Add new slots to hold various
-  state information."  
-  [& {:as opts :keys [type agents]}]
-  {:post [(map? %)]}
-  (with-meta (merge (dissoc opts :type :agents)
-                    {:agents (ref (if (seq? (sequence agents))
-                                    (set agents)
-                                    (set nil)))})
-    {:type (or type ::environment)}))
-
-(defn env? [e]
-  (and (map? e)
-       (isa? (type e) ::environment)))
-
-(defn agents "The agents belonging to this environment." [e]
-  {:pre  [(env? e)]
-   :post [(set? %)]}
-  (deref (:agents e)))
-
-(defn make-agent
-  "An agent is something that perceives and acts. The action will be
-  performed in the environment (if legal). Each agent also has a slot
-  for the agent program, and one for its score as determined by the
-  performance measure. Agents take actions (based on percepts of the
-  agent program) and receive a score (based on the performance
-  measure)."
-  [& {:as opts
-      :keys [type environment meta validator error-handler error-mode]}]
-  {:pre  [(when-supplied type (keyword? type))
-          (when-supplied environment (env? environment))]
-   :post [(agent? %)]}
-  (let-return [a (agent (with-meta (merge (dissoc opts :type :environment
-                                                  :meta :validator
-                                                  :error-handler :error-mode)
-                                          {:env (delay (ref environment))})
-                          {:type (or type ::agent)})
-                        :meta meta
-                        :validator validator
-                        :error-handler error-handler
-                        :error-mode error-mode)]))
-
-(defn env-agent? [a]
-  (and (agent? a)
-       (isa? (derefed a type) ::agent)))
-
-(defn env "The environment belonging to this agent." [a]
-  {:pre  [(env-agent? a)]
-   :post [(or (nil? %) (env? %))]}
-  (derefed a :env force deref))
-
-(defn surrounding "The agents belonging to environment this agent belonging to." [a]
-  {:pre  [(env-agent? a)]
-   :post [(set? %)]}
-  (if-let [e (env a)]
-    (agents e)
-    (set nil)))
-
-(defn binded? "Agent is binded to environment and vice-versa?"
-  ([a]   (and ((surrounding a) a) true))
-  ([a e] (and (identical? e (env a)) (binded? a))))
-
-(defn unbind! "Unbind agent from environment and vice-versa." [a]
-  {:pre  [(env-agent? a)]}
-  (with-return a
-    (when (binded? a)
-      (dosync (alter (:agents (env a)) difference #{a})
-              (ref-set (derefed a :env force) nil)))))
-
-(defn bind! "Bind agent to environment and vice-versa." [a e]
-  {:pre  [(env? e) (env-agent? a)]}
-  (with-return e
-    (when-not (binded? a e)
-      (when (binded? a) (unbind! a))
-      (dosync (alter (:agents e) union #{a})
-              (ref-set (derefed a :env force) e)))))
-
 ;;;; Generic Functions that must be defined for each environment and
 ;;;; agent type.
 
@@ -151,6 +74,85 @@
 (defmulti remove-agent
   "Remove an agent from the environment."
   type2-derefed-dispatch)
+
+(defn make-env
+  "The world in which agents exist. Add new slots to hold various
+  state information."  
+  [& {:as opts :keys [type agents]}]
+  {:post [(map? %)]}
+  (with-meta (merge (dissoc opts :type :agents)
+                    {:agents (ref (if (seq? (sequence agents))
+                                    (set agents)
+                                    (set nil)))})
+    {:type (or type ::environment)}))
+
+(defn env? [e]
+  (and (map? e)
+       (isa? (type e) ::environment)))
+
+(defn agents "The agents belonging to this environment." [e]
+  {:pre  [(env? e)]
+   :post [(set? %)]}
+  (deref (:agents e)))
+
+(defn make-agent
+  "An agent is something that perceives and acts. The action will be
+  performed in the environment (if legal). Each agent also has a slot
+  for the agent program, and one for its score as determined by the
+  performance measure. Agents take actions (based on percepts of the
+  agent program) and receive a score (based on the performance
+  measure)."
+  [& {:as opts
+      :keys [type environment meta validator error-handler error-mode]}]
+  {:pre  [(when-supplied type (keyword? type))
+          (when-supplied environment (env? environment))]
+   :post [(agent? %)]}
+  (let-return [a (agent (with-meta
+                          (merge (dissoc opts :type :environment
+                                         :meta :validator
+                                         :error-handler :error-mode)
+                                 {:env (delay (ref environment))})
+                          {:type (or type ::agent)})
+                        :meta meta
+                        :validator validator
+                        :error-handler error-handler
+                        :error-mode error-mode)]
+              (when environment (add-agent environment a))))
+
+(defn env-agent? [a]
+  (and (agent? a)
+       (isa? (derefed a type) ::agent)))
+
+(defn env "The environment belonging to this agent." [a]
+  {:pre  [(env-agent? a)]
+   :post [(or (nil? %) (env? %))]}
+  (derefed a :env force deref))
+
+(defn surrounding "The agents belonging to environment this agent belonging to." [a]
+  {:pre  [(env-agent? a)]
+   :post [(set? %)]}
+  (if-let [e (env a)]
+    (agents e)
+    (set nil)))
+
+(defn binded? "Agent is binded to environment and vice-versa?"
+  ([a]   (and ((surrounding a) a) true))
+  ([a e] (and (identical? e (env a)) (binded? a))))
+
+(defn unbind! "Unbind agent from environment and vice-versa." [a]
+  {:pre  [(env-agent? a)]}
+  (with-return a
+    (when (binded? a)
+      (dosync (alter (:agents (env a)) difference #{a})
+              (ref-set (derefed a :env force) nil)))))
+
+(defn bind! "Bind agent to environment and vice-versa." [a e]
+  {:pre  [(env? e) (env-agent? a)]}
+  (with-return e
+    (when-not (binded? a e)
+      (when (binded? a) (unbind! a))
+      (dosync (alter (:agents e) union #{a})
+              (ref-set (derefed a :env force) e)))))
 
 (defmethod add-agent [::environment ::agent] [e a]
   (with-return e
