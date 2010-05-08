@@ -2,7 +2,6 @@
 ;;; authors: Roman Zaharov <zahardzhan@gmail.com>
 
 (ns aux
-  (:use clojure.contrib.seq-utils)
   (:import java.io.File))
 
 (in-ns 'aux)

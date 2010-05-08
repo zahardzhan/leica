@@ -5,7 +5,6 @@
        :author "Роман Захаров"}
   verified
   (:use :reload aux)
-  (:use clojure.contrib.seq-utils)
   (:import java.io.File))
 
 (in-ns 'verified)
@@ -56,8 +55,8 @@
 (defn upload-files [paths]
   (->> paths
        (map path)
-       (map (fn-or (fn-and file? identity)
-                   (fn-and directory? (comp sort files-in-directory))
+       (map (fn/or (fn/and file? identity)
+                   (fn/and directory? (comp sort files-in-directory))
                    (constantly nil)))
        (flatten)
        (map upload-file)

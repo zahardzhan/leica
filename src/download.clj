@@ -126,23 +126,31 @@
        (isa? (derefed ag type) ::download-agent)))
 
 (defn make-download-agent
-  [address-line & {:as opts :keys [strategy working-path done-path]}]
+  [address-line & {:as opts
+                   :keys [strategy working-path done-path link file
+                          environment meta validator error-handler error-mode]}]
 
   (let [{:keys [service address]}
         (when address-line (match-service address-line))]
 
     (when (and service address)
-      (make-agent :type ::download-agent
-                  :status (atom :idle)
-                  :service service
-                  :strategy (or strategy reflex)
-                  :address (URI. address)
-                  :working-path working-path
-                  :done-path done-path
-                  :host nil
-                  :link nil
-                  :file nil
-                  :length nil))))
+      (make-agent
+       :type ::download-agent
+       :status (atom :idle)
+       :service service
+       :strategy (or strategy reflex)
+       :address (URI. address)
+       :working-path working-path
+       :done-path done-path
+       :host nil
+       :link nil
+       :file nil
+       :length nil
+       :environment environment
+       :meta meta
+       :validator validator
+       :error-handler error-handler
+       :error-mode error-mode))))
 
 (defmethod status :default [ag]
   (deref (:status ag)))
@@ -482,11 +490,11 @@
 
   (def de (make-download-env))
   (def da1 (make-download-agent "http://dsv.data.cod.ru/761489"
-                                :working-path (File. "/home/haru/Inbox/")))
+                                :working-path (File. "/home/haru/Inbox/")
+                                :environment de))
   de
   da1
   (binded? da1)
-  (bind da1 de)
 
   (run @da1)
 
