@@ -34,6 +34,9 @@
   ([x f] (f (derefed x)))
   ([x f & fs] ((apply comp (reverse fs)) (derefed x f))))
 
+(defn deref-seq [coll]
+  (map derefed coll))
+
 (defmacro with-deref 
   "Разыменовывает и захватывает идентификаторы ссылок/агентов/санок/обещаний, и
   выполняет код тела макроса."

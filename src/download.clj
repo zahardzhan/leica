@@ -44,64 +44,70 @@
 
 (in-ns 'download)
 
-(defn match-service [line services]
+(def *services* (ref {}))
+
+(defn defservice [name & {:as opts :keys [address hosts]}]
+  (dosync (alter *services* assoc name {:address address
+                                        :hosts hosts})))
+
+(defn remove-service [name]
+  (dosync (alter *services* dissoc name)))
+
+(defmacro access-service [service & accessors]
+  `(derefed *services* ~service ~@accessors))
+
+(defn match-service [line]
   (some (fn [[service {address-pattern :address}]]
           (when-let [address (re-find address-pattern line)]
             {:service service :address address}))
-        services))
+        @*services*))
 
-;; "(?:ht|f)tp(?:s?)://[0-9a-zA-Z](?:[-.\\w]*[0-9a-zA-Z])*(?::(?:0-9)*)*(?:/?)(?:[a-zA-Z0-9\\-\\.\\?\\,/\\+&%\\$#\\*]*)?"
-;; standalone hyperlink regexp des for parsing
+(defservice ::data.cod.ru
+  :address #"http://[\w\.\-]*.data.cod.ru/\d+"
+  :hosts #{#"files3?.dsv.*.data.cod.ru" #"files2.dsv.*.data.cod.ru"})
 
-(def *services*
-     {::data.cod.ru
-      {:address #"http://[\w\.\-]*.data.cod.ru/\d+"
-       :hosts #{#"files3?.dsv.*.data.cod.ru" #"files2.dsv.*.data.cod.ru"}}
+(defservice ::77.35.112.8*
+  :address #"http://77.35.112.8[1234]/.+")
 
-      ::77.35.112.8*
-      {:address #"http://77.35.112.8[1234]/.+"}
+(defservice ::dsvload.net.ftpupload
+  :address #"http://dsvload.net/ftpupload/.+")
 
-      ::dsvload.net.ftpupload
-      {:address #"http://dsvload.net/ftpupload/.+"}})
-
-(defn- service-dispatch
+(defn- dispatch-by-service
   ([] nil)
   ([ag] (:service ag))
   ([ag & opts] (:service ag)))
 
-(defmulti status            service-dispatch)
-(defmulti status!           service-dispatch)
-(defmulti status?           service-dispatch)
+(defmulti status            dispatch-by-service)
+(defmulti status!           dispatch-by-service)
+(defmulti status?           dispatch-by-service)
 
-(defmulti services          service-dispatch)
+(defmulti dead?             dispatch-by-service)
+(defmulti alive?            dispatch-by-service)
+(defmulti run?              dispatch-by-service)
+(defmulti does-nothing?     dispatch-by-service)
+(defmulti ok?               dispatch-by-service)
+(defmulti idle?             dispatch-by-service)
+(defmulti fail?             dispatch-by-service)
 
-(defmulti dead?             service-dispatch)
-(defmulti alive?            service-dispatch)
-(defmulti run?              service-dispatch)
-(defmulti does-nothing?     service-dispatch)
-(defmulti ok?               service-dispatch)
-(defmulti idle?             service-dispatch)
-(defmulti fail?             service-dispatch)
+(defmulti out-of-space-on-work-path? dispatch-by-service)
+(defmulti out-of-space-on-done-path? dispatch-by-service)
+(defmulti fully-loaded?              dispatch-by-service)
+(defmulti already-on-done-path?      dispatch-by-service)
 
-(defmulti out-of-space-on-work-path? service-dispatch)
-(defmulti out-of-space-on-done-path? service-dispatch)
-(defmulti fully-loaded?              service-dispatch)
-(defmulti already-on-done-path?      service-dispatch)
+(defmulti pass              dispatch-by-service)
+(defmulti idle              dispatch-by-service)
+(defmulti fail              dispatch-by-service)
+(defmulti die               dispatch-by-service)
+(defmulti sleep             dispatch-by-service)
+(defmulti parse-page        dispatch-by-service)
+(defmulti get-host          dispatch-by-service)
+(defmulti get-file          dispatch-by-service)
+(defmulti get-length        dispatch-by-service)
+(defmulti move-to-done-path dispatch-by-service)
+(defmulti download          dispatch-by-service)
 
-(defmulti pass              service-dispatch)
-(defmulti idle              service-dispatch)
-(defmulti fail              service-dispatch)
-(defmulti die               service-dispatch)
-(defmulti sleep             service-dispatch)
-(defmulti parse-page        service-dispatch)
-(defmulti get-host          service-dispatch)
-(defmulti get-file          service-dispatch)
-(defmulti get-length        service-dispatch)
-(defmulti move-to-done-path service-dispatch)
-(defmulti download          service-dispatch)
-
-(defmulti reflex            service-dispatch)
-(defmulti reflex-with-transfer-of-control service-dispatch)
+(defmulti reflex            dispatch-by-service)
+(defmulti reflex-with-transfer-of-control dispatch-by-service)
 
 (derive ::download-environment :agent/environment)
 
@@ -120,19 +126,16 @@
        (isa? (derefed ag type) ::download-agent)))
 
 (defn make-download-agent
-  [address-line & {:as opts :keys [services strategy working-path done-path]
-                   :or {services *services*
-                        strategy reflex}}]
+  [address-line & {:as opts :keys [strategy working-path done-path]}]
 
   (let [{:keys [service address]}
-        (when address-line (match-service address-line services))]
+        (when address-line (match-service address-line))]
 
     (when (and service address)
       (make-agent :type ::download-agent
                   :status (atom :idle)
-                  :services (delay services)
                   :service service
-                  :strategy strategy
+                  :strategy (or strategy reflex)
                   :address (URI. address)
                   :working-path working-path
                   :done-path done-path
@@ -157,9 +160,6 @@
 (defmethod status? :default [ag current-status]
    (cond (keyword? current-status) (= (status ag) current-status)
          (set? current-status) (keyword? (current-status (status ag)))))
-
-(defmethod services :default [ag]
-  (force (:services ag)))
 
 (defmethod dead? :default [ag]
   (status? ag :dead))
@@ -224,11 +224,11 @@
 
         :else (execute ag (get-action ag opts))))
 
-(defmulti done? ::download-environment
+(defmethod done? ::download-environment
   [e]
   (every? dead? (deref-seq (agents e))))
 
-(defmulti terminate ::download-environment
+(defmethod terminate ::download-environment
   [e] nil)
 
 (def buffer-size          4096)
@@ -266,13 +266,13 @@
                                                        (alive? sag))))
                    ag (surrounding ag)))
 
-(defn done [ag & opts]
-  (with-return ag
-    (or (transfering-control (send (or (some-idle-same-host-as *agent*)
-                                       (next-alive-same-host-after *agent*))
-                                   run opts))
-        (when (and *agent* (download-env-termination? (env *agent*)))
-          (terminate-download-env (env *agent*))))))
+;; (defn done [ag & opts]
+;;   (with-return ag
+;;     (or (transfering-control (send (or (some-idle-same-host-as *agent*)
+;;                                        (next-alive-same-host-after *agent*))
+;;                                    run opts))
+;;         (when (and *agent* (download-env-termination? (env *agent*)))
+;;           (terminate-download-env (env *agent*))))))
 
 (defn next-unhosted-and-nothing-doing-after [ag]
   (next-after-when (fn [sag] (with-deref [ag sag] (and (same type ag sag)
@@ -286,28 +286,28 @@
                                             (run? sag))))
         (surrounding ag)))
 
-(defmethod reflex-with-transfer-of-control :default
-  [ag & opts]
-  (cond (not (:host ag))
-        (fn [ag]
-          (let-return [ag- (reflex ag opts)]
-                      (cond (dead? ag-) (transfering-control (done ag- opts))
-                            (fail? ag-) (do (sleep ag- timeout-after-fail)
-                                            (recursively (send *agent* run opts)))
-                            (:host ag-) (do (transfering-control
-                                             (send (next-unhosted-and-nothing-doing-after *agent*) run opts))
-                                            (recursively (send *agent* run opts)))
-                            :else (recursively (send *agent* run opts)))))
+;; (defmethod reflex-with-transfer-of-control :default
+;;   [ag & opts]
+;;   (cond (not (:host ag))
+;;         (fn [ag]
+;;           (let-return [ag- (reflex ag opts)]
+;;                       (cond (dead? ag-) (transfering-control (done ag- opts))
+;;                             (fail? ag-) (do (sleep ag- timeout-after-fail)
+;;                                             (recursively (send *agent* run opts)))
+;;                             (:host ag-) (do (transfering-control
+;;                                              (send (next-unhosted-and-nothing-doing-after *agent*) run opts))
+;;                                             (recursively (send *agent* run opts)))
+;;                             :else (recursively (send *agent* run opts)))))
 
-        (some-surrounding-agent-running-on-same-host-as *agent*) pass
+;;         (some-surrounding-agent-running-on-same-host-as *agent*) pass
 
-        :else
-        (fn [ag]
-          (let-return [ag- (reflex ag opts)]
-                      (cond (dead? ag-) (transfering-control (done ag- opts))
-                            (fail? ag-) (do (sleep ag- timeout-after-fail)
-                                            (transfering-control (done ag- opts)))
-                            :else (recursively (send *agent* run opts)))))))
+;;         :else
+;;         (fn [ag]
+;;           (let-return [ag- (reflex ag opts)]
+;;                       (cond (dead? ag-) (transfering-control (done ag- opts))
+;;                             (fail? ag-) (do (sleep ag- timeout-after-fail)
+;;                                             (transfering-control (done ag- opts)))
+;;                             :else (recursively (send *agent* run opts)))))))
 
 (defmethod pass :default
   [ag]
@@ -382,8 +382,8 @@
     (die ag)))
 
 (defmethod get-host :default
-  [{:as ag :keys [link service services]}]
-  (let [hosts (seq (-> services force service :hosts))
+  [{:as ag :keys [link service]}]
+  (let [hosts (seq (access-service service :hosts))
         host (or (when hosts
                   (some (fn [host] (when (re-find host (str link))
                                     (str host)))
@@ -480,28 +480,22 @@
 
 (comment
 
-  (def j nil)
-  (def a (agent nil))
+  (def de (make-download-env))
+  (def da1 (make-download-agent "http://dsv.data.cod.ru/761489"
+                                :working-path (File. "/home/haru/Inbox/")))
+  de
+  da1
+  (binded? da1)
+  (bind da1 de)
 
-  (defn pj [x] (. System/out print j) x)
-  (defn f1 [x] (send a pj) x)
+  (run @da1)
 
-  (binding [j 2]
-    (send a pj))
-
-  (defn strtg1 [ag & opts]
-    (fn [ag]
-      (let-return [ag- ((reflex ag opts) ag)]
-                  1)))
-  
-  (def d (make-download-agent "http://dsv.data.cod.ru/745448"
-                              :working-path (File. "/home/haru/inbox/")
-                              ))
-  d
-  (execute @d ((:strategy @d) @d :rec false :transfer false))
-
-  (run (run (run (run (run @d)))))
+  (run (run (run (run (run @da1)))))
 
   ;; http://dsv.data.cod.ru/761489
   ;; http://dsv.data.cod.ru/759561
+
+  (def uri1 "let me be in http://lifehacker.ru/2010/05/06/video-stiv-dzhobs-%C2%ABostavajjtes-golodnymi-ostavajjtes-bezrassudnymi%C2%BB/ fucking uri")
+  (java.net.URL. (first (re-find #"((https?|ftp|gopher|telnet|file|notes|ms-help):((//)|(\\\\))+[\w\d:#@%/;$()~_?\+-=\\\.&]*)" uri1)))
+
   )

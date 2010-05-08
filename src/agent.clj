@@ -28,52 +28,58 @@
 ;;; existing methods) for each of the following functions.  Here are
 ;;; the ones that will change for each new environment:
 
-(defn type-dispatch
+(defn dispatch-by-type
     ([x] (type x))
     ([x & args] (type x)))
 
-(defn type2-dispatch
-  [x y] [(type x) (type y)])
+(defn dispatch-by-derefed-type
+  ([x] (derefed x type))
+  ([x & args] (derefed x type)))
 
-(defn type2-derefed-dispatch
-  [x y] [(derefed x type) (derefed y type)])
+(defn dispatch-by-type-of-2-args
+  ([x y] [(type x) (type y)])
+  ([x y & args] [(type x) (type y)]))
+
+(defn dispatch-by-derefed-type-of-2-args
+  ([x y] [(derefed x type) (derefed y type)])
+  ([x y & args] [(derefed x type) (derefed y type)]))
 
 (defmulti get-action
   "Execute agent program, get next action."
-  type-dispatch)
+  dispatch-by-type)
 
 (defmulti legal-actions
   "A list of the action operators that an agent can do."
-  type-dispatch)
+  dispatch-by-type)
 
 (defmulti performance
   "Return a number saying how well this agent is doing."
-  type-dispatch)
+  dispatch-by-type)
 
 (defmulti done?
   "True if Environment is finished with its current task(s)."
-  type-dispatch)
+  dispatch-by-type)
 
 (defmulti terminate
   "Destroy agent or environment when it is done."
-  type-dispatch)
+  dispatch-by-type)
 
 (defmulti execute
   "Agent (if the agent is alive and has specified a legal action)
   takes the action."
-  type-dispatch)
+  dispatch-by-type)
 
 (defmulti run
   "Run agent program and execute an action."
-  type-dispatch)
+  dispatch-by-type)
 
-(defmulti add-agent
-  "Add an agent to the Environment."
-  type2-derefed-dispatch)
+(defmulti bind
+  "Bind agent to environment and vice-versa."
+  dispatch-by-derefed-type-of-2-args)
 
-(defmulti remove-agent
-  "Remove an agent from the environment."
-  type2-derefed-dispatch)
+(defmulti unbind
+  "Unbind agent from environment and vice-versa."
+  dispatch-by-derefed-type)
 
 (defn make-env
   "The world in which agents exist. Add new slots to hold various
@@ -117,7 +123,7 @@
                         :validator validator
                         :error-handler error-handler
                         :error-mode error-mode)]
-              (when environment (add-agent environment a))))
+              (when environment (bind a environment))))
 
 (defn env-agent? [a]
   (and (agent? a)
@@ -136,28 +142,20 @@
     (set nil)))
 
 (defn binded? "Agent is binded to environment and vice-versa?"
-  ([a]   (and ((surrounding a) a) true))
+  ([a]   (if ((surrounding a) a) true false))
   ([a e] (and (identical? e (env a)) (binded? a))))
 
-(defn unbind! "Unbind agent from environment and vice-versa." [a]
+(defmethod bind [::agent ::environment] [a e]
+  {:pre  [(env? e) (env-agent? a)]}
+  (with-return e
+    (when-not (binded? a e)
+      (when (binded? a) (unbind a))
+      (dosync (alter (:agents e) union #{a})
+              (ref-set (derefed a :env force) e)))))
+
+(defmethod unbind ::agent [a]
   {:pre  [(env-agent? a)]}
   (with-return a
     (when (binded? a)
       (dosync (alter (:agents (env a)) difference #{a})
               (ref-set (derefed a :env force) nil)))))
-
-(defn bind! "Bind agent to environment and vice-versa." [a e]
-  {:pre  [(env? e) (env-agent? a)]}
-  (with-return e
-    (when-not (binded? a e)
-      (when (binded? a) (unbind! a))
-      (dosync (alter (:agents e) union #{a})
-              (ref-set (derefed a :env force) e)))))
-
-(defmethod add-agent [::environment ::agent] [e a]
-  (with-return e
-    (bind! a e)))
-
-(defmethod remove-agent [::environment ::agent] [e a]
-  (with-return e
-    (unbind! a)))
