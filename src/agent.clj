@@ -110,9 +110,8 @@
   measure)."
   [& {:as opts
       :keys [type environment meta validator error-handler error-mode]}]
-  {:pre  [(when-supplied
-           type (keyword? type)
-           environment (env? environment))]
+  {:pre  [(when-supplied type (keyword? type)
+                         environment (env? environment))]
    :post [(agent? %)]}
   (let-return [a (agent (with-meta
                           (merge (dissoc opts :type :environment
@@ -126,12 +125,18 @@
                         :error-mode error-mode)]
               (when environment (bind a environment))))
 
+(defn env-agent-body? [a]
+  (and (map? a)
+       (isa? (type a) ::agent)))
+
 (defn env-agent? [a]
-  (and (agent? a)
-       (isa? (derefed a type) ::agent)))
+  (and (agent? a) (env-agent-body? @a)))
+
+(defn env-agent-or-body? [a]
+  (isa? (derefed a type) ::agent))
 
 (defn env "The environment belonging to this agent." [a]
-  {:pre  [(env-agent? a)]
+  {:pre  [(env-agent-or-body? a)]
    :post [(or (nil? %) (env? %))]}
   (derefed a :env force deref))
 
@@ -139,7 +144,7 @@
   {:pre  [(env-agent? a)]
    :post [(set? %)]}
   (if-let [e (env a)]
-    (agents e)
+    (difference (agents e) #{a})
     (set nil)))
 
 (defn binded? "Agent is binded to environment and vice-versa?"

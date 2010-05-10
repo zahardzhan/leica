@@ -130,12 +130,11 @@
   [address-line & {:as opts
                    :keys [strategy working-path done-path link file
                           environment meta validator error-handler error-mode]}]
-  {:pre  [(when-supplied
-           strategy     (fn? strategy)
-           working-path (verified/output-dir working-path)
-           done-path    (verified/output-dir done-path)
-           file         (file? file)
-           environment  (download-env? environment))]}
+  {:pre  [(when-supplied strategy     (fn? strategy)
+                         working-path (verified/output-dir working-path)
+                         done-path    (verified/output-dir done-path)
+                         file         (file? file)
+                         environment  (download-env? environment))]}
 
   (let [{:keys [service address]}
         (when address-line (match-service address-line))]
@@ -159,9 +158,11 @@
                   :error-handler error-handler
                   :error-mode error-mode))))
 
-(defn download-agent? [ag]
-  (and (env-agent? ag)
-       (isa? (derefed ag type) ::download-agent)))
+(defn download-agent-body? [a]
+  (and (env-agent-body? a) (isa? (type a) ::download-agent)))
+
+(defn download-agent? [a]
+  (and (env-agent? a) (derefed a download-agent-body?)))
 
 (defmethod status :default [ag]
   (deref (:status ag)))
@@ -273,17 +274,48 @@
 
         :else                      download))
 
-(defn some-idle-same-host-as [ag]
-  (some (fn [sag] (with-deref [ag sag] (and (same type ag sag)
-                                            (same :host ag sag)
-                                            (idle? sag)
-                                            sag)))
-        (surrounding ag)))
+(defn select-in-env-of-agent
+  [a & {:as opts
+        :keys [sort part test]
+        :or {part :entirely}}]
+  {:pre  [(env-agent-or-body? a)
+          (when-supplied sort (or (keyword? sort) (fn? sort))
+                         part (#{:entirely :entirely-after :before :after} part)
+                         test (or (multimethod? test) (fn? test)))]}
+  (let [a (derefed a)
+        maybe-sort (fn  [ags]
+                     (if sort (sort-by sort ags) ags))
+        maybe-take-part-of-seq (fn [ags]
+                                 (case part
+                                       :entirely ags
+                                       :entirely-after (concat (after a ags)
+                                                               (before a ags)
+                                                               (list a))
+                                       :before (before a ags)
+                                       :after (after a ags)))]
+    (->> (agents (env a))
+         deref-seq
+         maybe-sort
+         maybe-take-part-of-seq
+         (filter test))))
 
-(defn next-alive-same-host-after [ag]
-  (next-after-when (fn [sag] (with-deref [ag sag] (and (same type ag sag)
-                                                       (alive? sag))))
-                   ag (surrounding ag)))
+;; next-alive-untagged-after
+(defn alive-download-agent-without-host-after [a]
+  (select-in-env-of-agent a :sort :precedence :part :entirely-after
+                          :test (fn/and download-agent-body? alive? (fn/not :host))))
+;; alive-unfailed-with-same-tag
+(defn idle-download-agent-with-same-host [a]
+  (select-in-env-of-agent a :sort :precedence :part :entirely
+                          :test (fn/and download-agent-body? idle? (partial same :host a))))
+
+;; next-alive-with-same-tag-after
+(defn alive-download-agent-with-same-host-after [a]
+  (select-in-env-of-agent a :sort :precedence :part :entirely-after
+                          :test (fn/and download-agent-body? alive? (partial same :host a))))
+
+(defn download-agent-running-on-same-host-as [a]
+  (select-in-env-of-agent a :sort :precedence :part :entirely
+                          :test (fn/and download-agent-body? run? (partial same :host a))))
 
 ;; (defn done [ag & opts]
 ;;   (with-return ag
@@ -292,18 +324,6 @@
 ;;                                    run opts))
 ;;         (when (and *agent* (download-env-termination? (env *agent*)))
 ;;           (terminate-download-env (env *agent*))))))
-
-(defn next-unhosted-and-nothing-doing-after [ag]
-  (next-after-when (fn [sag] (with-deref [ag sag] (and (same type ag sag)
-                                                       (does-nothing? sag)
-                                                       (not (:host sag)))))
-                   ag (surrounding ag)))
-
-(defn some-surrounding-agent-running-on-same-host-as [ag]
-  (some (fn [sag] (with-deref [ag sag] (and (same type ag sag)
-                                            (same :host ag sag)
-                                            (run? sag))))
-        (surrounding ag)))
 
 ;; (defmethod reflex-with-transfer-of-control :default
 ;;   [ag & opts]
@@ -506,9 +526,17 @@
   (def da2 (make-download-agent "http://dsv.data.cod.ru/759561"
                                 :working-path (File. "/home/haru/Inbox/")
                                 :environment de))
+  (def da3 (make-download-agent "http://dsv.data.cod.ru/775759"
+                                :working-path (File. "/home/haru/Inbox/")
+                                :environment de))
+  (def da4 (make-download-agent "http://dsv.data.cod.ru/772992"
+                                :working-path (File. "/home/haru/Inbox/")
+                                :environment de))
   de
   da1
   da2
+  da3
+  da4
   (binded? da1)
   (binded? da2)
 

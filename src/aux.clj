@@ -14,8 +14,17 @@
 
 (def ref? (partial instance? clojure.lang.Ref))
 
+(defn multimethod? [x]
+  (= (type x) clojure.lang.MultiFn))
+
 (defn same [f & xs]
   (apply = (map f xs)))
+
+(defn before [x xs]
+  (take-while (partial not= x) xs))
+
+(defn after [x xs]
+  (next (drop-while (partial not= x) xs)))
 
 (defn next-after-when
   "Для коллекции уникальных элементов xs находит следующий за x
