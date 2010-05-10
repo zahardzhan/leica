@@ -55,8 +55,11 @@
   `(let [~form ~val]
      (with-return ~form (do ~@body))))
 
-(defmacro when-supplied [arg & body]
-  `(or (nil? ~arg) (do ~@body)))
+(defmacro when-supplied [& clauses]
+  (if (not clauses) true
+      `(and (or (nil? ~(first clauses))
+                (do ~(second clauses)))
+            (when-supplied1 ~@(next (next clauses))))))
 
 (defn file? [x]
   (and (instance? java.io.File x) (.isFile x)))

@@ -2,7 +2,7 @@
 ;;; authors: Roman Zaharov <zahardzhan@gmail.com>
 
 (ns progress
-  (:use agent aux clojure.contrib.seq-utils))
+  (:use agent aux clojure.contrib.seq-utils)) ;;; !!! seq-utils
 
 (in-ns 'progress)
 
