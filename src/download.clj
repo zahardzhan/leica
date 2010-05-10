@@ -20,8 +20,8 @@
             [clojure.contrib.duck-streams :as duck]
 
             fn
-            service.cod.data.account
-            progress)
+            progress
+            verified)
   (:import (java.io File
                     FileOutputStream
                     InputStream
@@ -110,47 +110,58 @@
 (defmulti reflex-with-transfer-of-control dispatch-by-service)
 
 (derive ::download-environment :agent/environment)
+(derive ::download-agent :agent/agent)
+
+(defn make-download-env
+  [& {:as opts :keys [type agents]}]
+  (make-env :type ::download-environment
+            :agents agents))
 
 (defn download-env? [e]
   (and (env? e)
        (isa? (type e) ::download-environment)))
 
-(defn make-download-env
-  [& {:as opts :keys [type agents]}]
-  (make-env :type ::download-environment))
+(def *precedence* (atom 0))
 
-(derive ::download-agent :agent/agent)
-
-(defn download-agent? [ag]
-  (and (env-agent? ag)
-       (isa? (derefed ag type) ::download-agent)))
+(defn reset-precedence []
+  (reset! *precedence* 0))
 
 (defn make-download-agent
   [address-line & {:as opts
                    :keys [strategy working-path done-path link file
                           environment meta validator error-handler error-mode]}]
+  {:pre  [(when-supplied
+           strategy     (fn? strategy)
+           working-path (verified/output-dir working-path)
+           done-path    (verified/output-dir done-path)
+           file         (file? file)
+           environment  (download-env? environment))]}
 
   (let [{:keys [service address]}
         (when address-line (match-service address-line))]
 
     (when (and service address)
-      (make-agent
-       :type ::download-agent
-       :status (atom :idle)
-       :service service
-       :strategy (or strategy reflex)
-       :address (URI. address)
-       :working-path working-path
-       :done-path done-path
-       :host nil
-       :link nil
-       :file nil
-       :length nil
-       :environment environment
-       :meta meta
-       :validator validator
-       :error-handler error-handler
-       :error-mode error-mode))))
+      (make-agent :type ::download-agent
+                  :precedence (swap! *precedence* inc)
+                  :status (atom :idle)
+                  :service service
+                  :strategy (or strategy reflex)
+                  :address (URI. address)
+                  :working-path working-path
+                  :done-path done-path
+                  :host nil
+                  :link nil
+                  :file nil
+                  :length nil
+                  :environment environment
+                  :meta meta
+                  :validator validator
+                  :error-handler error-handler
+                  :error-mode error-mode))))
+
+(defn download-agent? [ag]
+  (and (env-agent? ag)
+       (isa? (derefed ag type) ::download-agent)))
 
 (defmethod status :default [ag]
   (deref (:status ag)))
@@ -492,18 +503,19 @@
   (def da1 (make-download-agent "http://dsv.data.cod.ru/761489"
                                 :working-path (File. "/home/haru/Inbox/")
                                 :environment de))
+  (def da2 (make-download-agent "http://dsv.data.cod.ru/759561"
+                                :working-path (File. "/home/haru/Inbox/")
+                                :environment de))
   de
   da1
+  da2
   (binded? da1)
+  (binded? da2)
 
   (run @da1)
 
   (run (run (run (run (run @da1)))))
 
-  ;; http://dsv.data.cod.ru/761489
-  ;; http://dsv.data.cod.ru/759561
-
   (def uri1 "let me be in http://lifehacker.ru/2010/05/06/video-stiv-dzhobs-%C2%ABostavajjtes-golodnymi-ostavajjtes-bezrassudnymi%C2%BB/ fucking uri")
   (java.net.URL. (first (re-find #"((https?|ftp|gopher|telnet|file|notes|ms-help):((//)|(\\\\))+[\w\d:#@%/;$()~_?\+-=\\\.&]*)" uri1)))
-
   )

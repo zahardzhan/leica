@@ -110,8 +110,9 @@
   measure)."
   [& {:as opts
       :keys [type environment meta validator error-handler error-mode]}]
-  {:pre  [(when-supplied type (keyword? type))
-          (when-supplied environment (env? environment))]
+  {:pre  [(when-supplied
+           type (keyword? type)
+           environment (env? environment))]
    :post [(agent? %)]}
   (let-return [a (agent (with-meta
                           (merge (dissoc opts :type :environment
