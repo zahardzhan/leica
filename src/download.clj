@@ -57,10 +57,13 @@
   `(derefed *services* ~service ~@accessors))
 
 (defn match-service [line]
-  (some (fn [[service {address-pattern :address}]]
-          (when-let [address (re-find address-pattern line)]
-            {:service service :address address}))
-        @*services*))
+  (rule-based-translator (extract-url line) (seq @*services*)
+                         :rule-pattern (comp :address val)
+                         :rule-response key
+                         :matcher re-find
+                         :action (fn [result rule-response]
+                                   {:address result,
+                                    :service rule-response})))
 
 (defservice ::data.cod.ru
   :address #"http://[\w\.\-]*.data.cod.ru/\d+"
@@ -117,8 +120,7 @@
             :agents agents))
 
 (defn download-env? [e]
-  (and (env? e)
-       (isa? (type e) ::download-environment)))
+  (and (env? e) (isa? (type e) ::download-environment)))
 
 (def *precedence* (atom 0))
 
@@ -129,6 +131,7 @@
   [address-line & {:as opts
                    :keys [strategy working-path done-path link file
                           environment meta validator error-handler error-mode]}]
+
   {:pre  [(when-supplied strategy     (or (multimethod? strategy) (fn? strategy))
                          working-path (verified/output-dir working-path)
                          done-path    (verified/output-dir done-path)
@@ -522,8 +525,4 @@
   (execute @da3 (reflex-with-transfer-of-control  @da3))
   (execute @da4 (reflex-with-transfer-of-control  @da4))
 
-  (run (run (run (run (run @da1)))))
-
-  (def uri1 "let me be in http://lifehacker.ru/2010/05/06/video-stiv-dzhobs-%C2%ABostavajjtes-golodnymi-ostavajjtes-bezrassudnymi%C2%BB/ fucking uri")
-  (java.net.URL. (first (re-find #"((https?|ftp|gopher|telnet|file|notes|ms-help):((//)|(\\\\))+[\w\d:#@%/;$()~_?\+-=\\\.&]*)" uri1)))
-  )
+  (run (run (run (run (run @da1))))))

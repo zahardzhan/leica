@@ -131,8 +131,7 @@
               (when environment (bind a environment))))
 
 (defn env-agent-body? [a]
-  (and (map? a)
-       (isa? (type a) ::agent)))
+  (and (map? a) (isa? (type a) ::agent)))
 
 (defn env-agent? [a]
   (and (agent? a) (env-agent-body? @a)))

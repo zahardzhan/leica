@@ -2,6 +2,7 @@
 ;;; authors: Roman Zaharov <zahardzhan@gmail.com>
 
 (ns aux
+  (:require fn)
   (:import java.io.File))
 
 (in-ns 'aux)
@@ -32,27 +33,54 @@
                 (do ~(second clauses)))
             (when-supplied ~@(next (next clauses))))))
 
-(defn select
-  [& {:as opts
-      :keys [from order-by where entirely-after after before]
-      :or {where identity}}]
+(defn select [& {:as opts
+                 :keys [from order-by where entirely-after after before]
+                 :or {where identity}}]
+
   {:pre  [(when-supplied from (coll? from)
                          order-by (or (keyword? order-by) (fn? order-by) (multimethod? order-by))
                          where (or (multimethod? where) (fn? where)))]}
   
-  (let [maybe-sort (fn [ags] (if order-by (sort-by order-by ags) ags))
-        maybe-take-part-of-seq (fn [ags]
-                                 (cond (not (or entirely-after after before)) ags
-                                       entirely-after (concat (aux/after entirely-after ags)
-                                                              (aux/before entirely-after ags)
+  (let [maybe-sort (fn [xs] (if order-by (sort-by order-by xs) xs))
+        maybe-take-part-of-seq (fn [xs]
+                                 (cond (not (or entirely-after after before)) xs
+                                       entirely-after (concat (aux/after entirely-after xs)
+                                                              (aux/before entirely-after xs)
                                                               (list entirely-after))
-                                       after (aux/after after ags)
-                                       before (aux/before before ags)))]
+                                       after (aux/after after xs)
+                                       before (aux/before before xs)))
+        maybe-filter (fn [xs] (if where (filter where xs) xs))]
     (when from
       (->> from
            maybe-sort
            maybe-take-part-of-seq
-           (filter where)))))
+           maybe-filter))))
+
+(defn rule-based-translator
+  "Find the first rule that matches input, and apply the
+  action to the result of substituting the match result
+  into the rule's response. If no rule matches, apply
+  otherwise to the input."
+  [input rules &
+   {:as opts
+    :keys [matcher rule-pattern rule-response fail?
+           action otherwise]
+    :or {matcher =
+         rule-pattern first
+         rule-response rest
+         fail? (fn/or nil? false?)
+         action identity
+         otherwise identity}}]
+
+  (or (for [rule rules
+            :let [result (matcher (rule-pattern rule) input)]
+            :when (not (fail? result))]
+        (action result (rule-response rule)))
+      (otherwise input)))
+
+(defn extract-url [line]
+  (first (re-find #"((https?|ftp|gopher|telnet|file|notes|ms-help):((//)|(\\\\))+[\w\d:#@%/;$()~_?\+-=\\\.&]*)"
+                  line)))
 
 (defn derefed
   "Разыменовывает аргумент."
