@@ -81,7 +81,7 @@
   "Unbind agent from environment and vice-versa."
   dispatch-by-derefed-type)
 
-(defmethod done? nil [] true)
+(defmethod done? nil [] nil)
 (defmethod terminate nil [] nil)
 (defmethod execute nil [] nil)
 (defmethod run nil [] nil)

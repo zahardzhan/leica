@@ -129,7 +129,7 @@
   [address-line & {:as opts
                    :keys [strategy working-path done-path link file
                           environment meta validator error-handler error-mode]}]
-  {:pre  [(when-supplied strategy     (fn? strategy)
+  {:pre  [(when-supplied strategy     (or (multimethod? strategy) (fn? strategy))
                          working-path (verified/output-dir working-path)
                          done-path    (verified/output-dir done-path)
                          file         (file? file)
@@ -252,17 +252,14 @@
 (defmethod execute ::download-agent [ag action]
   (if (dead? ag) ag
       (try (status! ag :running)
-           (let [fag (future (action ag))]
-             (try (with-deref [fag]
-                    (cond (run? fag) (status! fag :idle)
-                          :else fag))
-                  (catch Exception _ (status! ag :fail))))
+           (try (let [ag- (action ag)]
+                  (cond (run? ag-) (status! ag- :idle)
+                        :else ag-))
+                (catch Exception _ (status! ag :fail)))
            (catch AssertionError _ ag))))
 
 (defmethod run ::download-agent [ag & opts]
-  (cond (not opts) (execute ag (get-action ag))
-
-        :else (execute ag (get-action ag opts))))
+  (execute ag (get-action ag opts)))
 
 (defmethod done? ::download-agent [a]
   (dead? a))
@@ -323,7 +320,7 @@
                                 (derefed % run?)
                                 (same :host (deref a) (deref %)))))
 
-(defmethod reflex-with-transfer-of-control ::download-agent [a]
+(defmethod reflex-with-transfer-of-control :default [a & opts]
   (let [done #(or (send-off (or (first (idle-download-agents-with-same-host-as *agent*))
                                 (first (alive-download-agents-with-same-host-after *agent*)))
                             run)
@@ -513,28 +510,30 @@
 
 (comment
 
+  (def aggg (agent 1))
+  (send-off aggg (fn [x] (future  (. System/out println 2))))
+
   (def de (make-download-env))
-  (def da1 (make-download-agent "http://dsv.data.cod.ru/761489"
-                                :working-path (File. "/home/haru/Inbox/")
-                                :environment de))
-  (def da2 (make-download-agent "http://dsv.data.cod.ru/759561"
-                                :working-path (File. "/home/haru/Inbox/")
-                                :environment de))
   (def da3 (make-download-agent "http://dsv.data.cod.ru/775759"
                                 :working-path (File. "/home/haru/Inbox/")
+                                :strategy reflex-with-transfer-of-control
                                 :environment de))
   (def da4 (make-download-agent "http://dsv.data.cod.ru/772992"
                                 :working-path (File. "/home/haru/Inbox/")
+                                :strategy reflex-with-transfer-of-control
                                 :environment de))
   de
   da1
   da2
-  da3
-  da4
+  [da3
+   da4]
   (binded? da1)
   (binded? da2)
-
+  (run @da3)
   (run @da1)
+  (send-off da3 run)
+  (execute @da3 (reflex-with-transfer-of-control  @da3))
+  (execute @da4 (reflex-with-transfer-of-control  @da4))
 
   (run (run (run (run (run @da1)))))
 
