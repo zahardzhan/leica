@@ -57,7 +57,7 @@
   dispatch-by-type)
 
 (defmulti done?
-  "True if Environment is finished with its current task(s)."
+  "True if agent or environment is finished with its current task(s)."
   dispatch-by-type)
 
 (defmulti terminate
@@ -80,6 +80,11 @@
 (defmulti unbind
   "Unbind agent from environment and vice-versa."
   dispatch-by-derefed-type)
+
+(defmethod done? nil [] true)
+(defmethod terminate nil [] nil)
+(defmethod execute nil [] nil)
+(defmethod run nil [] nil)
 
 (defn make-env
   "The world in which agents exist. Add new slots to hold various

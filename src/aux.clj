@@ -68,7 +68,7 @@
   (if (not clauses) true
       `(and (or (nil? ~(first clauses))
                 (do ~(second clauses)))
-            (when-supplied1 ~@(next (next clauses))))))
+            (when-supplied ~@(next (next clauses))))))
 
 (defn file? [x]
   (and (instance? java.io.File x) (.isFile x)))

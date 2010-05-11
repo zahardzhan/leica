@@ -112,8 +112,7 @@
 (derive ::download-environment :agent/environment)
 (derive ::download-agent :agent/agent)
 
-(defn make-download-env
-  [& {:as opts :keys [type agents]}]
+(defn make-download-env [& {:as opts :keys [type agents]}]
   (make-env :type ::download-environment
             :agents agents))
 
@@ -163,6 +162,30 @@
 
 (defn download-agent? [a]
   (and (env-agent? a) (derefed a download-agent-body?)))
+
+(defn select-in-env-of
+  [a & {:as opts
+        :keys [sort part test]
+        :or {part :entirely
+             test identity}}]
+  {:pre  [(env-agent? a)
+          (when-supplied sort (or (keyword? sort) (fn? sort))
+                         part (#{:entirely :entirely-after :before :after} part)
+                         test (or (multimethod? test) (fn? test)))]}
+  
+  (let [maybe-sort (fn  [ags] (if sort (sort-by sort ags) ags))
+        maybe-take-part-of-seq (fn [ags]
+                                 (case part
+                                       :entirely ags
+                                       :entirely-after (concat (after a ags)
+                                                               (before a ags)
+                                                               (list a))
+                                       :before (before a ags)
+                                       :after (after a ags)))]
+    (->> (agents (env a))
+         maybe-sort
+         maybe-take-part-of-seq
+         (filter test))))
 
 (defmethod status :default [ag]
   (deref (:status ag)))
@@ -223,12 +246,10 @@
   (when (and done-path file)
     (.exists (File. done-path (.getName file)))))
 
-(defmethod get-action ::download-agent
-  [ag & opts]
+(defmethod get-action ::download-agent [ag & opts]
   ((ag :strategy) ag opts))
 
-(defmethod execute ::download-agent
-  [ag action]
+(defmethod execute ::download-agent [ag action]
   (if (dead? ag) ag
       (try (status! ag :running)
            (let [fag (future (action ag))]
@@ -238,18 +259,22 @@
                   (catch Exception _ (status! ag :fail))))
            (catch AssertionError _ ag))))
 
-(defmethod run ::download-agent
-  [ag & opts]
+(defmethod run ::download-agent [ag & opts]
   (cond (not opts) (execute ag (get-action ag))
 
         :else (execute ag (get-action ag opts))))
 
-(defmethod done? ::download-environment
-  [e]
+(defmethod done? ::download-agent [a]
+  (dead? a))
+
+(defmethod done? ::download-environment [e]
   (every? dead? (deref-seq (agents e))))
 
-(defmethod terminate ::download-environment
-  [e] nil)
+(defmethod terminate ::download-agent [a]
+  a)
+
+(defmethod terminate ::download-environment [e]
+  e)
 
 (def buffer-size          4096)
 (def timeout-after-fail   3000)
@@ -274,98 +299,67 @@
 
         :else                      download))
 
-(defn select-in-env-of-agent
-  [a & {:as opts
-        :keys [sort part test]
-        :or {part :entirely}}]
-  {:pre  [(env-agent-or-body? a)
-          (when-supplied sort (or (keyword? sort) (fn? sort))
-                         part (#{:entirely :entirely-after :before :after} part)
-                         test (or (multimethod? test) (fn? test)))]}
-  (let [a (derefed a)
-        maybe-sort (fn  [ags]
-                     (if sort (sort-by sort ags) ags))
-        maybe-take-part-of-seq (fn [ags]
-                                 (case part
-                                       :entirely ags
-                                       :entirely-after (concat (after a ags)
-                                                               (before a ags)
-                                                               (list a))
-                                       :before (before a ags)
-                                       :after (after a ags)))]
-    (->> (agents (env a))
-         deref-seq
-         maybe-sort
-         maybe-take-part-of-seq
-         (filter test))))
+(defn alive-download-agents-without-host-after [a]
+  (select-in-env-of a :sort #(derefed % :precedence) :part :entirely-after
+                    :test #(and (download-agent? %)
+                                (derefed % alive?)
+                                (derefed % :host not))))
 
-;; next-alive-untagged-after
-(defn alive-download-agent-without-host-after [a]
-  (select-in-env-of-agent a :sort :precedence :part :entirely-after
-                          :test (fn/and download-agent-body? alive? (fn/not :host))))
-;; alive-unfailed-with-same-tag
-(defn idle-download-agent-with-same-host [a]
-  (select-in-env-of-agent a :sort :precedence :part :entirely
-                          :test (fn/and download-agent-body? idle? (partial same :host a))))
+(defn idle-download-agents-with-same-host-as [a]
+  (select-in-env-of a :sort #(derefed % :precedence) :part :entirely
+                    :test #(and (download-agent? %)
+                                (derefed % idle?)
+                                (same :host (deref a) (deref %)))))
 
-;; next-alive-with-same-tag-after
-(defn alive-download-agent-with-same-host-after [a]
-  (select-in-env-of-agent a :sort :precedence :part :entirely-after
-                          :test (fn/and download-agent-body? alive? (partial same :host a))))
+(defn alive-download-agents-with-same-host-after [a]
+  (select-in-env-of a :sort #(derefed % :precedence) :part :entirely-after
+                    :test #(and (download-agent? %)
+                                (derefed % alive?)
+                                (same :host (deref a) (deref %)))))
 
-(defn download-agent-running-on-same-host-as [a]
-  (select-in-env-of-agent a :sort :precedence :part :entirely
-                          :test (fn/and download-agent-body? run? (partial same :host a))))
+(defn download-agents-running-on-same-host-as [a]
+  (select-in-env-of a :sort #(derefed % :precedence) :part :entirely
+                    :test #(and (download-agent? %)
+                                (derefed % run?)
+                                (same :host (deref a) (deref %)))))
 
-;; (defn done [ag & opts]
-;;   (with-return ag
-;;     (or (transfering-control (send (or (some-idle-same-host-as *agent*)
-;;                                        (next-alive-same-host-after *agent*))
-;;                                    run opts))
-;;         (when (and *agent* (download-env-termination? (env *agent*)))
-;;           (terminate-download-env (env *agent*))))))
+(defmethod reflex-with-transfer-of-control ::download-agent [a]
+  (let [done #(or (send-off (or (first (idle-download-agents-with-same-host-as *agent*))
+                                (first (alive-download-agents-with-same-host-after *agent*)))
+                            run)
+                  (when (done? (env *agent*)) (terminate (env *agent*))))]
+    
+    (cond (not (:host a))
+          (fn [a] (let-return [a- ((reflex a) a)]
+                              (cond (dead? a-) (done)
+                                    (fail? a-) (do (send-off *agent* sleep timeout-after-fail)
+                                                   (send-off *agent* run))
+                                    (:host a-) (do (send-off (first (alive-download-agents-without-host-after *agent*)) run)
+                                                   (send-off *agent* run))
+                                    :else (send-off *agent* run))))
 
-;; (defmethod reflex-with-transfer-of-control :default
-;;   [ag & opts]
-;;   (cond (not (:host ag))
-;;         (fn [ag]
-;;           (let-return [ag- (reflex ag opts)]
-;;                       (cond (dead? ag-) (transfering-control (done ag- opts))
-;;                             (fail? ag-) (do (sleep ag- timeout-after-fail)
-;;                                             (recursively (send *agent* run opts)))
-;;                             (:host ag-) (do (transfering-control
-;;                                              (send (next-unhosted-and-nothing-doing-after *agent*) run opts))
-;;                                             (recursively (send *agent* run opts)))
-;;                             :else (recursively (send *agent* run opts)))))
+          (seq (download-agents-running-on-same-host-as *agent*)) pass
+          
+          :else
+          (fn [a] (let-return [a- ((reflex a) a)]
+                              (cond (dead? a-) (done)
+                                    (fail? a-) (do (send-off *agent* sleep timeout-after-fail)
+                                                   (done))
+                                    :else (send-off *agent* run)))))))
 
-;;         (some-surrounding-agent-running-on-same-host-as *agent*) pass
-
-;;         :else
-;;         (fn [ag]
-;;           (let-return [ag- (reflex ag opts)]
-;;                       (cond (dead? ag-) (transfering-control (done ag- opts))
-;;                             (fail? ag-) (do (sleep ag- timeout-after-fail)
-;;                                             (transfering-control (done ag- opts)))
-;;                             :else (recursively (send *agent* run opts)))))))
-
-(defmethod pass :default
-  [ag]
+(defmethod pass :default [ag]
   ag)
 
-(defmethod idle :default
-  [ag]
+(defmethod idle :default [ag]
   (status! ag :idle))
 
-(defmethod fail :default
-  [ag]
+(defmethod fail :default [ag]
   (status! ag :fail))
 
-(defmethod die  :default
-  [ag]
+(defmethod die  :default [ag]
   (status! ag :dead))
 
-(defmethod sleep :default
-  [ag millis]
+(defmethod sleep :default [ag millis]
   (with-return ag
     (Thread/sleep millis)))
 
