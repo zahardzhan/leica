@@ -26,6 +26,12 @@
 (defn after [x xs]
   (next (drop-while (partial not= x) xs)))
 
+(defmacro when-supplied [& clauses]
+  (if (not clauses) true
+      `(and (or (nil? ~(first clauses))
+                (do ~(second clauses)))
+            (when-supplied ~@(next (next clauses))))))
+
 (defn select
   [& {:as opts
       :keys [from order-by where entirely-after after before]
@@ -76,12 +82,6 @@
   [[form val] & body]
   `(let [~form ~val]
      (with-return ~form (do ~@body))))
-
-(defmacro when-supplied [& clauses]
-  (if (not clauses) true
-      `(and (or (nil? ~(first clauses))
-                (do ~(second clauses)))
-            (when-supplied ~@(next (next clauses))))))
 
 (defn file? [x]
   (and (instance? java.io.File x) (.isFile x)))

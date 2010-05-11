@@ -489,6 +489,14 @@
   (send-off aggg (fn [x] (future  (. System/out println 2))))
 
   (def de (make-download-env))
+  (def da1 (make-download-agent "http://dsv.data.cod.ru/778222"
+                                :working-path (File. "/home/haru/Inbox/")
+                                :strategy reflex-with-transfer-of-control
+                                :environment de))
+  (def da2 (make-download-agent "http://dsv.data.cod.ru/778145"
+                                :working-path (File. "/home/haru/Inbox/")
+                                :strategy reflex-with-transfer-of-control
+                                :environment de))
   (def da3 (make-download-agent "http://dsv.data.cod.ru/775759"
                                 :working-path (File. "/home/haru/Inbox/")
                                 :strategy reflex-with-transfer-of-control
@@ -497,6 +505,7 @@
                                 :working-path (File. "/home/haru/Inbox/")
                                 :strategy reflex-with-transfer-of-control
                                 :environment de))
+
   de
   da1
   da2
@@ -506,7 +515,10 @@
   (binded? da2)
   (run @da3)
   (run @da1)
+  (send-off da1 run)
+  (send-off da2 run)
   (send-off da3 run)
+  (send-off da4 run)
   (execute @da3 (reflex-with-transfer-of-control  @da3))
   (execute @da4 (reflex-with-transfer-of-control  @da4))
 

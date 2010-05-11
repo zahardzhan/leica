@@ -153,7 +153,7 @@
     (set nil)))
 
 (defn binded? "Agent is binded to environment and vice-versa?"
-  ([a]   (if ((surrounding a) a) true false))
+  ([a]   (if ((agents (env a)) a) true false))
   ([a e] (and (identical? e (env a)) (binded? a))))
 
 (defn bind-agent-to-environment [a e]
@@ -172,7 +172,7 @@
               (ref-set (derefed a :env force) nil)))))
 
 (defmethod bind [::agent ::environment] [a e]
-  bind-agent-to-environment a e)
+  (bind-agent-to-environment a e))
 
 (defmethod unbind ::agent [a]
-  unbind-agent a)
+  (unbind-agent a))
