@@ -110,7 +110,7 @@
 (defmulti reflex-with-transfer-of-control dispatch-by-service)
 
 (derive ::download-environment :agent/environment)
-(derive ::download-agent :agent/agent)
+(derive ::download-agent       :agent/agent)
 
 (defn make-download-env [& {:as opts :keys [type agents]}]
   (make-env :type ::download-environment
@@ -162,30 +162,6 @@
 
 (defn download-agent? [a]
   (and (env-agent? a) (derefed a download-agent-body?)))
-
-(defn select-in-env-of
-  [a & {:as opts
-        :keys [sort part test]
-        :or {part :entirely
-             test identity}}]
-  {:pre  [(env-agent? a)
-          (when-supplied sort (or (keyword? sort) (fn? sort))
-                         part (#{:entirely :entirely-after :before :after} part)
-                         test (or (multimethod? test) (fn? test)))]}
-  
-  (let [maybe-sort (fn  [ags] (if sort (sort-by sort ags) ags))
-        maybe-take-part-of-seq (fn [ags]
-                                 (case part
-                                       :entirely ags
-                                       :entirely-after (concat (after a ags)
-                                                               (before a ags)
-                                                               (list a))
-                                       :before (before a ags)
-                                       :after (after a ags)))]
-    (->> (agents (env a))
-         maybe-sort
-         maybe-take-part-of-seq
-         (filter test))))
 
 (defmethod status :default [ag]
   (deref (:status ag)))
@@ -297,28 +273,27 @@
         :else                      download))
 
 (defn alive-download-agents-without-host-after [a]
-  (select-in-env-of a :sort #(derefed % :precedence) :part :entirely-after
-                    :test #(and (download-agent? %)
-                                (derefed % alive?)
-                                (derefed % :host not))))
+  (select :from (agents (env a)) :entirely-after a
+          :order-by #(derefed % :precedence)
+          :where #(and (download-agent? %)
+                      (derefed % alive?)
+                      (derefed % :host not))))
 
 (defn idle-download-agents-with-same-host-as [a]
-  (select-in-env-of a :sort #(derefed % :precedence) :part :entirely
-                    :test #(and (download-agent? %)
-                                (derefed % idle?)
-                                (same :host (deref a) (deref %)))))
+  (select :from (agents (env a)) :order-by #(derefed % :precedence) 
+          :where #(and (download-agent? %) (derefed % idle?)
+                      (same :host (deref a) (deref %)))))
 
 (defn alive-download-agents-with-same-host-after [a]
-  (select-in-env-of a :sort #(derefed % :precedence) :part :entirely-after
-                    :test #(and (download-agent? %)
-                                (derefed % alive?)
-                                (same :host (deref a) (deref %)))))
+  (select :from (agents (env a)) :entirely-after a
+          :order-by #(derefed % :precedence)
+          :where #(and (download-agent? %) (derefed % alive?)
+                      (same :host (deref a) (deref %)))))
 
 (defn download-agents-running-on-same-host-as [a]
-  (select-in-env-of a :sort #(derefed % :precedence) :part :entirely
-                    :test #(and (download-agent? %)
-                                (derefed % run?)
-                                (same :host (deref a) (deref %)))))
+  (select :from (surrounding a) :order-by #(derefed % :precedence)
+          :where #(and (download-agent? %) (derefed % run?)
+                      (same :host (deref a) (deref %)))))
 
 (defmethod reflex-with-transfer-of-control :default [a & opts]
   (let [done #(or (send-off (or (first (idle-download-agents-with-same-host-as *agent*))

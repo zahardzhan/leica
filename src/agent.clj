@@ -156,7 +156,7 @@
   ([a]   (if ((surrounding a) a) true false))
   ([a e] (and (identical? e (env a)) (binded? a))))
 
-(defmethod bind [::agent ::environment] [a e]
+(defn bind-agent-to-environment [a e]
   {:pre  [(env? e) (env-agent? a)]}
   (with-return e
     (when-not (binded? a e)
@@ -164,9 +164,15 @@
       (dosync (alter (:agents e) union #{a})
               (ref-set (derefed a :env force) e)))))
 
-(defmethod unbind ::agent [a]
+(defn unbind-agent [a]
   {:pre  [(env-agent? a)]}
   (with-return a
     (when (binded? a)
       (dosync (alter (:agents (env a)) difference #{a})
               (ref-set (derefed a :env force) nil)))))
+
+(defmethod bind [::agent ::environment] [a e]
+  bind-agent-to-environment a e)
+
+(defmethod unbind ::agent [a]
+  unbind-agent a)

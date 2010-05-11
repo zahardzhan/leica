@@ -26,14 +26,27 @@
 (defn after [x xs]
   (next (drop-while (partial not= x) xs)))
 
-(defn next-after-when
-  "Для коллекции уникальных элементов xs находит следующий за x
-  элемент, соответствующий предикату pred?. Если после х таких нет,
-  то берется первый соответствующий элемент с начала коллекции."
-  [pred? x xs]
-  (when (some pred? xs)
-    (let [[before after] (split-with (partial not= x) xs)]
-      (some #(when (pred? %) %) (rest (cycle (concat after before)))))))
+(defn select
+  [& {:as opts
+      :keys [from order-by where entirely-after after before]
+      :or {where identity}}]
+  {:pre  [(when-supplied from (coll? from)
+                         order-by (or (keyword? order-by) (fn? order-by) (multimethod? order-by))
+                         where (or (multimethod? where) (fn? where)))]}
+  
+  (let [maybe-sort (fn [ags] (if order-by (sort-by order-by ags) ags))
+        maybe-take-part-of-seq (fn [ags]
+                                 (cond (not (or entirely-after after before)) ags
+                                       entirely-after (concat (aux/after entirely-after ags)
+                                                              (aux/before entirely-after ags)
+                                                              (list entirely-after))
+                                       after (aux/after after ags)
+                                       before (aux/before before ags)))]
+    (when from
+      (->> from
+           maybe-sort
+           maybe-take-part-of-seq
+           (filter where)))))
 
 (defn derefed
   "Разыменовывает аргумент."
