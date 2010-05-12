@@ -28,22 +28,6 @@
 ;;; existing methods) for each of the following functions.  Here are
 ;;; the ones that will change for each new environment:
 
-(defn dispatch-by-type
-    ([x] (type x))
-    ([x & args] (type x)))
-
-(defn dispatch-by-derefed-type
-  ([x] (derefed x type))
-  ([x & args] (derefed x type)))
-
-(defn dispatch-by-type-of-2-args
-  ([x y] [(type x) (type y)])
-  ([x y & args] [(type x) (type y)]))
-
-(defn dispatch-by-derefed-type-of-2-args
-  ([x y] [(derefed x type) (derefed y type)])
-  ([x y & args] [(derefed x type) (derefed y type)]))
-
 (defmulti get-action
   "Execute agent program, get next action."
   dispatch-by-type)
