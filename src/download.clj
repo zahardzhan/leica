@@ -15,7 +15,7 @@
 ;; along with this program. If not, see http://www.gnu.org/licenses/
 
 (ns download
-  (:use :reload aux agent)
+  (:use :reload aux agent hook)
   (:require [clojure.contrib.logging :as log]
             [clojure.contrib.duck-streams :as duck]
 
@@ -117,10 +117,24 @@
 
 (defn make-download-env [& {:as opts :keys [type agents]}]
   (make-env :type ::download-environment
-            :agents agents))
+            :agents agents
+            :hook {:after-termination (make-hook)}))
 
 (defn download-env? [e]
   (and (env? e) (isa? (type e) ::download-environment)))
+
+(defmethod add-hook ::download-environment [e function & {:keys [append local]}]
+  ;; Use: (add-hook env fn :append true :local :after-termination)
+  ;; where hook's function take environment as argument.
+  {:pre  [(when-supplied local (keyword? local))]}
+  (with-return e
+    (when-let [hook ((e :hook) local)]
+      (add-hook hook function :append append))))
+
+(defmethod run-hook ::download-environment [e hook]
+  ;; USE: (run-hook env :after-termination)
+  {:pre  [(when-supplied hook (keyword? hook))]}
+  (run-hook ((e :hook) hook) e))
 
 (def *precedence* (atom 0))
 

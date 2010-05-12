@@ -23,12 +23,17 @@
   (atom []))
 
 (defmulti add-hook
-  "(add-hook HOOK FUNCTION &optional APPEND LOCAL)  
+  "(add-hook HOOK FUNCTION &optional APPEND)
+   (add-hook OBJECT FUNCTION &optional APPEND LOCAL) 
 
   Add to the value of HOOK the function FUNCTION.  FUNCTION is not
   added if already present.  FUNCTION is added (if necessary) at the
   beginning of the hook list unless the optional argument APPEND is
   non-nil, in which case FUNCTION is added at the end.
+
+  The optional fourth argument, LOCAL, if non-nil, says to modify the
+  instance-local hook's value rather than its default value.  This makes
+  the hook instance-local.
 
   HOOK should be a symbol, and FUNCTION may be any valid function.  If
   HOOK is void, it is first set to nil.  If HOOK's value is a single
@@ -38,8 +43,7 @@
 
 (defmulti run-hook dispatch-by-derefed-type)
 
-(defmethod add-hook clojure.lang.PersistentVector
-  [hook function & {:keys [append]}]
+(defmethod add-hook clojure.lang.PersistentVector [hook function & {:keys [append]}]
   (with-return hook
     (when-not (some #(identical? function %) @hook)
       (if append
