@@ -509,6 +509,10 @@
                                 :strategy reflex-with-transfer-of-control
                                 :environment de))
 
+  (make-download-agent "http://dsv.data.cod.ru/772992"
+                       :working-path (File. "/home/haru/Inbox/")
+                       :strategy reflex-with-transfer-of-control)
+  (match-service "http://dsv.data.cod.ru/772992")
   de
   da1
   da2

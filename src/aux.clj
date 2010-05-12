@@ -72,10 +72,10 @@
          action identity
          otherwise identity}}]
 
-  (or (for [rule rules
-            :let [result (matcher (rule-pattern rule) input)]
-            :when (not (fail? result))]
-        (action result (rule-response rule)))
+  (or (first (for [rule rules
+                   :let [result (matcher (rule-pattern rule) input)]
+                   :when (not (fail? result))]
+               (action result (rule-response rule))))
       (otherwise input)))
 
 (defn extract-url [line]
