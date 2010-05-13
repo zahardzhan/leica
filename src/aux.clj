@@ -24,22 +24,6 @@
 (defn swap-args [f]
   (fn [x y] ( f y x)))
 
-(defn dispatch-by-type
-    ([x] (type x))
-    ([x & args] (type x)))
-
-(defn dispatch-by-derefed-type
-  ([x] (derefed x type))
-  ([x & args] (derefed x type)))
-
-(defn dispatch-by-type-of-2-args
-  ([x y] [(type x) (type y)])
-  ([x y & args] [(type x) (type y)]))
-
-(defn dispatch-by-derefed-type-of-2-args
-  ([x y] [(derefed x type) (derefed y type)])
-  ([x y & args] [(derefed x type) (derefed y type)]))
-
 (defn same [f & xs]
   (apply = (map f xs)))
 
@@ -132,6 +116,22 @@
   [[form val] & body]
   `(let [~form ~val]
      (with-return ~form (do ~@body))))
+
+(defn dispatch-by-type
+    ([x] (type x))
+    ([x & args] (type x)))
+
+(defn dispatch-by-derefed-type
+  ([x] (derefed x type))
+  ([x & args] (derefed x type)))
+
+(defn dispatch-by-type-of-2-args
+  ([x y] [(type x) (type y)])
+  ([x y & args] [(type x) (type y)]))
+
+(defn dispatch-by-derefed-type-of-2-args
+  ([x y] [(derefed x type) (derefed y type)])
+  ([x y & args] [(derefed x type) (derefed y type)]))
 
 (defn file? [x]
   (and (instance? java.io.File x) (.isFile x)))

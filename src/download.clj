@@ -15,12 +15,11 @@
 ;; along with this program. If not, see http://www.gnu.org/licenses/
 
 (ns download
-  (:use :reload aux agent hook)
+  (:use :reload aux agent hook console-progress)
   (:require [clojure.contrib.logging :as log]
             [clojure.contrib.duck-streams :as duck]
 
             fn
-            progress
             verified)
   (:import (java.io File
                     FileOutputStream
@@ -115,26 +114,42 @@
 (derive ::download-environment :agent/environment)
 (derive ::download-agent       :agent/agent)
 
+(def download-environment-termination-hook (make-hook))
+
 (defn make-download-env [& {:as opts :keys [type agents]}]
   (make-env :type ::download-environment
             :agents agents
-            :hook {:after-termination (make-hook)}))
+            :hook (delay {:download-environment-termination
+                          {:global download-environment-termination-hook
+                           :local (make-hook)}})))
 
 (defn download-env? [e]
   (and (env? e) (isa? (type e) ::download-environment)))
 
-(defmethod add-hook ::download-environment [e function & {:keys [append local]}]
-  ;; Use: (add-hook env fn :append true :local :after-termination)
-  ;; where hook's function take environment as argument.
-  {:pre  [(when-supplied local (keyword? local))]}
-  (with-return e
-    (when-let [hook ((e :hook) local)]
-      (add-hook hook function :append append))))
+(defmethod add-hook ::download-environment [e local-hook key function]
+  (when-let [hook (-> e :hook force local-hook :local)]
+    (add-hook hook key function)))
 
-(defmethod run-hook ::download-environment [e hook]
-  ;; USE: (run-hook env :after-termination)
-  {:pre  [(when-supplied hook (keyword? hook))]}
-  (run-hook ((e :hook) hook) e))
+(defmethod run-hook ::download-environment [e local-hook]
+  (run-hook (-> e :hook force local-hook :local) e))
+
+(defmethod run-hooks ::download-environment [e hook]
+  (run-hook (-> e :hook force hook :global) e)
+  (run-hook (-> e :hook force hook :local) e))
+
+(declare download-agent?)
+
+(defmethod done? ::download-environment [e]
+  (every? dead? (deref-seq (select :from (agents e) :where download-agent?))))
+
+(defmethod terminate ::download-environment [e]
+  (with-return e (run-hooks e :download-environment-termination)))
+
+(def buffer-size          4096)
+(def timeout-after-fail   3000)
+(def connection-timeout   30000)
+(def head-request-timeout 30000)
+(def get-request-timeout  30000)
 
 (def *precedence* (atom 0))
 
@@ -254,23 +269,21 @@
 (defmethod run ::download-agent [ag & opts]
   (execute ag (get-action ag opts)))
 
-(defmethod done? ::download-agent [a]
-  (dead? a))
-
-(defmethod done? ::download-environment [e]
-  (every? dead? (deref-seq (agents e))))
-
-(defmethod terminate ::download-agent [a]
-  a)
-
-(defmethod terminate ::download-environment [e]
-  e)
-
-(def buffer-size          4096)
-(def timeout-after-fail   3000)
-(def connection-timeout   30000)
-(def head-request-timeout 30000)
-(def get-request-timeout  30000)
+(defmethod console-progress ::download-agent [a]
+  ;; (let [{:keys [tag name progress total time]} ;; message
+  ;;       percent (int (if-not (zero? total) (* 100 (/ progress total)) 0))
+  ;;       new-state (assoc ag :tags
+  ;;                        (assoc (ag :tags) tag 
+  ;;                               {:name name :percent percent}))]
+  ;;   (.print System/out "\r")
+  ;;   (doseq [tag (keys (:tags new-state))]
+  ;;     (let [name (((new-state :tags) tag) :name)
+  ;;           percent (((new-state :tags) tag) :percent)
+  ;;           first-part (apply str (take 5 name))
+  ;;           last-part  (apply str (take-last 7 name))]
+  ;;       (.(str \[ first-part ".." last-part \space percent \% \]))))
+  ;;   new-state)
+  )
 
 (defmethod reflex :default
   [{:as ag :keys [address link host name file length done-path]} & opts]
@@ -316,7 +329,7 @@
   (let [done #(or (send-off (or (first (idle-download-agents-with-same-host-as *agent*))
                                 (first (alive-download-agents-with-same-host-after *agent*)))
                             run)
-                  (when (done? (env *agent*)) (terminate (env *agent*))))]
+                  (when-let [e (env *agent*)] (done? e) (terminate e)))]
     
     (cond (not (:host a))
           (fn [a] (let-return [a- ((reflex a) a)]
@@ -459,7 +472,7 @@
       (.. client getHttpConnectionManager getParams 
           (setConnectionTimeout connection-timeout))
       (.. get getParams (setSoTimeout get-request-timeout))
-		(.setRequestHeader get "Range" (str "bytes=" (file-length file) \-))
+      (.setRequestHeader get "Range" (str "bytes=" (file-length file) \-))
       (try (.executeMethod client get)
            (let [content-length (.getResponseContentLength get)]
              (cond (not content-length)
@@ -478,11 +491,11 @@
                        (loop [progress (file-length file)]
                          (let [size (.read input buffer)]
                            (when (pos? size)
-                             (do (.write output buffer 0 size)                                 
-                                 (recur (+ progress size))))))
-                       (.flush output)
-                       (log/info (str "Закончена загрузка " name))
-                       (assoc ag :fail false)))))
+                             (.write output buffer 0 size)
+                             (recur (+ progress size)))))
+                       (.flush output))
+                     (log/info (str "Закончена загрузка " name))
+                     (idle ag))))
            (catch ConnectException e
              (do (log/info (str "Время ожидания соединения с сервером истекло для " name))
                  (fail ag)))

@@ -19,29 +19,14 @@
 
 (in-ns 'hook)
 
-(defn make-hook []
-  (atom []))
+(defn make-hook
+  ([] (atom {}))
+  ([body] (atom body)))
 
-(defmulti add-hook
-  "(add-hook HOOK FUNCTION &optional APPEND)
-   (add-hook OBJECT FUNCTION &optional APPEND LOCAL) 
-
-  Add to the value of HOOK the function FUNCTION.  FUNCTION is not
-  added if already present.  FUNCTION is added (if necessary) at the
-  beginning of the hook list unless the optional argument APPEND is
-  non-nil, in which case FUNCTION is added at the end.
-
-  The optional fourth argument, LOCAL, if non-nil, says to modify the
-  instance-local hook's value rather than its default value.  This makes
-  the hook instance-local.
-
-  HOOK should be a symbol, and FUNCTION may be any valid function.  If
-  HOOK is void, it is first set to nil.  If HOOK's value is a single
-  function, it is changed to a list of functions."
-
-  dispatch-by-derefed-type)
-
-(defmulti run-hook dispatch-by-derefed-type)
+(defmulti add-hook    dispatch-by-derefed-type)
+(defmulti remove-hook dispatch-by-derefed-type)
+(defmulti run-hook    dispatch-by-derefed-type)
+(defmulti run-hooks   dispatch-by-derefed-type)
 
 (defmethod add-hook clojure.lang.PersistentVector [hook function & {:keys [append]}]
   (with-return hook
@@ -53,3 +38,13 @@
 (defmethod run-hook clojure.lang.PersistentVector
   ([hook] (doseq [function @hook] (function)))
   ([hook & args] (doseq [function @hook] (apply function args))))
+
+(defmethod add-hook clojure.lang.PersistentArrayMap [hook key function]
+  (with-return hook (swap! hook assoc key function)))
+
+(defmethod remove-hook clojure.lang.PersistentArrayMap [hook key]
+  (with-return hook (swap! hook dissoc key)))
+
+(defmethod run-hook clojure.lang.PersistentArrayMap
+  ([hook]        (doseq [[key function] @hook] (function)))
+  ([hook & args] (doseq [[key function] @hook] (apply function args))))
