@@ -140,7 +140,7 @@
 (declare download-agent?)
 
 (defmethod done? ::download-environment [e]
-  (every? dead? (deref-seq (select :from (agents e) :where download-agent?))))
+  (every? dead? (deref-seq (select-items :from (agents e) :where download-agent?))))
 
 (defmethod terminate ::download-environment [e]
   (with-return e (run-hook e :download-environment-termination-hook)))
@@ -321,27 +321,27 @@
         :else                      download))
 
 (defn alive-download-agents-without-host-after [a]
-  (select :from (agents (env a)) :entirely-after a
-          :order-by #(derefed % :precedence)
-          :where #(and (download-agent? %)
-                      (derefed % alive?)
-                      (derefed % :host not))))
+  (select-items :from (agents (env a)) :entirely-after a
+                :order-by #(derefed % :precedence)
+                :where #(and (download-agent? %)
+                             (derefed % alive?)
+                             (derefed % :host not))))
 
 (defn idle-download-agents-with-same-host-as [a]
-  (select :from (agents (env a)) :order-by #(derefed % :precedence) 
-          :where #(and (download-agent? %) (derefed % idle?)
-                      (same :host (deref a) (deref %)))))
+  (select-items :from (agents (env a)) :order-by #(derefed % :precedence) 
+                :where #(and (download-agent? %) (derefed % idle?)
+                             (same :host (deref a) (deref %)))))
 
 (defn alive-download-agents-with-same-host-after [a]
-  (select :from (agents (env a)) :entirely-after a
-          :order-by #(derefed % :precedence)
-          :where #(and (download-agent? %) (derefed % alive?)
-                      (same :host (deref a) (deref %)))))
+  (select-items :from (agents (env a)) :entirely-after a
+                :order-by #(derefed % :precedence)
+                :where #(and (download-agent? %) (derefed % alive?)
+                             (same :host (deref a) (deref %)))))
 
 (defn download-agents-running-on-same-host-as [a]
-  (select :from (surrounding a) :order-by #(derefed % :precedence)
-          :where #(and (download-agent? %) (derefed % run?)
-                      (same :host (deref a) (deref %)))))
+  (select-items :from (surrounding a) :order-by #(derefed % :precedence)
+                :where #(and (download-agent? %) (derefed % run?)
+                             (same :host (deref a) (deref %)))))
 
 (defmethod reflex-with-transfer-of-control :default [a & opts]
   (let [done #(or (send-off (or (first (idle-download-agents-with-same-host-as *agent*))

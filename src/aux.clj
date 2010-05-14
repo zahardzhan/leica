@@ -39,9 +39,9 @@
                 (do ~(second clauses)))
             (when-supplied ~@(next (next clauses))))))
 
-(defn select [& {:as opts
-                 :keys [from order-by where entirely-after after before]
-                 :or {where identity}}]
+(defn select-items [& {:as opts
+                       :keys [from order-by where entirely-after after before]
+                       :or {where identity}}]
 
   {:pre  [(when-supplied from (coll? from)
                          order-by (or (keyword? order-by) (fn? order-by) (multimethod? order-by))

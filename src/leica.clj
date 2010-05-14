@@ -73,19 +73,17 @@ e")
           done-path    (verified/output-dir move)]
       (when (and jobs-file working-path)
         (let [lines (duck/read-lines jobs-file)
-              download-environment (make-download-env)
-              agents (->> (for [line lines]
-                            (make-download-agent
-                             line
-                             :working-path working-path
-                             :done-path (when (not= working-path done-path) done-path)
-                             :strategy reflex-with-transfer-of-control
-                             :environment download-environment))
-                          (filter download-agent?))]
+              download-environment (make-download-env)]
+          (doseq [line lines]
+            (make-download-agent line
+                                 :working-path working-path
+                                 :done-path (when (not= working-path done-path) done-path)
+                                 :strategy reflex-with-transfer-of-control
+                                 :environment download-environment))
           (turn-on-cli-for-all-download-environments)
-          (add-hook download-environment-termination-hook (fn [e] (System/exit 0)))
-          (dorun (for [a (agents download-environment)]
-                   (send-off a run))))))))
+          (add-hook download-environment-termination-hook :system-exit (fn [e] (System/exit 0)))
+          (doseq [a (agents download-environment)]
+            (send-off a run)))))))
     
     ;; (cond account
     ;;       (let [[domain login pass] (account-attribs account)
