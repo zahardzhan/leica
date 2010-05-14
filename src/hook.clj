@@ -28,6 +28,10 @@
 (defmulti run-hook    dispatch-by-derefed-type)
 (defmulti run-hooks   dispatch-by-derefed-type)
 
+(defmethod add-hook    nil [_ & __] nil)
+(defmethod remove-hook nil [_ & __] nil)
+(defmethod run-hook    nil [_ & __] nil)
+
 (defmethod add-hook clojure.lang.PersistentVector [hook function & {:keys [append]}]
   (with-return hook
     (when-not (some #(identical? function %) @hook)

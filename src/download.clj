@@ -83,6 +83,8 @@
 (defmulti status!           dispatch-by-service)
 (defmulti status?           dispatch-by-service)
 
+(defmulti size              dispatch-by-service)
+
 (defmulti dead?             dispatch-by-service)
 (defmulti alive?            dispatch-by-service)
 (defmulti run?              dispatch-by-service)
@@ -119,7 +121,7 @@
 (defn make-download-env [& {:as opts :keys [type agents]}]
   (make-env :type ::download-environment
             :agents agents
-            :hook (delay {:download-environment-termination
+            :hook (delay {:download-environment-termination-hook
                           {:global download-environment-termination-hook
                            :local (make-hook)}})))
 
@@ -127,13 +129,9 @@
   (and (env? e) (isa? (type e) ::download-environment)))
 
 (defmethod add-hook ::download-environment [e local-hook key function]
-  (when-let [hook (-> e :hook force local-hook :local)]
-    (add-hook hook key function)))
+  (add-hook (-> e :hook force local-hook :local) key function))
 
-(defmethod run-hook ::download-environment [e local-hook]
-  (run-hook (-> e :hook force local-hook :local) e))
-
-(defmethod run-hooks ::download-environment [e hook]
+(defmethod run-hook ::download-environment [e hook]
   (run-hook (-> e :hook force hook :global) e)
   (run-hook (-> e :hook force hook :local) e))
 
@@ -143,7 +141,7 @@
   (every? dead? (deref-seq (select :from (agents e) :where download-agent?))))
 
 (defmethod terminate ::download-environment [e]
-  (with-return e (run-hooks e :download-environment-termination)))
+  (with-return e (run-hook e :download-environment-termination-hook)))
 
 (def buffer-size          4096)
 (def timeout-after-fail   3000)
@@ -151,10 +149,11 @@
 (def head-request-timeout 30000)
 (def get-request-timeout  30000)
 
-(def *precedence* (atom 0))
+(def download-agent-before-download-hook (make-hook))
+(def download-agent-after-download-hook  (make-hook))
+(def download-agent-change-size-hook     (make-hook))
 
-(defn reset-precedence []
-  (reset! *precedence* 0))
+(def *precedence* (atom 0))
 
 (defn make-download-agent
   [address-line & {:as opts
@@ -183,17 +182,34 @@
                   :link nil
                   :file nil
                   :length nil
+                  :size (atom nil)
                   :environment environment
                   :meta meta
                   :validator validator
                   :error-handler error-handler
-                  :error-mode error-mode))))
+                  :error-mode error-mode
+                  :hook (delay {:download-agent-before-download-hook
+                                {:global download-agent-before-download-hook
+                                 :local (make-hook)}
+                                :download-agent-after-download-hook
+                                {:global download-agent-after-download-hook
+                                 :local (make-hook)}
+                                :download-agent-change-size-hook
+                                {:global download-agent-change-size-hook
+                                 :local (make-hook)}})))))
 
 (defn download-agent-body? [a]
   (and (env-agent-body? a) (isa? (type a) ::download-agent)))
 
 (defn download-agent? [a]
   (and (env-agent? a) (derefed a download-agent-body?)))
+
+(defmethod add-hook ::download-agent [a local-hook key function]
+  (add-hook (-> a :hook force local-hook :local) key function))
+
+(defmethod run-hook ::download-agent [a hook]
+  (run-hook (-> a :hook force hook :global) a)
+  (run-hook (-> a :hook force hook :local) a))
 
 (defmethod status :default [ag]
   (deref (:status ag)))
@@ -211,6 +227,9 @@
 (defmethod status? :default [ag current-status]
    (cond (keyword? current-status) (= (status ag) current-status)
          (set? current-status) (keyword? (current-status (status ag)))))
+
+(defmethod size :default [ag]
+  (deref (:size ag)))
 
 (defmethod dead? :default [ag]
   (status? ag :dead))
@@ -269,21 +288,18 @@
 (defmethod run ::download-agent [ag & opts]
   (execute ag (get-action ag opts)))
 
-(defmethod console-progress ::download-agent [a]
-  ;; (let [{:keys [tag name progress total time]} ;; message
-  ;;       percent (int (if-not (zero? total) (* 100 (/ progress total)) 0))
-  ;;       new-state (assoc ag :tags
-  ;;                        (assoc (ag :tags) tag 
-  ;;                               {:name name :percent percent}))]
-  ;;   (.print System/out "\r")
-  ;;   (doseq [tag (keys (:tags new-state))]
-  ;;     (let [name (((new-state :tags) tag) :name)
-  ;;           percent (((new-state :tags) tag) :percent)
-  ;;           first-part (apply str (take 5 name))
-  ;;           last-part  (apply str (take-last 7 name))]
-  ;;       (.(str \[ first-part ".." last-part \space percent \% \]))))
-  ;;   new-state)
-  )
+(defmethod console-progress ::download-agent
+  [{:as a :keys [name length]}]
+  (let [size       (size a)
+        percent    #(int (if (and (pos? length) (pos? size))
+                           (* 100 (/ size length))
+                           0))
+        first-part #(apply str (take 5 name))
+        last-part  #(apply str (take-last 7 name))]
+    (cond (and name length size)
+          (str \[ (first-part) ".." (last-part) \space (percent) \% \])
+
+          :else nil)))
 
 (defmethod reflex :default
   [{:as ag :keys [address link host name file length done-path]} & opts]
@@ -465,59 +481,81 @@
   (idle (assoc ag :file (join-paths working-path name))))
 
 (defmethod download :default
-  [{:as ag :keys [name host length link file]}]
+  [{:as ag :keys [name host length link size file]}]
   (let [#^HttpClient client (new HttpClient)
         #^GetMethod get (GetMethod. (str link))]
     (when (and link file)
-      (.. client getHttpConnectionManager getParams 
-          (setConnectionTimeout connection-timeout))
-      (.. get getParams (setSoTimeout get-request-timeout))
-      (.setRequestHeader get "Range" (str "bytes=" (file-length file) \-))
-      (try (.executeMethod client get)
-           (let [content-length (.getResponseContentLength get)]
-             (cond (not content-length)
-                   (do (log/info (str "Невозможно проверить файл перед загрузкой " name))
-                       (fail ag))
+      (try
+       ;; (run-hook ag :download-agent-before-download-hook)
+       (.. client getHttpConnectionManager getParams 
+           (setConnectionTimeout connection-timeout))
+       (.. get getParams (setSoTimeout get-request-timeout))
+       (.setRequestHeader get "Range" (str "bytes=" (file-length file) \-))
+       (.executeMethod client get)
+       (let [content-length (.getResponseContentLength get)]
+         (cond (not content-length)
+               (do (log/info (str "Невозможно проверить файл перед загрузкой " name))
+                   (fail ag))
 
-                   (not= content-length (- length (file-length file)))
-                   (do (log/info (str "Размер получаемого файла не совпадает с ожидаемым " name))
-                       (fail ag))
+               (not= content-length (- length (file-length file)))
+               (do (log/info (str "Размер получаемого файла не совпадает с ожидаемым " name))
+                   (fail ag))
 
-                   :else
-                   (with-open [#^InputStream input (.getResponseBodyAsStream get)
-                               #^FileOutputStream output (FileOutputStream. file true)]
-                     (log/info (str "Начата загрузка " name))
-                     (let [buffer (make-array Byte/TYPE buffer-size)]
-                       (loop [progress (file-length file)]
-                         (let [size (.read input buffer)]
-                           (when (pos? size)
-                             (.write output buffer 0 size)
-                             (recur (+ progress size)))))
-                       (.flush output))
-                     (log/info (str "Закончена загрузка " name))
-                     (idle ag))))
-           (catch ConnectException e
-             (do (log/info (str "Время ожидания соединения с сервером истекло для " name))
-                 (fail ag)))
-           (catch ConnectTimeoutException e
-             (do (log/info (str "Время ожидания соединения с сервером истекло для " name))
-                 (fail ag)))
-           (catch InterruptedIOException e
-             (do (log/info (str "Время ожидания ответа сервера истекло для " name))
-                 (fail ag)))
-           (catch NoHttpResponseException e
-             (do (log/info (str "Сервер не отвечает на запрос для " name))
-                 (fail ag)))
-           (catch Exception e 
-             (do (log/info (str "Ошибка во время загрузки " name))
-                 (fail ag)))
-           (finally (.releaseConnection get))))))
+               :else
+               (with-open [#^InputStream input (.getResponseBodyAsStream get)
+                           #^FileOutputStream output (FileOutputStream. file true)]
+                 (log/info (str "Начата загрузка " name))
+                 (let [buffer (make-array Byte/TYPE buffer-size)]
+                   (loop [file-size (file-length file)]
+                     (let [read-size (.read input buffer)]
+                       (when (pos? read-size)
+                         (let [new-size (+ file-size read-size)]
+                           (.write output buffer 0 read-size)
+                           (reset! size new-size)
+                           ;; (run-hook ag :download-agent-change-size-hook)
+                           (recur new-size)))))
+                   (.flush output))
+                 (log/info (str "Закончена загрузка " name))
+                 (idle ag))))
+       (catch ConnectException e
+         (do (log/info (str "Время ожидания соединения с сервером истекло для " name))
+             (fail ag)))
+       (catch ConnectTimeoutException e
+         (do (log/info (str "Время ожидания соединения с сервером истекло для " name))
+             (fail ag)))
+       (catch InterruptedIOException e
+         (do (log/info (str "Время ожидания ответа сервера истекло для " name))
+             (fail ag)))
+       (catch NoHttpResponseException e
+         (do (log/info (str "Сервер не отвечает на запрос для " name))
+             (fail ag)))
+       (catch Exception e 
+         (do (log/info (str "Ошибка во время загрузки " name))
+             (fail ag)))
+       (finally (do (.releaseConnection get)
+                    ;; (run-hook ag :download-agent-after-download-hook)
+                    ))))))
+
+(defn turn-on-cli-for-all-download-environments []
+  (add-hook download-agent-before-download-hook :cli
+            (fn [a]
+              (when (and *console-progress-agent* *agent*)
+                (send-off *console-progress-agent* show-console-progress *agent*))))
+  (add-hook download-agent-after-download-hook :cli
+            (fn [a]
+              (when (and *console-progress-agent* *agent*)
+                (send-off *console-progress-agent* hide-console-progress *agent*))))
+  (add-hook download-agent-change-size-hook :cli
+            (fn [a]
+              (when (and *console-progress-agent* *agent*)
+                (send-off *console-progress-agent* update-console-progress)))))
+
+(defn turn-off-cli-for-all-download-environments []
+  (remove-hook download-agent-before-download-hook :cli)
+  (remove-hook download-agent-after-download-hook :cli)
+  (remove-hook download-agent-change-size-hook :cli))
 
 (comment
-
-  (def aggg (agent 1))
-  (send-off aggg (fn [x] (future  (. System/out println 2))))
-
   (def de (make-download-env))
   (def da1 (make-download-agent "http://dsv.data.cod.ru/778222"
                                 :working-path (File. "/home/haru/Inbox/")
@@ -533,13 +571,11 @@
                                 :environment de))
   (def da4 (make-download-agent "http://dsv.data.cod.ru/772992"
                                 :working-path (File. "/home/haru/Inbox/")
-                                :strategy reflex-with-transfer-of-control
+                                :strategy reflex
                                 :environment de))
-
-  (make-download-agent "http://dsv.data.cod.ru/772992"
-                       :working-path (File. "/home/haru/Inbox/")
-                       :strategy reflex-with-transfer-of-control)
-  (match-service "http://dsv.data.cod.ru/772992")
+  (turn-on-cli-for-all-download-environments)
+  download-agent-change-size-hook
+  (run-hook @da4 :download-agent-before-download-hook)
   de
   da1
   da2
@@ -553,7 +589,5 @@
   (send-off da2 run)
   (send-off da3 run)
   (send-off da4 run)
-  (execute @da3 (reflex-with-transfer-of-control  @da3))
-  (execute @da4 (reflex-with-transfer-of-control  @da4))
-
-  (run (run (run (run (run @da1))))))
+  (run (run (run (run (run (run @da4))))))
+)
