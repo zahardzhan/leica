@@ -75,7 +75,7 @@
          rule-pattern first
          rule-response rest
          fail? (fn/or nil? false?)
-         action identity
+         action list
          otherwise identity}}]
 
   (or (first (for [rule rules

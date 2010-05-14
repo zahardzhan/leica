@@ -56,13 +56,15 @@
   `(derefed *services* ~service ~@accessors))
 
 (defn match-service [line]
-  (rule-based-translator (extract-url line) (seq @*services*)
-                         :rule-pattern (comp :address val)
-                         :rule-response key
-                         :matcher re-find
-                         :action (fn [result rule-response]
-                                   {:address result,
-                                    :service rule-response})))
+  {:pre  [(string? line)]}
+  (when-let [url (extract-url line)]
+    (rule-based-translator url (seq @*services*)
+                           :rule-pattern (comp :address val)
+                           :rule-response key
+                           :matcher re-find
+                           :action (fn [result rule-response]
+                                     {:address result,
+                                      :service rule-response}))))
 
 (defservice ::data.cod.ru
   :address #"http://[\w\.\-]*.data.cod.ru/\d+"
@@ -160,7 +162,7 @@
                    :keys [strategy working-path done-path link file
                           environment meta validator error-handler error-mode]}]
 
-  {:pre  [(when-supplied strategy     (or (multimethod? strategy) (fn? strategy))
+  {:pre  [(when-supplied strategy     (invocable? strategy)
                          working-path (verified/output-dir working-path)
                          done-path    (verified/output-dir done-path)
                          file         (file? file)
@@ -486,7 +488,7 @@
         #^GetMethod get (GetMethod. (str link))]
     (when (and link file)
       (try
-       ;; (run-hook ag :download-agent-before-download-hook)
+       (run-hook ag :download-agent-before-download-hook)
        (.. client getHttpConnectionManager getParams 
            (setConnectionTimeout connection-timeout))
        (.. get getParams (setSoTimeout get-request-timeout))
@@ -512,7 +514,7 @@
                          (let [new-size (+ file-size read-size)]
                            (.write output buffer 0 read-size)
                            (reset! size new-size)
-                           ;; (run-hook ag :download-agent-change-size-hook)
+                           (run-hook ag :download-agent-change-size-hook)
                            (recur new-size)))))
                    (.flush output))
                  (log/info (str "Закончена загрузка " name))
@@ -533,22 +535,21 @@
          (do (log/info (str "Ошибка во время загрузки " name))
              (fail ag)))
        (finally (do (.releaseConnection get)
-                    ;; (run-hook ag :download-agent-after-download-hook)
-                    ))))))
+                    (run-hook ag :download-agent-after-download-hook)))))))
 
 (defn turn-on-cli-for-all-download-environments []
   (add-hook download-agent-before-download-hook :cli
             (fn [a]
               (when (and *console-progress-agent* *agent*)
-                (send-off *console-progress-agent* show-console-progress *agent*))))
+                (send *console-progress-agent* show-console-progress *agent*))))
   (add-hook download-agent-after-download-hook :cli
             (fn [a]
               (when (and *console-progress-agent* *agent*)
-                (send-off *console-progress-agent* hide-console-progress *agent*))))
+                (send *console-progress-agent* hide-console-progress *agent*))))
   (add-hook download-agent-change-size-hook :cli
             (fn [a]
               (when (and *console-progress-agent* *agent*)
-                (send-off *console-progress-agent* update-console-progress)))))
+                (send *console-progress-agent* update-console-progress)))))
 
 (defn turn-off-cli-for-all-download-environments []
   (remove-hook download-agent-before-download-hook :cli)
@@ -556,7 +557,6 @@
   (remove-hook download-agent-change-size-hook :cli))
 
 (comment
-  (def de (make-download-env))
   (def da1 (make-download-agent "http://dsv.data.cod.ru/778222"
                                 :working-path (File. "/home/haru/Inbox/")
                                 :strategy reflex-with-transfer-of-control
@@ -569,25 +569,22 @@
                                 :working-path (File. "/home/haru/Inbox/")
                                 :strategy reflex-with-transfer-of-control
                                 :environment de))
+  
+  (def de (make-download-env))
   (def da4 (make-download-agent "http://dsv.data.cod.ru/772992"
                                 :working-path (File. "/home/haru/Inbox/")
                                 :strategy reflex
                                 :environment de))
+
   (turn-on-cli-for-all-download-environments)
+  (turn-off-cli-for-all-download-environments)
   download-agent-change-size-hook
   (run-hook @da4 :download-agent-before-download-hook)
   de
-  da1
-  da2
-  [da3
-   da4]
-  (binded? da1)
-  (binded? da2)
-  (run @da3)
-  (run @da1)
-  (send-off da1 run)
-  (send-off da2 run)
-  (send-off da3 run)
+  da4
   (send-off da4 run)
+  (send-off da1 run)
+
+  (-> @*console-progress-agent* :agents)
   (run (run (run (run (run (run @da4))))))
-)
+  )

@@ -41,12 +41,12 @@
 
 (defmethod  show-console-progress ::console-progress-agent [console-progress-agent a]
   (assoc console-progress-agent :agents
-         (union (:agents console-progress-agent) (set a))))
+         (union (:agents console-progress-agent) #{a})))
 
 (defmethod hide-console-progress ::console-progress-agent [console-progress-agent a]
   (.print System/out (str "\r" (apply str (repeat *console-width* \space)) "\r")) 
   (assoc console-progress-agent :agents
-         (difference (:agents console-progress-agent) (set a))))
+         (difference (:agents console-progress-agent) #{a})))
 
 (defmethod update-console-progress ::console-progress-agent [console-progress-agent]
   (with-return console-progress-agent

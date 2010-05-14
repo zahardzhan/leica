@@ -1,16 +1,24 @@
 ;;; -*- mode: clojure; coding: utf-8 -*-
-;;; author: Roman Zaharov <zahardzhan@gmail.com>
 
-;;; октябрь, 2009
+;; Copyright (C) 2010 Roman Zaharov <zahardzhan@gmail.com>
 
-;;; Это свободная программа, используйте на свой страх и риск.
+;; This program is free software: you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation, either version 3 of the License, or
+;; (at your option) any later version.
 
-(ns #^{:doc "Многопоточная качалка для data.cod.ru и dsvload.net."
-       :author "Роман Захаров"}
+;; This program is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+;; GNU General Public License for more details.
+;; You should have received a copy of the GNU General Public License
+;; along with this program. If not, see http://www.gnu.org/licenses/
+
+(ns #^{:author "Roman Zaharov"}
   leica
   (:gen-class)
-  (:use aux clojure.contrib.command-line)
-  (:require env download.env progress rules verified
+  (:use :reload aux agent download hook console-progress clojure.contrib.command-line)
+  (:require verified
             [clojure.contrib.duck-streams :as duck]
             [clojure.contrib.logging :as log])
   (:import java.io.File
@@ -29,20 +37,7 @@ leica [ключи] [файл с адресами на скачивание] [д�
 
 Закачать файлы на датакод в домене [dsv|amur|khv|avangard|...]:
 leica [ключи] -a домен:почтовый@адрес:пароль [файлы и директории для закачивания]
-")
-
-;; (defn account-attribs [line]
-;;   (let [[_ domain login password]
-;;         (re-find #"([^:]+):([^@]+@[^:]+):(.+)" line)]
-;;     (when (and login password)
-;;       [domain login password])))
-
-;; (defn print-succesfully-uploaded [agents]
-;;   (log/info
-;;    (apply str "Загруженные файлы:" \newline
-;;           (seq (map (fn [ag] (when-let [address (@ag :address)]
-;;                                (format-link-for-forum (@ag :name) address)))
-;;                     agents)))))
+e")
 
 (defn set-root-logger-log-level! [log-level]
   (let [root-logger (Logger/getLogger "")
@@ -78,18 +73,19 @@ leica [ключи] -a домен:почтовый@адрес:пароль [фа�
           done-path    (verified/output-dir move)]
       (when (and jobs-file working-path)
         (let [lines (duck/read-lines jobs-file)
-              progress-agent (progress/console-progress-agent)
-              terminator (fn [_] (System/exit 0))
-              agents (filter env/env-agent?
-                             (for [line lines]
-                               (download.env/download-agent 
-                                rules/download-rules line
-                                :working-path working-path
-                                :done-path (when (not= working-path done-path) done-path)
-                                :progress-agent progress-agent
-                                :termination terminator)))]
-          (apply env/bind agents)
-          (dorun (map env/run agents)))))))
+              download-environment (make-download-env)
+              agents (->> (for [line lines]
+                            (make-download-agent
+                             line
+                             :working-path working-path
+                             :done-path (when (not= working-path done-path) done-path)
+                             :strategy reflex-with-transfer-of-control
+                             :environment download-environment))
+                          (filter download-agent?))]
+          (turn-on-cli-for-all-download-environments)
+          (add-hook download-environment-termination-hook (fn [e] (System/exit 0)))
+          (dorun (for [a (agents download-environment)]
+                   (send-off a run))))))))
     
     ;; (cond account
     ;;       (let [[domain login pass] (account-attribs account)
