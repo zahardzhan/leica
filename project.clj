@@ -1,4 +1,4 @@
-(defproject leica "0.2.0-master-SNAPSHOT" 
+(defproject leica "0.3.0-master-SNAPSHOT" 
   :description "Multithreaded downloader for data.cod.ru"
   :url "http://github.com/zahardzhan/leica"
   :autodoc {:name "Leica", :page-title "Leica API documentation"}

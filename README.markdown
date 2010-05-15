@@ -11,7 +11,7 @@
 
 Установки не требует. Всего-то нужно скачать свежую сборку, и можно пользоваться.
 
-    # wget http://cloud.github.com/downloads/zahardzhan/leica/leica.jar
+    # wget http://cloud.github.com/downloads/zahardzhan/leica/leica-standalone.jar
 
 ## Как пользоваться?
 
@@ -26,7 +26,7 @@
 
 Просто запустите:
 
-    # java -jar leica.jar [файл с адресами чего качать] [директория куда всё это качать]
+    # java -jar leica-standalone.jar [файл с адресами чего качать] [директория куда всё это качать]
 
 ## Сборка из исходников.
 
@@ -52,7 +52,6 @@
 И собираете лейку:
 
     # ./lein clean
-    # ./lein compile
     # ./lein uberjar
 
 ## Напоследок.
@@ -61,9 +60,20 @@
 в надежде на то, что она будет вам полезной, однако я НЕ ПРЕДОСТАВЛЯЮ 
 НА НЕЕ НИКАКИХ ГАРАНТИЙ.
 
-Автор (c) 2009 Роман Захаров
+Автор (c) 2009 Роман Захаров <zahardzhan@gmail.com>
 
-Лицензия та же самая, что и у языка *Clojure*.
+Под лицензией GPL.
 
+;; Copyright (C) 2009 Roman Zaharov <zahardzhan@gmail.com>
 
+;; This program is free software: you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation, either version 3 of the License, or
+;; (at your option) any later version.
 
+;; This program is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+;; GNU General Public License for more details.
+;; You should have received a copy of the GNU General Public License
+;; along with this program. If not, see http://www.gnu.org/licenses/
