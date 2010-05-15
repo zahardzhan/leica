@@ -19,37 +19,29 @@
 
 (in-ns 'console-progress)
 
+(def spaces (memoize (fn [spcs] (str \return (apply str (repeat spcs \space)) \return))))
+
 (def *console-width* 80)
 
-(defn make-console-progress-agent []
-  (make-agent :type ::console-progress-agent
-              :environment nil
-              :agents #{}))
+(def *spaces* (spaces *console-width*))
 
-(def *console-progress-agent* (make-console-progress-agent))
+(def *console-progress* {:agents (atom #{})})
 
-(defmulti show-console-progress   dispatch-by-type)
-(defmulti hide-console-progress   dispatch-by-type)
-(defmulti update-console-progress dispatch-by-type)
+(defmulti  console-progress dispatch-by-type)
+(defmethod console-progress nil [_ & __] nil)
 
-(defmulti console-progress dispatch-by-type)
+(defn show-console-progress [a]
+  (swap! (*console-progress* :agents) union #{a}))
 
-(defmethod show-console-progress   nil [_ & __] nil)
-(defmethod hide-console-progress   nil [_ & __] nil)
-(defmethod update-console-progress nil [_ & __] nil)
-(defmethod console-progress        nil [_ & __] nil)
+(defn hide-console-progress [a]
+  (.print System/out *spaces*)
+  (swap! (*console-progress* :agents) difference #{a}))
 
-(defmethod  show-console-progress ::console-progress-agent [console-progress-agent a]
-  (assoc console-progress-agent :agents
-         (union (:agents console-progress-agent) #{a})))
+(defn hide-all-console-progress []
+  (doseq [a (derefed (:agents *console-progress*))]
+    (hide-console-progress a)))
 
-(defmethod hide-console-progress ::console-progress-agent [console-progress-agent a]
-  (.print System/out (str "\r" (apply str (repeat *console-width* \space)) "\r")) 
-  (assoc console-progress-agent :agents
-         (difference (:agents console-progress-agent) #{a})))
-
-(defmethod update-console-progress ::console-progress-agent [console-progress-agent]
-  (with-return console-progress-agent
-    (.print System/out "\r")
-    (doseq [a (deref-seq (:agents console-progress-agent))]
-      (.print System/out (console-progress a)))))
+(defn update-console-progress []
+  (.print System/out "\r")
+  (doseq [a (derefed (:agents *console-progress*))]
+    (.print System/out (derefed a console-progress))))

@@ -77,7 +77,7 @@ e")
           (doseq [line lines]
             (make-download-agent line
                                  :working-path working-path
-                                 :done-path (when (not= working-path done-path) done-path)
+                                 :done-path done-path
                                  :strategy reflex-with-transfer-of-control
                                  :environment download-environment))
           (turn-on-cli-for-all-download-environments)

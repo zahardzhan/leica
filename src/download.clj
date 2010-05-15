@@ -179,7 +179,7 @@
                   :strategy (or strategy reflex)
                   :address (URI. address)
                   :working-path working-path
-                  :done-path done-path
+                  :done-path (when (not= working-path done-path) done-path)
                   :host nil
                   :link nil
                   :file nil
@@ -399,7 +399,7 @@
     (try (let [status (.executeMethod client get)]
            (if (= status HttpStatus/SC_OK)
              (let [page (duck/slurp* (.getResponseBodyAsStream get))
-                   link (URI. (re-find #"http://files[-\d\w\.]*data.cod.ru/[^\"]+" page) true)
+                   link (re-find #"http://files[-\d\w\.]*data.cod.ru/[^\"]+" page)
                    name (second (re-find #"<b title=\".*\">(.*)</b>" page))
                    space (let [[_ space unit]
                                (re-find #"Вам доступно ([\d\.]+) (\p{javaUpperCase}{2})" page)]
@@ -407,7 +407,7 @@
                              (int (* (Float/parseFloat space)
                                      ({"ГБ" 1073741824, "МБ" 1048576, "КБ" 1024} unit)))))]
                (if (and name link)
-                 (idle (assoc ag :name name :link link))
+                 (idle (assoc ag :name name :link (URI. link true)))
                  (do (log/info (str "Невозможно получить имя файла и ссылку с адреса " address))
                      (die ag))))
              (die ag)))
@@ -539,22 +539,20 @@
 
 (defn turn-on-cli-for-all-download-environments []
   (add-hook download-agent-before-download-hook :cli
-            (fn [a]
-              (when (and *console-progress-agent* *agent*)
-                (send *console-progress-agent* show-console-progress *agent*))))
+            (fn [a] (when (and *console-progress* *agent*)
+                      (show-console-progress *agent*))))
   (add-hook download-agent-after-download-hook :cli
-            (fn [a]
-              (when (and *console-progress-agent* *agent*)
-                (send *console-progress-agent* hide-console-progress *agent*))))
+            (fn [a] (when (and *console-progress* *agent*)
+                      (hide-console-progress *agent*))))
   (add-hook download-agent-change-size-hook :cli
-            (fn [a]
-              (when (and *console-progress-agent* *agent*)
-                (send *console-progress-agent* update-console-progress)))))
+            (fn [a] (when (and *console-progress* *agent*)
+                      (update-console-progress)))))
 
 (defn turn-off-cli-for-all-download-environments []
   (remove-hook download-agent-before-download-hook :cli)
   (remove-hook download-agent-after-download-hook :cli)
-  (remove-hook download-agent-change-size-hook :cli))
+  (remove-hook download-agent-change-size-hook :cli)
+  (hide-all-console-progress))
 
 (comment
   (def da1 (make-download-agent "http://dsv.data.cod.ru/778222"
@@ -571,6 +569,10 @@
                                 :environment de))
   
   (def de (make-download-env))
+  (def da5 (make-download-agent "http://dsv-region.data.cod.ru/29534"
+                                :working-path (File. "/home/haru/Inbox/")
+                                :strategy reflex
+                                :environment de))
   (def da4 (make-download-agent "http://dsv.data.cod.ru/772992"
                                 :working-path (File. "/home/haru/Inbox/")
                                 :strategy reflex
@@ -584,6 +586,7 @@
   da4
   (send-off da4 run)
   (send-off da1 run)
+  (send-off da5 run) (run @da5)
 
   (-> @*console-progress-agent* :agents)
   (run (run (run (run (run (run @da4))))))
