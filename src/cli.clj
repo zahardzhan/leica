@@ -14,10 +14,10 @@
 ;; You should have received a copy of the GNU General Public License
 ;; along with this program. If not, see http://www.gnu.org/licenses/
 
-(ns console-progress
+(ns cli
   (:use agent aux clojure.set))
 
-(in-ns 'console-progress)
+(in-ns 'cli)
 
 (def spaces (memoize (fn [spcs] (str \return (apply str (repeat spcs \space)) \return))))
 

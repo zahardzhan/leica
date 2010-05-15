@@ -17,7 +17,7 @@
 (ns #^{:author "Roman Zaharov"}
   leica
   (:gen-class)
-  (:use :reload aux agent download hook console-progress clojure.contrib.command-line)
+  (:use :reload aux agent download hook cli clojure.contrib.command-line)
   (:require verified
             [clojure.contrib.duck-streams :as duck]
             [clojure.contrib.logging :as log])

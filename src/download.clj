@@ -15,7 +15,7 @@
 ;; along with this program. If not, see http://www.gnu.org/licenses/
 
 (ns download
-  (:use :reload aux agent hook console-progress)
+  (:use :reload aux agent hook cli)
   (:require [clojure.contrib.logging :as log]
             [clojure.contrib.duck-streams :as duck]
 
