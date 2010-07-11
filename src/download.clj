@@ -2,20 +2,12 @@
 
 ;; Copyright (C) 2010 Roman Zaharov <zahardzhan@gmail.com>
 
-;; This program is free software: you can redistribute it and/or modify
-;; it under the terms of the GNU General Public License as published by
-;; the Free Software Foundation, either version 3 of the License, or
-;; (at your option) any later version.
-
 ;; This program is distributed in the hope that it will be useful,
 ;; but WITHOUT ANY WARRANTY; without even the implied warranty of
-;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-;; GNU General Public License for more details.
-;; You should have received a copy of the GNU General Public License
-;; along with this program. If not, see http://www.gnu.org/licenses/
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 
 (ns download
-  (:use :reload aux agent hook cli)
+  (:use :reload aux agent)
   (:require [clojure.contrib.logging :as log]
             [clojure.contrib.duck-streams :as duck]
 
@@ -40,8 +32,6 @@
            (org.apache.commons.httpclient.params HttpMethodParams)
 
            (org.apache.commons.httpclient.util EncodingUtil)))
-
-(in-ns 'download)
 
 (def *services* (ref {}))
 
@@ -76,35 +66,133 @@
 (defservice ::dsvload.net.ftpupload
   :address #"http://dsvload.net/ftpupload/.+")
 
-(defn- dispatch-by-service
-  ([] nil)
-  ([ag] (:service ag))
-  ([ag & opts] (:service ag)))
+(defprotocol Download-Environment-Protocol)
 
-(defmulti status            dispatch-by-service)
-(defmulti status!           dispatch-by-service)
-(defmulti status?           dispatch-by-service)
+(defrecord Download-Environment [agents-ref]
+  Environment-Protocol
+  (done? [e] (every? dead? (agents e)))
+  (terminate [e] e))
 
-(defmulti size              dispatch-by-service)
+(defn make-download-env [& {:keys [agents]}]
+  {:pre [(when-supplied agents (seq? (sequence agents)))]}
+  (new Download-Environment (ref (set agents))))
 
-(defmulti dead?             dispatch-by-service)
-(defmulti alive?            dispatch-by-service)
-(defmulti run?              dispatch-by-service)
-(defmulti does-nothing?     dispatch-by-service)
-(defmulti ok?               dispatch-by-service)
-(defmulti idle?             dispatch-by-service)
-(defmulti fail?             dispatch-by-service)
+(defprotocol Download-Agent-Protocol
+  (status  [a])
+  (status! [a new-status])
+  (status? [a in-status])
+  (size    [a])
+  (dead?   [a])
+  (alive?  [a])
+  (run?    [a])
+  (does-nothing? [a])
+  (ok?     [a])
+  (idle?   [a])
+  (fail?   [a])
+  (pass    [a])
+  (idle    [a])
+  (fail    [a])
+  (die     [a])
+  (sleep   [a millis])
+  (out-of-space-on-work-path? [a])
+  (out-of-space-on-done-path? [a])
+  (fully-loaded?              [a])
+  (already-on-done-path?      [a]))
 
-(defmulti out-of-space-on-work-path? dispatch-by-service)
-(defmulti out-of-space-on-done-path? dispatch-by-service)
-(defmulti fully-loaded?              dispatch-by-service)
-(defmulti already-on-done-path?      dispatch-by-service)
+(defrecord Download-Agent [env-ref precedence status-atom
+                           service strategy address size-atom
+                           working-path done-path
+                           host link file length]
+  Agent-Protocol
+  (get-action  [a] (strategy a))
+  (execute     [a action] (if (dead? a) a
+                              (try (status! a :running)
+                                   (try (let [a- (action a)]
+                                          (cond (run? a-) (status! a- :idle)
+                                                :else a-))
+                                        (catch Exception _ (status! a :fail)))
+                                   (catch AssertionError _ a))))
+  (run         [a] (execute a (get-action a)))
+  (performance [a])
 
-(defmulti pass              dispatch-by-service)
-(defmulti idle              dispatch-by-service)
-(defmulti fail              dispatch-by-service)
-(defmulti die               dispatch-by-service)
-(defmulti sleep             dispatch-by-service)
+  Download-Agent-Protocol
+  ;; (status  [a] (deref status-atom))
+  ;; (status! [a new-status]
+  ;;          (when-not (({:idle    #{:running}
+  ;;                       :fail    #{:running}
+  ;;                       :dead    #{}
+  ;;                       :running #{:stoping :idle :fail :dead}
+  ;;                       :stoping #{:idle :fail :dead}}
+  ;;                      (status a)) new-status)
+  ;;            (throw (new AssertionError
+  ;;                        "Download agent cannot change state.")))
+  ;;          (with-return a (reset! status-atom new-status)))
+  ;; (status? [a in-status]
+  ;;          (case (type in-status)
+  ;;                clojure.lang.Keyword (= in-status (status a))
+  ;;                clojure.lang.PersistentHashSet (keyword? (in-status (status a)))))
+  (size    [a] (deref size-atom))
+  ;; (dead?   [a] (status? a :dead))
+  ;; (alive?  [a] (not (dead? a)))
+  ;; (run?    [a] (status? a #{:running :stoping}))
+  ;; (does-nothing? [a] (status? a #{:idle :fail}))
+  ;; (ok?     [a] (status? a #{:idle :running :stoping}))
+  ;; (idle?   [a] (status? a :idle))
+  ;; (fail?   [a] (status? a :fail))
+  ;; (pass    [a] a)
+  ;; (idle    [a] (status! a :idle))
+  ;; (fail    [a] (status! a :fail))
+  ;; (die     [a] (status! a :dead))
+  ;; (sleep   [a millis] (with-return a (Thread/sleep millis)))
+  ;; (out-of-space-on-work-path? [a] (when (and working-path length file)
+  ;;                                   (< (.getUsableSpace working-path)
+  ;;                                      (- length (file-length file)))))
+  ;; (out-of-space-on-done-path? [a] (when (and done-path length)
+  ;;                                   (< (.getUsableSpace done-path) length)))
+  ;; (fully-loaded?              [a] (when (and length file)
+  ;;                                   (<= length (file-length file))))
+  ;; (already-on-done-path?      [a] (when (and done-path file)
+  ;;                                   (.exists (File. done-path (.getName file)))))
+  )
+
+(def *precedence* (atom 0))
+
+(defn make-download-agent
+  [address-line & {:as opts
+                   :keys [strategy precedence environment
+                          working-path done-path link file]}]
+
+  {:pre  [(when-supplied strategy     (invocable? strategy)
+                         precedence   (number? precedence)
+                         working-path (verified/output-dir working-path)
+                         done-path    (verified/output-dir done-path)
+                         file         (file? file)
+                         environment  (instance? download.Download-Environment environment))]}
+
+  (let [{:keys [service address]}
+        (when address-line (match-service address-line))]
+
+    (when (and service address)
+      (let-return [a (agent (new Download-Agent
+                                 (delay (ref environment)) ;; env-ref
+                                 (or precedence (swap! *precedence* inc)) ;; precedence
+                                 (atom :idle) ;; status-atom
+                                 service
+                                 strategy
+                                 address
+                                 (atom nil)
+                                 working-path
+                                 (when (not= working-path done-path) done-path)
+                                 nil ;; host
+                                 nil ;; link
+                                 nil ;; file
+                                 nil ;; length
+                                 ))]
+                  (when environment (bind a environment))))))
+
+(defn- dispatch-by-service [a & opts]
+  (:service a))
+
 (defmulti parse-page        dispatch-by-service)
 (defmulti get-host          dispatch-by-service)
 (defmulti get-file          dispatch-by-service)
@@ -115,193 +203,24 @@
 (defmulti reflex            dispatch-by-service)
 (defmulti reflex-with-transfer-of-control dispatch-by-service)
 
-(derive ::download-environment :agent/environment)
-(derive ::download-agent       :agent/agent)
-
-(def download-environment-termination-hook (make-hook))
-
-(defn make-download-env [& {:as opts :keys [type agents]}]
-  (make-env :type ::download-environment
-            :agents agents
-            :hook (delay {:download-environment-termination-hook
-                          {:global download-environment-termination-hook
-                           :local (make-hook)}})))
-
-(defn download-env? [e]
-  (and (env? e) (isa? (type e) ::download-environment)))
-
-(defmethod add-hook ::download-environment [e local-hook key function]
-  (add-hook (-> e :hook force local-hook :local) key function))
-
-(defmethod run-hook ::download-environment [e hook]
-  (run-hook (-> e :hook force hook :global) e)
-  (run-hook (-> e :hook force hook :local) e))
-
-(declare download-agent?)
-
-(defmethod done? ::download-environment [e]
-  (every? dead? (deref-seq (select-items :from (agents e) :where download-agent?))))
-
-(defmethod terminate ::download-environment [e]
-  (with-return e (run-hook e :download-environment-termination-hook)))
-
 (def buffer-size          4096)
 (def timeout-after-fail   3000)
 (def connection-timeout   30000)
 (def head-request-timeout 30000)
 (def get-request-timeout  30000)
 
-(def download-agent-before-download-hook (make-hook))
-(def download-agent-after-download-hook  (make-hook))
-(def download-agent-change-size-hook     (make-hook))
+;; (defmethod console-progress ::download-agent
+;;   [{:as a :keys [name length]}]
+;;   (let [size       (size a)
+;;         percent    #(int (if (and (pos? length) (pos? size))
+;;                            (* 100 (/ size length))
+;;                            0))
+;;         first-part #(apply str (take 5 name))
+;;         last-part  #(apply str (take-last 7 name))]
+;;     (cond (and name length size)
+;;           (str \[ (first-part) ".." (last-part) \space (percent) \% \])
 
-(def *precedence* (atom 0))
-
-(defn make-download-agent
-  [address-line & {:as opts
-                   :keys [strategy working-path done-path link file
-                          environment meta validator error-handler error-mode]}]
-
-  {:pre  [(when-supplied strategy     (invocable? strategy)
-                         working-path (verified/output-dir working-path)
-                         done-path    (verified/output-dir done-path)
-                         file         (file? file)
-                         environment  (download-env? environment))]}
-
-  (let [{:keys [service address]}
-        (when address-line (match-service address-line))]
-
-    (when (and service address)
-      (make-agent :type ::download-agent
-                  :precedence (swap! *precedence* inc)
-                  :status (atom :idle)
-                  :service service
-                  :strategy (or strategy reflex)
-                  :address (URI. address)
-                  :working-path working-path
-                  :done-path (when (not= working-path done-path) done-path)
-                  :host nil
-                  :link nil
-                  :file nil
-                  :length nil
-                  :size (atom nil)
-                  :environment environment
-                  :meta meta
-                  :validator validator
-                  :error-handler error-handler
-                  :error-mode error-mode
-                  :hook (delay {:download-agent-before-download-hook
-                                {:global download-agent-before-download-hook
-                                 :local (make-hook)}
-                                :download-agent-after-download-hook
-                                {:global download-agent-after-download-hook
-                                 :local (make-hook)}
-                                :download-agent-change-size-hook
-                                {:global download-agent-change-size-hook
-                                 :local (make-hook)}})))))
-
-(defn download-agent-body? [a]
-  (and (env-agent-body? a) (isa? (type a) ::download-agent)))
-
-(defn download-agent? [a]
-  (and (env-agent? a) (derefed a download-agent-body?)))
-
-(defmethod add-hook ::download-agent [a local-hook key function]
-  (add-hook (-> a :hook force local-hook :local) key function))
-
-(defmethod run-hook ::download-agent [a hook]
-  (run-hook (-> a :hook force hook :global) a)
-  (run-hook (-> a :hook force hook :local) a))
-
-(defmethod status :default [ag]
-  (deref (:status ag)))
-
-(defmethod status! :default [ag new-status]
-  {:pre [(({:idle    #{:running}
-            :fail    #{:running}
-            :dead    #{}
-            :running #{:stoping :idle :fail :dead}
-            :stoping #{:idle :fail :dead}}
-           (status ag)) new-status)]}
-  (with-return ag
-    (reset! (:status ag) new-status)))
-
-(defmethod status? :default [ag current-status]
-   (cond (keyword? current-status) (= (status ag) current-status)
-         (set? current-status) (keyword? (current-status (status ag)))))
-
-(defmethod size :default [ag]
-  (deref (:size ag)))
-
-(defmethod dead? :default [ag]
-  (status? ag :dead))
-
-(defmethod alive? :default [ag]
-  (not (dead? ag)))
-
-(defmethod run? :default [ag]
-  (status? ag #{:running :stoping}))
-
-(defmethod does-nothing? :default [ag]
-  (status? ag #{:idle :fail}))
-  
-(defmethod ok? :default [ag]
-  (status? ag #{:idle :running :stoping}))
-  
-(defmethod idle? :default [ag]
-  (status? ag :idle))
-  
-(defmethod fail? :default [ag]
-  (status? ag :fail))
-
-(defmethod out-of-space-on-work-path? :default
-  [{:as ag :keys [working-path length file]}]
-  (when (and working-path length file)
-    (< (.getUsableSpace working-path)
-       (- length (file-length file)))))
-
-(defmethod out-of-space-on-done-path? :default
-  [{:as ag :keys [done-path length]}]
-  (when (and done-path length)
-    (< (.getUsableSpace done-path) length)))
-
-(defmethod fully-loaded? :default
-  [{:as ag :keys [length file]}]
-  (when (and length file)
-    (<= length (file-length file))))
-
-(defmethod already-on-done-path? :default
-  [{:as ag :keys [done-path file]}]
-  (when (and done-path file)
-    (.exists (File. done-path (.getName file)))))
-
-(defmethod get-action ::download-agent [ag & opts]
-  ((ag :strategy) ag opts))
-
-(defmethod execute ::download-agent [ag action]
-  (if (dead? ag) ag
-      (try (status! ag :running)
-           (try (let [ag- (action ag)]
-                  (cond (run? ag-) (status! ag- :idle)
-                        :else ag-))
-                (catch Exception _ (status! ag :fail)))
-           (catch AssertionError _ ag))))
-
-(defmethod run ::download-agent [ag & opts]
-  (execute ag (get-action ag opts)))
-
-(defmethod console-progress ::download-agent
-  [{:as a :keys [name length]}]
-  (let [size       (size a)
-        percent    #(int (if (and (pos? length) (pos? size))
-                           (* 100 (/ size length))
-                           0))
-        first-part #(apply str (take 5 name))
-        last-part  #(apply str (take-last 7 name))]
-    (cond (and name length size)
-          (str \[ (first-part) ".." (last-part) \space (percent) \% \])
-
-          :else nil)))
+;;           :else nil)))
 
 (defmethod reflex :default
   [{:as ag :keys [address link host name file length done-path]} & opts]
@@ -323,24 +242,24 @@
 (defn alive-download-agents-without-host-after [a]
   (select-items :from (agents (env a)) :entirely-after a
                 :order-by #(derefed % :precedence)
-                :where #(and (download-agent? %)
+                :where #(and (agent? %)
                              (derefed % alive?)
                              (derefed % :host not))))
 
 (defn idle-download-agents-with-same-host-as [a]
   (select-items :from (agents (env a)) :order-by #(derefed % :precedence) 
-                :where #(and (download-agent? %) (derefed % idle?)
+                :where #(and (agent? %) (derefed % idle?)
                              (same :host (deref a) (deref %)))))
 
 (defn alive-download-agents-with-same-host-after [a]
   (select-items :from (agents (env a)) :entirely-after a
                 :order-by #(derefed % :precedence)
-                :where #(and (download-agent? %) (derefed % alive?)
+                :where #(and (agent? %) (derefed % alive?)
                              (same :host (deref a) (deref %)))))
 
 (defn download-agents-running-on-same-host-as [a]
   (select-items :from (surrounding a) :order-by #(derefed % :precedence)
-                :where #(and (download-agent? %) (derefed % run?)
+                :where #(and (agent? %) (derefed % run?)
                              (same :host (deref a) (deref %)))))
 
 (defmethod reflex-with-transfer-of-control :default [a & opts]
@@ -366,22 +285,6 @@
                                     (fail? a-) (do (send-off *agent* sleep timeout-after-fail)
                                                    (done))
                                     :else (send-off *agent* run)))))))
-
-(defmethod pass :default [ag]
-  ag)
-
-(defmethod idle :default [ag]
-  (status! ag :idle))
-
-(defmethod fail :default [ag]
-  (status! ag :fail))
-
-(defmethod die  :default [ag]
-  (status! ag :dead))
-
-(defmethod sleep :default [ag millis]
-  (with-return ag
-    (Thread/sleep millis)))
 
 (defmethod parse-page :default
   [{:as ag :keys [address]}]
@@ -488,7 +391,6 @@
         #^GetMethod get (GetMethod. (str link))]
     (when (and link file)
       (try
-       (run-hook ag :download-agent-before-download-hook)
        (.. client getHttpConnectionManager getParams 
            (setConnectionTimeout connection-timeout))
        (.. get getParams (setSoTimeout get-request-timeout))
@@ -514,7 +416,6 @@
                          (let [new-size (+ file-size read-size)]
                            (.write output buffer 0 read-size)
                            (reset! size new-size)
-                           (run-hook ag :download-agent-change-size-hook)
                            (recur new-size)))))
                    (.flush output))
                  (log/info (str "Закончена загрузка " name))
@@ -534,60 +435,17 @@
        (catch Exception e 
          (do (log/info (str "Ошибка во время загрузки " name))
              (fail ag)))
-       (finally (do (.releaseConnection get)
-                    (run-hook ag :download-agent-after-download-hook)))))))
-
-(defn turn-on-cli-for-all-download-environments []
-  (add-hook download-agent-before-download-hook :cli
-            (fn [a] (when (and *console-progress* *agent*)
-                      (show-console-progress *agent*))))
-  (add-hook download-agent-after-download-hook :cli
-            (fn [a] (when (and *console-progress* *agent*)
-                      (hide-console-progress *agent*))))
-  (add-hook download-agent-change-size-hook :cli
-            (fn [a] (when (and *console-progress* *agent*)
-                      (update-console-progress)))))
-
-(defn turn-off-cli-for-all-download-environments []
-  (remove-hook download-agent-before-download-hook :cli)
-  (remove-hook download-agent-after-download-hook :cli)
-  (remove-hook download-agent-change-size-hook :cli)
-  (hide-all-console-progress))
+       (finally (do (.releaseConnection get)))))))
 
 (comment
+  (def de (make-download-env))
   (def da1 (make-download-agent "http://dsv.data.cod.ru/778222"
                                 :working-path (File. "/home/haru/Inbox/")
                                 :strategy reflex-with-transfer-of-control
                                 :environment de))
-  (def da2 (make-download-agent "http://dsv.data.cod.ru/778145"
-                                :working-path (File. "/home/haru/Inbox/")
-                                :strategy reflex-with-transfer-of-control
-                                :environment de))
-  (def da3 (make-download-agent "http://dsv.data.cod.ru/775759"
-                                :working-path (File. "/home/haru/Inbox/")
-                                :strategy reflex-with-transfer-of-control
-                                :environment de))
-  
-  (def de (make-download-env))
-  (def da5 (make-download-agent "http://dsv-region.data.cod.ru/29534"
-                                :working-path (File. "/home/haru/Inbox/")
-                                :strategy reflex
-                                :environment de))
-  (def da4 (make-download-agent "http://dsv.data.cod.ru/772992"
-                                :working-path (File. "/home/haru/Inbox/")
-                                :strategy reflex
-                                :environment de))
-
-  (turn-on-cli-for-all-download-environments)
-  (turn-off-cli-for-all-download-environments)
-  download-agent-change-size-hook
-  (run-hook @da4 :download-agent-before-download-hook)
   de
-  da4
-  (send-off da4 run)
+  da1
   (send-off da1 run)
-  (send-off da5 run) (run @da5)
-
-  (-> @*console-progress-agent* :agents)
+  (run @da5)
   (run (run (run (run (run (run @da4))))))
   )
