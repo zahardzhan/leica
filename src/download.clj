@@ -68,20 +68,11 @@
 
 (defprotocol Download-Environment-Protocol)
 
-(defrecord Download-Environment [agents-ref]
-  Environment-Protocol
-  (done? [e] (every? dead? (agents e)))
-  (terminate [e] e))
-
-(defn make-download-env [& {:keys [agents]}]
-  {:pre [(when-supplied agents (seq? (sequence agents)))]}
-  (new Download-Environment (ref (set agents))))
-
 (defprotocol Download-Agent-Protocol
   (status  [a])
   (status! [a new-status])
   (status? [a in-status])
-  (size    [a])
+  (filesize [a])
   (dead?   [a])
   (alive?  [a])
   (run?    [a])
@@ -99,8 +90,13 @@
   (fully-loaded?              [a])
   (already-on-done-path?      [a]))
 
+(defrecord Download-Environment [agents-ref]
+  Environment-Protocol
+  (done? [e] (every? dead? (agents e)))
+  (terminate [e] e))
+
 (defrecord Download-Agent [env-ref precedence status-atom
-                           service strategy address size-atom
+                           service strategy address filesize-atom
                            working-path done-path
                            host link file length]
   Agent-Protocol
@@ -113,47 +109,48 @@
                                         (catch Exception _ (status! a :fail)))
                                    (catch AssertionError _ a))))
   (run         [a] (execute a (get-action a)))
-  (performance [a])
 
   Download-Agent-Protocol
-  ;; (status  [a] (deref status-atom))
-  ;; (status! [a new-status]
-  ;;          (when-not (({:idle    #{:running}
-  ;;                       :fail    #{:running}
-  ;;                       :dead    #{}
-  ;;                       :running #{:stoping :idle :fail :dead}
-  ;;                       :stoping #{:idle :fail :dead}}
-  ;;                      (status a)) new-status)
-  ;;            (throw (new AssertionError
-  ;;                        "Download agent cannot change state.")))
-  ;;          (with-return a (reset! status-atom new-status)))
-  ;; (status? [a in-status]
-  ;;          (case (type in-status)
-  ;;                clojure.lang.Keyword (= in-status (status a))
-  ;;                clojure.lang.PersistentHashSet (keyword? (in-status (status a)))))
-  (size    [a] (deref size-atom))
-  ;; (dead?   [a] (status? a :dead))
-  ;; (alive?  [a] (not (dead? a)))
-  ;; (run?    [a] (status? a #{:running :stoping}))
-  ;; (does-nothing? [a] (status? a #{:idle :fail}))
-  ;; (ok?     [a] (status? a #{:idle :running :stoping}))
-  ;; (idle?   [a] (status? a :idle))
-  ;; (fail?   [a] (status? a :fail))
-  ;; (pass    [a] a)
-  ;; (idle    [a] (status! a :idle))
-  ;; (fail    [a] (status! a :fail))
-  ;; (die     [a] (status! a :dead))
-  ;; (sleep   [a millis] (with-return a (Thread/sleep millis)))
-  ;; (out-of-space-on-work-path? [a] (when (and working-path length file)
-  ;;                                   (< (.getUsableSpace working-path)
-  ;;                                      (- length (file-length file)))))
-  ;; (out-of-space-on-done-path? [a] (when (and done-path length)
-  ;;                                   (< (.getUsableSpace done-path) length)))
-  ;; (fully-loaded?              [a] (when (and length file)
-  ;;                                   (<= length (file-length file))))
-  ;; (already-on-done-path?      [a] (when (and done-path file)
-  ;;                                   (.exists (File. done-path (.getName file)))))
-  )
+  (status  [a] (deref status-atom))
+  (status! [a new-status]
+           (when-not (({:idle    #{:running}
+                        :fail    #{:running}
+                        :dead    #{}
+                        :running #{:stoping :idle :fail :dead}
+                        :stoping #{:idle :fail :dead}}
+                       (status a)) new-status)
+             (throw (new AssertionError
+                         "Download agent cannot change state.")))
+           (with-return a (reset! status-atom new-status)))
+  (status? [a in-status]
+           (cond (keyword? in-status) (= in-status (status a))
+                 (set? in-status)     (keyword? (in-status (status a)))))
+  (filesize [a] (deref filesize-atom))
+  (dead?   [a] (status? a :dead))
+  (alive?  [a] (not (dead? a)))
+  (run?    [a] (status? a #{:running :stoping}))
+  (does-nothing? [a] (status? a #{:idle :fail}))
+  (ok?     [a] (status? a #{:idle :running :stoping}))
+  (idle?   [a] (status? a :idle))
+  (fail?   [a] (status? a :fail))
+  (pass    [a] a)
+  (idle    [a] (status! a :idle))
+  (fail    [a] (status! a :fail))
+  (die     [a] (status! a :dead))
+  (sleep   [a millis] (with-return a (Thread/sleep millis)))
+  (out-of-space-on-work-path? [a] (when (and working-path length file)
+                                    (< (.getUsableSpace working-path)
+                                       (- length (file-length file)))))
+  (out-of-space-on-done-path? [a] (when (and done-path length)
+                                    (< (.getUsableSpace done-path) length)))
+  (fully-loaded?              [a] (when (and length file)
+                                    (<= length (file-length file))))
+  (already-on-done-path?      [a] (when (and done-path file)
+                                    (.exists (File. done-path (.getName file))))))
+
+(defn make-download-env [& {:keys [agents]}]
+  {:pre [(when-supplied agents (seq? (sequence agents)))]}
+  (new Download-Environment (ref (set agents))))
 
 (def *precedence* (atom 0))
 
@@ -179,7 +176,7 @@
                                  (atom :idle) ;; status-atom
                                  service
                                  strategy
-                                 address
+                                 (URI. address)
                                  (atom nil)
                                  working-path
                                  (when (not= working-path done-path) done-path)
@@ -386,7 +383,7 @@
   (idle (assoc ag :file (join-paths working-path name))))
 
 (defmethod download :default
-  [{:as ag :keys [name host length link size file]}]
+  [{:as ag :keys [name host length link filesize-atom file]}]
   (let [#^HttpClient client (new HttpClient)
         #^GetMethod get (GetMethod. (str link))]
     (when (and link file)
@@ -415,7 +412,7 @@
                        (when (pos? read-size)
                          (let [new-size (+ file-size read-size)]
                            (.write output buffer 0 read-size)
-                           (reset! size new-size)
+                           (reset! filesize-atom new-size)
                            (recur new-size)))))
                    (.flush output))
                  (log/info (str "Закончена загрузка " name))
@@ -438,14 +435,33 @@
        (finally (do (.releaseConnection get)))))))
 
 (comment
-  (def de (make-download-env))
-  (def da1 (make-download-agent "http://dsv.data.cod.ru/778222"
-                                :working-path (File. "/home/haru/Inbox/")
-                                :strategy reflex-with-transfer-of-control
-                                :environment de))
+  (do
+    (def de (make-download-env))
+    (def da1 (make-download-agent "http://dsv-region.data.cod.ru/64742"
+                                  :working-path (File. "/home/haru/Inbox/")
+                                  :strategy reflex-with-transfer-of-control
+                                  :environment de))
+    (def da2 (make-download-agent "biceps_za_8_minut.avi: http://dsv.data.cod.ru/852732"
+                                  :working-path (File. "/home/haru/Inbox/")
+                                  :strategy reflex-with-transfer-of-control
+                                  :environment de))
+    (def da3 (make-download-agent "http://dsv.data.cod.ru/853301"
+                                  :working-path (File. "/home/haru/Inbox/")
+                                  :strategy reflex-with-transfer-of-control
+                                  :environment de))
+    (def da4 (make-download-agent "Форд.rar: http://dsv.data.cod.ru/852050"
+                                  :working-path (File. "/home/haru/Inbox/")
+                                  :strategy reflex-with-transfer-of-control
+                                  :environment de)))
+
   de
   da1
+
+  (execute @da1 (reflex @da1))
   (send-off da1 run)
-  (run @da5)
-  (run (run (run (run (run (run @da4))))))
-  )
+  (send-off da2 run)
+  (map #(derefed % status) (agents de))
+
+  (dead? @da1)
+  (run (run @da1))
+  (run (run (run (run (run (run @da4)))))))
