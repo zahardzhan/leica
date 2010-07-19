@@ -156,13 +156,13 @@
   :address-pattern #"http://files3?.dsv.*.data.cod.ru/.+"
   :max-active-agents 1
   :body #(hash-map :strategy identity :address nil :name nil :file nil
-                   :path nil :total-size nil :file-size (atom nil)))
+                   :path nil :total-size nil :file-size-atom (atom nil)))
 
 (defservice files2.dsv.*.data.cod.ru
   :address-pattern #"http://files2.dsv.*.data.cod.ru/.+"
   :max-active-agents 1
   :body #(hash-map :strategy identity :address nil :name nil :file nil
-                   :path nil :total-size nil :file-size (atom nil)))
+                   :path nil :total-size nil :file-size-atom (atom nil)))
 
 (defn can-write-to-directory? [dir]
   (and (.exists dir) (.isDirectory dir) (.canWrite dir)))
@@ -188,3 +188,63 @@
 (deftest make-download-agent-test
   (is (= "http://files.dsv.data.cod.ru/asdg"
          (:address @(make-download-agent "a http://files.dsv.data.cod.ru/asdg g")))))
+
+(defn state [{:as a state-atom :state-atom}]
+  (deref state-atom))
+
+(defn state! [{:as a state-atom :state-atom} new-state]
+  (when-not (({:idle     #{:running}
+               :failed   #{:running}
+               :dead     #{}
+               :running  #{:stopping :idle :failed :dead}
+               :stopping #{:idle :failed :dead}}
+              (state a)) new-state)
+    (throw (new AssertionError
+                "Download agent cannot change state.")))
+  (with-return a (reset! state-atom new-state)))
+
+(defn state? [a in-state]
+  (cond (keyword? in-state) (= in-state (state a))
+        (set? in-state)     (keyword? (in-state (state a)))))
+
+(defn dead?   [a] (state? a :dead))
+(defn alive?  [a] (not (dead? a)))
+(defn active? [a] (state? a #{:running :stopping}))
+(defn idle?   [a] (state? a :idle))
+(defn fail?   [a] (state? a :failed))
+
+(defn pass    [a] a)
+(defn idle    [a] (state! a :idle))
+(defn fail    [a] (state! a :failed))
+(defn die     [a] (state! a :dead))
+
+(defn sleep   [a millis]
+  (with-return a (Thread/sleep millis)))
+
+(defn get-action [{:as a strategy :strategy}]
+  (strategy a))
+
+(defn execute [a action]
+  (if (dead? a) a
+      (try (state! a :running)
+           (try (let [a1 (action a)]
+                  (cond (active? a1) (state! a1 :idle)
+                        :else a1))
+                (catch Exception _ (state! a :failed)))
+           (catch AssertionError _ a))))
+
+(defn run [a]
+  (execute a (get-action a)))
+
+(defn file-size [{:as a file-size-atom :file-size-atom}]
+  (deref file-size-atom))
+
+(defn out-of-space-on-path? [{:as a :keys [path file total-size]}]
+  (when (and path file total-size)
+    (if (.exists file)
+      (< (.getUsableSpace path) (- total-size (.length file)))
+      (= (.getUsableSpace (File. "/home/haru")) 0))))
+
+(defn fully-loaded? [{:as a :keys [file total-size]}]
+  (when (and file (.exists file) total-size)
+    (<= total-size (.length file))))
