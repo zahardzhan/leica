@@ -243,8 +243,19 @@
   (when (and path file total-size)
     (if (.exists file)
       (< (.getUsableSpace path) (- total-size (.length file)))
-      (= (.getUsableSpace (File. "/home/haru")) 0))))
+      (= (.getUsableSpace path) 0))))
 
 (defn fully-loaded? [{:as a :keys [file total-size]}]
   (when (and file (.exists file) total-size)
     (<= total-size (.length file))))
+
+(comment
+  (defn files?.*.data.cod.ru-reflex-strategy
+    [{:as a :keys [address name file path total-size]}]
+    (cond (not address)              die
+          (not (or link name))       parse-page
+          (not file)                 get-file
+          (not length)               get-length
+          (or (out-of-space-on-path? a)
+              (fully-loaded? a))     die
+          :else                      download)))
