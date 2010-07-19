@@ -53,6 +53,11 @@
                 (do ~(second clauses)))
             (when-supplied ~@(next (next clauses))))))
 
+(defn as-file [x]
+  (let [type (type x)]
+    (cond (= type File) x
+          (= type String) (new File x))))
+
 (defn make-environment []
   {:agents-ref (ref #{})})
 
@@ -157,7 +162,7 @@
   {:pre [(when-supplied strategy     (instance? clojure.lang.IFn strategy)
                         precedence   (number? precedence)
                         environment  (map? environment)
-                        path         (can-write-to-directory? path)
+                        path         (can-write-to-directory? (as-file path))
                         name         (string? name))]}
   (when-let [body (make-download-agent-body line)]
     (make-agent (merge body
@@ -165,7 +170,7 @@
                         :precedence (or precedence (swap! *precedence* inc))}
                        (when environment {:environment environment})
                        (when strategy {:strategy strategy})
-                       (when path {:path path})
+                       (when path {:path (as-file path)})
                        (when name {:name name})))))
 
 (deftest make-download-agent-test
@@ -241,13 +246,14 @@
 (defn files-dsv-*-data-cod-ru-get-head
   [{:as a :keys [address name]}]
   (let [response (HTTP/HEAD address)]
-    (cond (= (@response :status) 200)
-          (let [{:keys [content-length content-disposition]} (@response :headers)
+    (cond (= (derefed response :status :code) 200)
+          (let [content-length (derefed response :headers :content-length)
+                content-disposition (derefed response :headers :content-disposition)
                 filename (second (re-find #"; filename=\"(.*)\"" content-disposition))]
             (if-not (and content-length filename) (die a)
                     (idle (merge a
                                  {:total-size content-length}
-                                 (when (not name) filename)))))
+                                 (when (not name) {:name filename})))))
           :else (fail a))))
 
 (defn files-dsv-*-data-cod-ru-reflex-strategy
