@@ -1,0 +1,190 @@
+;;; -*- mode: clojure; coding: utf-8 -*-
+
+;; Copyright (C) 2010 Roman Zaharov <zahardzhan@gmail.com>
+
+;; This program is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+(ns simplify
+  (:use
+   clojure.set
+   clojure.test
+   clojure.contrib.def)
+  
+  (:require
+   [clojure.contrib.logging :as log]
+   [clojure.contrib.duck-streams :as duck]
+   [async.http.client :as HTTP]
+   fn)
+  
+  (:import
+   (java.io File
+            FileOutputStream
+            InputStream
+            InterruptedIOException)
+   (java.net ConnectException)))
+
+;; Don't print delays
+(defmethod print-method clojure.lang.Delay [x w]
+  ((get-method print-method Object) x w))
+
+(defmacro with-return
+  [expr & body]
+  `(do (do ~@body)
+       ~expr))
+
+(defn derefed
+  ([] nil)
+  ([x] (if (instance? clojure.lang.IDeref x) (deref x) x))
+  ([x f] (f (derefed x)))
+  ([x f & fs] ((apply comp (reverse fs)) (derefed x f))))
+
+(defmacro with-deref 
+  [[ref & refs] & body]
+  (if ref
+    `(let [~ref (derefed ~ref)]
+       (with-deref ~refs ~@body))
+    `(do ~@body)))
+
+(defmacro when-supplied [& clauses]
+  (if (not clauses) true
+      `(and (or (nil? ~(first clauses))
+                (do ~(second clauses)))
+            (when-supplied ~@(next (next clauses))))))
+
+(defn make-environment []
+  {:agents-ref (ref #{})})
+
+(defn agents "The agents belonging to this environment." [e]
+  (when e (deref (:agents-ref e))))
+
+(declare bind unbind)
+
+(defn make-agent [{:as opts :keys [environment]}]
+  (let [a (agent (merge (dissoc opts :environment)
+                        {:env-ref (delay (ref environment))}))]
+    (with-return a
+      (when environment (bind a environment)))))
+
+(defn env "The environment belonging to this agent." [a]
+  (when a (derefed a :env-ref force deref)))
+
+(defn surrounding "The agents belonging to environment this agent belonging to." [a]
+  (when-let [e (env a)] (difference (agents e) #{a})))
+
+(defn binded? "Agent is binded to environment and vice-versa?"
+  ([a]   (boolean (when-let [ags (agents (env a))] (ags a))))
+  ([a e] (and (identical? e (env a)) (binded? a))))
+
+(defn bind [a e]
+  (with-return e
+    (when-not (binded? a e)
+      (when (binded? a) (unbind a))
+      (dosync (alter (:agents-ref e) union #{a})
+              (ref-set (derefed a :env-ref force) e)))))
+
+(defn unbind [a]
+  (with-return a
+    (when (binded? a)
+      (dosync (alter (:agents-ref (env a)) difference #{a})
+              (ref-set (derefed a :env-ref force) nil)))))
+
+(deftest agent-bind-test
+  (let [e1 (make-environment)
+        a1 (make-agent {:environment e1})
+        a2 (make-agent {:environment e1})]
+    (is (and (binded? a1 e1)
+             (binded? a1)
+             (binded? a2 e1)
+             (binded? a2)))
+    (unbind a1)
+    (unbind a2)
+    (is (not (or (binded? a1 e1)
+                 (binded? a1)
+                 (binded? a2 e1)
+                 (binded? a2))))
+    (bind a1 e1)
+    (is (and (binded? a1 e1)
+             (binded? a1)
+             (not (binded? a2 e1))
+             (not (binded? a2))))
+    (bind a2 e1)
+    (is (and (binded? a1 e1)
+             (binded? a1)
+             (binded? a2 e1)
+             (binded? a2)))))
+
+(defvar- services* (atom {}))
+
+(defmacro defservice [service & opts]
+  `(let [service-keyword# (keyword (str *ns*) (str (quote ~service)))]
+     (swap! services* assoc service-keyword#
+            (merge (hash-map ~@opts)
+                   {:service service-keyword#}))))
+
+(defn extract-url [line]
+  (first (re-find #"((https?|ftp|gopher|telnet|file|notes|ms-help):((//)|(\\\\))+[\w\d:#@%/;$()~_?\+-=\\\.&]*)"
+                  line)))
+
+(defn match-service [line]
+  (when-let [url (extract-url line)]
+    (first (for [[service-name {:keys [address-pattern]}] @services*
+                 :let [address (re-find address-pattern url)]
+                 :when address]
+             [service-name address]))))
+
+(defn make-download-agent-body [line]
+  (when-let [[service-name address] (match-service line)]
+    (let [{:as service :keys [body]} (service-name @services*)]
+      (dissoc (merge service
+                     (when body (body))
+                     {:address address})
+              :body))))
+
+(deftest make-download-agent-body-test
+  (is (= "http://files.dsv.data.cod.ru/asdf"
+         (:address (make-download-agent-body
+                    "asdasd http://files.dsv.data.cod.ru/asdf ghjk")))))
+
+(defservice data.cod.ru
+  :address-pattern #"http://[\w\-]*.data.cod.ru/\d+"
+  :strategy identity
+  :body #(hash-map))
+
+(defservice files3?.dsv.*.data.cod.ru
+  :address-pattern #"http://files3?.dsv.*.data.cod.ru/.+"
+  :max-active-agents 1
+  :body #(hash-map :strategy identity :address nil :name nil :file nil
+                   :path nil :total-size nil :file-size (atom nil)))
+
+(defservice files2.dsv.*.data.cod.ru
+  :address-pattern #"http://files2.dsv.*.data.cod.ru/.+"
+  :max-active-agents 1
+  :body #(hash-map :strategy identity :address nil :name nil :file nil
+                   :path nil :total-size nil :file-size (atom nil)))
+
+(defn can-write-to-directory? [dir]
+  (and (.exists dir) (.isDirectory dir) (.canWrite dir)))
+
+(def *precedence* (atom 0))
+
+(defn make-download-agent
+  [line & {:as opts :keys [environment strategy precedence path name]}]
+  {:pre [(when-supplied strategy     (instance? clojure.lang.IFn strategy)
+                        precedence   (number? precedence)
+                        environment  (map? environment)
+                        path         (can-write-to-directory? path)
+                        name         (string? name))]}
+  (when-let [body (make-download-agent-body line)]
+    (make-agent (merge body
+                       {:state-atom (atom :idle)
+                        :precedence (or precedence (swap! *precedence* inc))}
+                       (when environment {:environment environment})
+                       (when strategy {:strategy strategy})
+                       (when path {:path path})
+                       (when name {:name name})))))
+
+(deftest make-download-agent-test
+  (is (= "http://files.dsv.data.cod.ru/asdg"
+         (:address @(make-download-agent "a http://files.dsv.data.cod.ru/asdg g")))))
