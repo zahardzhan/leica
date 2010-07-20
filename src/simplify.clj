@@ -13,6 +13,7 @@
    clojure.contrib.def)
   
   (:require
+   [clojure.contrib.http.agent :as http]
    [clojure.contrib.logging :as log]
    [clojure.contrib.duck-streams :as duck]
    [async.http.client :as HTTP]
@@ -21,9 +22,17 @@
   (:import
    (java.io File
             FileOutputStream
-            InputStream
-            InterruptedIOException)
-   (java.net ConnectException)))
+            InputStream)))
+
+(import 'java.net.ConnectException)
+(import '(org.apache.commons.httpclient URI
+                                        HttpClient
+                                        HttpStatus
+                                        ConnectTimeoutException 
+                                        NoHttpResponseException))
+(import '(org.apache.commons.httpclient.methods GetMethod))
+(import '(org.apache.commons.httpclient.params HttpMethodParams))
+(import '(org.apache.commons.httpclient.util EncodingUtil))
 
 ;; Don't print delays
 (defmethod print-method clojure.lang.Delay [x w]
@@ -227,6 +236,9 @@
 (defn file-size [{:as a file-size-atom :file-size-atom}]
   (deref file-size-atom))
 
+(defn actual-file-length [file]
+  (if (.exists file) (.length file) 0))
+
 (defn out-of-space-on-path? [{:as a :keys [path file total-size]}]
   (when (and path file total-size)
     (if (.exists file)
@@ -241,13 +253,54 @@
   (when (and name path)
     (idle (assoc a :file (new File path name)))))
 
-(defn download [{:as a :keys []}])
+(defvar- connection-timeout*  15000)
+(defvar- get-request-timeout* 30000)
+(defvar- buffer-size*         65536)
+
+(defn download [{:as a :keys [name address file total-size file-size-atom]}]
+  (let [client (new HttpClient)
+        get    (new GetMethod address)]
+    (when (and address file)
+      (try
+        (.. client getHttpConnectionManager getParams 
+            (setConnectionTimeout connection-timeout*))
+        (.. get getParams (setSoTimeout get-request-timeout*))
+        (.setRequestHeader get "Range" (str "bytes=" (actual-file-length file) \-))
+        (.executeMethod client get)
+        (let [content-length (.getResponseContentLength get)]
+          (cond (not content-length)
+                (do (log/info (str "Невозможно проверить файл перед загрузкой " name))
+                    (fail a))
+
+                (not= content-length (- total-size (actual-file-length file)))
+                (do (log/info (str "Размер получаемого файла не совпадает с ожидаемым " name))
+                    (fail a))
+
+                :else
+                (with-open [#^InputStream input (.getResponseBodyAsStream get)
+                            #^FileOutputStream output (FileOutputStream. file true)]
+                  (log/info (str "Начата загрузка " name))
+                  (let [buffer (make-array Byte/TYPE buffer-size*)]
+                    (loop [file-size (actual-file-size file)]
+                      (let [read-size (.read input buffer)]
+                        (when (pos? read-size)
+                          (let [new-size (+ file-size read-size)]
+                            (.write output buffer 0 read-size)
+                            (reset! file-size-atom new-size)
+                            (recur new-size)))))
+                    (.flush output))
+                  (log/info (str "Закончена загрузка " name))
+                  (idle a))))
+        (catch Exception e 
+          (do (log/info (str "Ошибка во время загрузки " name))
+              (fail a)))
+        (finally (do (.releaseConnection get)))))))
 
 (defn files-dsv-*-data-cod-ru-get-head
   [{:as a :keys [address name]}]
   (let [response (HTTP/HEAD address)]
     (cond (= (derefed response :status :code) 200)
-          (let [content-length (derefed response :headers :content-length)
+          (let [content-length (new Integer (derefed response :headers :content-length))
                 content-disposition (derefed response :headers :content-disposition)
                 filename (second (re-find #"; filename=\"(.*)\"" content-disposition))]
             (if-not (and content-length filename) (die a)
@@ -264,11 +317,27 @@
         (or (out-of-space-on-path? a) (fully-loaded? a)) die
         :else                         download))
 
-(defn data-cod-ru-parse-page [{:as a :keys [address]}])
+(defn data-cod-ru-parse-page [{:as a :keys [address]}]
+  (let [client (new HttpClient)
+        get (new GetMethod address)]
+    (.. client getHttpConnectionManager getParams 
+        (setConnectionTimeout connection-timeout*))
+    (.. get getParams (setSoTimeout get-request-timeout*))
+    (try (let [status (.executeMethod client get)]
+           (if (= status HttpStatus/SC_OK)
+             (let [link (re-find #"http://files[-\d\w\.]*data.cod.ru/[^\"]+"
+                                 (duck/slurp* (.getResponseBodyAsStream get)))]
+               (if link (idle (assoc a :link link))
+                   (die a)))
+             (fail a)))
+         (catch Exception e (fail a))
+         (finally (.releaseConnection get)))))
 
-(defn data-cod-ru-make-child-agent [{:as a :keys [link]}]
-  (when (and link (env a))
-    (let [child (make-download-agent link :environment (env a))]
+(defn data-cod-ru-make-child-agent [{:as a :keys [link path precedence]}]
+  (when (and link path (env a))
+    (let [child (make-download-agent link :environment (env a)
+                                     :precedence precedence
+                                     :path path)]
       (if-not child (die a)
               (do (send-off child run)
                   (idle (assoc a :child child)))))))
