@@ -147,23 +147,6 @@
          (:address (make-download-agent-body
                     "asdasd http://files.dsv.data.cod.ru/asdf ghjk")))))
 
-(defservice data.cod.ru
-  :address-pattern #"http://[\w\-]*.data.cod.ru/\d+"
-  :strategy identity
-  :body #(hash-map))
-
-(defservice files3?.dsv.*.data.cod.ru
-  :address-pattern #"http://files3?.dsv.*.data.cod.ru/.+"
-  :max-active-agents 1
-  :body #(hash-map :strategy identity :address nil :name nil :file nil
-                   :path nil :total-size nil :file-size-atom (atom nil)))
-
-(defservice files2.dsv.*.data.cod.ru
-  :address-pattern #"http://files2.dsv.*.data.cod.ru/.+"
-  :max-active-agents 1
-  :body #(hash-map :strategy identity :address nil :name nil :file nil
-                   :path nil :total-size nil :file-size-atom (atom nil)))
-
 (defn can-write-to-directory? [dir]
   (and (.exists dir) (.isDirectory dir) (.canWrite dir)))
 
@@ -249,13 +232,142 @@
   (when (and file (.exists file) total-size)
     (<= total-size (.length file))))
 
-(comment
-  (defn files?.*.data.cod.ru-reflex-strategy
-    [{:as a :keys [address name file path total-size]}]
-    (cond (not address)              die
-          (not (or link name))       parse-page
-          (not file)                 get-file
-          (not length)               get-length
-          (or (out-of-space-on-path? a)
-              (fully-loaded? a))     die
-          :else                      download)))
+(defn get-file [{:as a :keys [name path]}]
+  (when (and name path)
+    (idle (assoc a :file (new File path name)))))
+
+(defn download [{:as a :keys []}])
+
+(defn files-dsv-*-data-cod-ru-get-head
+  [{:as a :keys [address name]}]
+  (let [response (HTTP/HEAD address)]
+    (cond (= (@response :status) 200)
+          (let [{:keys [content-length content-disposition]} (@response :headers)
+                filename (second (re-find #"; filename=\"(.*)\"" content-disposition))]
+            (if-not (and content-length filename) (die a)
+                    (idle (merge a
+                                 {:total-size content-length}
+                                 (when (not name) filename)))))
+          :else (fail a))))
+
+(defn files-dsv-*-data-cod-ru-reflex-strategy
+  [{:as a :keys [address name file path total-size]}]
+  (cond (not address)                 die
+        (not (and name total-size))   files-dsv-*-data-cod-ru-get-head
+        (not file)                    get-file
+        (or (out-of-space-on-path? a) (fully-loaded? a)) die
+        :else                         download))
+
+(defn data-cod-ru-parse-page [{:as a :keys [address]}])
+
+(defn data-cod-ru-make-child-agent [{:as a :keys [link]}]
+  (when (and link (env a))
+    (let [child (make-download-agent link :environment (env a))]
+      (if-not child (die a)
+              (do (send-off child run)
+                  (idle (assoc a :child child)))))))
+
+(defn data-cod-ru-reflex-strategy
+  [{:as a :keys [address link child]}]
+  (cond (not (and address (env a))) die
+        (not link)     data-cod-ru-parse-page
+        (not child)    data-cod-ru-make-child-agent
+        :else          die))
+
+(defservice data-cod-ru
+  :address-pattern #"http://[\w\-]*.data.cod.ru/\d+"
+  :strategy data-cod-ru-reflex-strategy
+  :body #(hash-map :address nil :link nil :child nil))
+
+(defservice files3?-dsv-*-data-cod-ru
+  :address-pattern #"http://files3?.dsv.*.data.cod.ru/.+"
+  :strategy files-dsv-*-data-cod-ru-reflex-strategy
+  :max-active-agents 1
+  :body #(hash-map :address nil :name nil :file nil :path nil
+                   :total-size nil :file-size-atom (atom nil)))
+
+(defservice files2-dsv-*-data-cod-ru
+  :address-pattern #"http://files2.dsv.*.data.cod.ru/.+"
+  :strategy files-dsv-*-data-cod-ru-reflex-strategy
+  :max-active-agents 1
+  :body #(hash-map :address nil :name nil :file nil :path nil
+                   :total-size nil :file-size-atom (atom nil)))
+
+;; (let [stream (ref #{})
+;;       consume-stream (fn [state bytes]
+;;                        (if (not (empty? bytes))
+;;                          (let [s (apply str (map char bytes))]
+;;                            (dosync (alter stream conj s)))
+;;                          (println "Received empty body part instead of stream.")))]
+;;   @(HTTP/STREAM :get "http://dsv.data.cod.ru/864560" consume-stream))
+
+;; (let [builder (new StringBuilder)]
+;;   (. builder append (new String (. bodyPart getBodyPartBytes))))
+;; (String. (into-array Byte [1 1]))
+
+;; (bytes 1)
+;; (HTTP/GET)
+;; import com.ning.http.client.*;
+;; import java.util.concurrent.Future;
+
+;; AsyncHttpClient c = new AsyncHttpClient();
+;; Future<String> f = c.prepareGet("http://www.ning.com/").execute(new AsyncHandler() {
+;;     private StringBuilder builder = new StringBuilder();
+
+;;     @Override
+;;     public STATE onStatusReceived(HttpResponseStatus status) throws Exception {
+;;         int statusCode = status.getStatusCode();
+;;         return STATE.CONTINUE;
+;;     }
+
+;;     @Override
+;;     public STATE onHeadersReceived(HttpResponseHeaders h) throws Exception {
+;;         Headers headers = h.getHeaders();
+;;          // The headers have been read
+;;          // If you don't want to read the body, or stop processing the response
+;;          return STATE.ABORT;
+;;     }
+
+;;     @Override
+;;     public STATE onBodyPartReceived(HttpResponseBodyPart bodyPart) throws Exception {
+;;          builder.append(new String(bodyPart.getBodyPartBytes()));
+;;          return STATE.CONTINUE;
+;;     }
+
+;;     @Override
+;;     public String onCompleted() throws Exception {
+;;          // Will be invoked once the response has been fully read or a
+;;          // ResponseComplete exception has been thrown.
+;;          return builder.toString();
+;;     }
+
+;;     @Override
+;;     public void onThrowable(Throwable t) {
+;;     }
+;; });
+
+;; String bodyResponse = f.get();
+
+
+;; (deftest test-stream
+;;   (let [stream (ref #{})
+;;         consume-stream (fn [state bytes]
+;;                          (if (not (empty? bytes))
+;;                            (let [s (apply str (map char bytes))]
+;;                              (dosync (alter stream conj s)))
+;;                            (println "Received empty body part instead of stream.")))
+;;         resp (STREAM :get "http://localhost:8123/stream" consume-stream)
+;;         status (:status @resp)]
+;;     (are [x] (not (empty? x))
+;;          status
+;;          @stream)
+;;     (is (= 200 (:code status)))
+;;     (doseq [s @stream]
+;;       (let [part s]
+;;         (is (contains? #{"part1" "part2"} part))))))
+
+;; (java.io.CharArrayReader. (into-array Byte [101 62 -48 -92]))
+;; (new String (into-array Byte ))
+
+;; (char 101) (char 62) (char -48)
+;; http://files2.dsv-region.data.cod.ru/proxy/3/?WyJmYmI4NmNjZjBiYTQ4NTEyY2Q1NTBmMmU4ZDQ3ZWEzOCIsIjEyNzk3NDgyODAiLCJTbWVzaG55ZV91c2Jfc3Rpa2kucmFyIiwiWkdOa001d2d2Z0I0eWdFMmZqd0liXC9NSjZDS1ZHR2tLUzBLSzlPY2RzdlJONlQxditkK0taNHpiUXk3aWlOZFZOOG4xSmFHdTN6K0FxbVAxVGNKVlZqNWhSVG05KzFLOXBMMjhwNFFjbTZuUEZNaGJRTlZlb2JCZU1KMnBxckNna3FjY29hXC9YaitEd29semdJZlJqUGlyTm50NGQxeFluS2JiQWJVR3JKOHM9Il0%3D
