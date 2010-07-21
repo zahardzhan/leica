@@ -308,17 +308,17 @@
         (.executeMethod client get)
         (let [content-length (.getResponseContentLength get)]
           (cond (not content-length)
-                (do (log/info (str "Невозможно проверить файл перед загрузкой " name))
+                (do (log/info (str "Cannot check file before download. " name))
                     (fail a))
 
                 (not= content-length (- total-size (actual-file-length file)))
-                (do (log/info (str "Размер получаемого файла не совпадает с ожидаемым " name))
+                (do (log/info (str "Downloading file size mismatch " name))
                     (fail a))
 
                 :else
                 (with-open [#^InputStream input (.getResponseBodyAsStream get)
                             #^FileOutputStream output (FileOutputStream. file true)]
-                  (log/info (str "Начата загрузка " name))
+                  (log/info (str "Begin downloading " name))
                   (let [buffer (make-array Byte/TYPE buffer-size*)]
                     (loop [file-size (actual-file-length file)]
                       (let [read-size (.read input buffer)]
@@ -328,10 +328,10 @@
                             (reset! file-size-atom new-size)
                             (recur new-size)))))
                     (.flush output))
-                  (log/info (str "Закончена загрузка " name))
+                  (log/info (str "End downloading " name))
                   (idle a))))
         (catch Exception e 
-          (do (log/info (str "Ошибка во время загрузки " name))
+          (do (log/info (str "Error until downloading " name))
               (fail a)))
         (finally (do (.releaseConnection get)))))))
 
@@ -357,6 +357,9 @@
         :else                         download))
 
 (defn data-cod-ru-parse-page [{:as a :keys [address]}]
+  ;; (let [resp (GET "http://localhost:8123/issue-1")
+  ;;       body (String. (byte-array (:body @resp)) "UTF-8")]
+  ;;   (is (= "глава" body)))
   (let [client (new HttpClient)
         get (new GetMethod address)]
     (.. client getHttpConnectionManager getParams 
