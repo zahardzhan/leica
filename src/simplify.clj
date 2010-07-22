@@ -366,7 +366,7 @@
   (let [response (HTTP/GET address)]
     (if (= (derefed response :status :code) 200)
       (let [link (re-find #"http://files[-\d\w\.]*data.cod.ru/[^\"]+"
-                          (new String (byte-array (derefed response :body))))]
+                          (new String (byte-array (derefed response :body))))] ;; TODO: Use HTTP/string
         (if link (idle (assoc a :link link))
             (die a)))
       (fail a))))
@@ -391,8 +391,8 @@
 
 (defn terminate-download-environment [e] nil)
 
-(defn scheduled-strategy [strategy]
-  (fn s-strategy [{:as a :keys [max-active-agents]}]
+(defn schedule-strategy [strategy]
+  (fn scheduled-strategy [{:as a-stgy :keys [max-active-agents]}]
     (let [idle-successor
           (fn [] (first
                  (select-from (agents (env *agent*))
@@ -432,31 +432,33 @@
           sleep-after-fail
           (fn [] (send-off *agent* sleep timeout-after-fail*))
 
-          rerun
+          proceed
           (fn [] (send-off *agent* run))]
-      (cond (not max-active-agents)
-            (fn [old-a]
+      (cond (not *agent*) (strategy a-stgy)
+
+            (not max-active-agents)
+            (fn scheduled-action [a]
               (let-return
-               [new-a ((apply strategy old-a) old-a)]
+               [new-a ((strategy a) a)]
                (cond (dead? new-a) (or (run-idle-or-alive-successor-after)
                                        (try-to-terminate-environment))
                      (fail? new-a) (do (sleep-after-fail)
-                                       (rerun))
-                     :else         (rerun))))
+                                       (proceed))
+                     :else         (proceed))))
 
             (and (pos? max-active-agents)
                  (> (count (active-same-service-agents)) max-active-agents))
             pass
 
             (pos? max-active-agents)
-            (fn [old-a]
+            (fn scheduled-action [a]
               (let-return
-               [new-a ((apply strategy old-a) old-a)]
+               [new-a ((strategy a) a)]
                (cond (dead? new-a) (or (run-idle-or-alive-successor-after)
                                        (try-to-terminate-environment))
                      (fail? new-a) (do (sleep-after-fail)
                                        (run-idle-or-alive-successor-after))
-                     :else         (rerun))))))))
+                     :else         (proceed))))))))
 
 (defservice data-cod-ru
   :address-pattern #"http://[\w\-]*.data.cod.ru/\d+"
