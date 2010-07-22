@@ -2,7 +2,7 @@
 
 (ns test.sketch
   (:use clojure.test)
-  (:use :reload simplify)
+  (:use :reload leica)
   (:require [async.http.client :as HTTP]
             [clojure.contrib.http.agent :as http])
   (:import java.io.File))

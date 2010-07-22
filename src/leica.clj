@@ -6,7 +6,7 @@
 ;; but WITHOUT ANY WARRANTY; without even the implied warranty of
 ;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 
-(ns simplify
+(ns leica
   (:gen-class)
   (:use
    clojure.set
