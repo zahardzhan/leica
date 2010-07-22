@@ -7,10 +7,12 @@
 ;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 
 (ns simplify
+  (:gen-class)
   (:use
    clojure.set
    clojure.test
-   clojure.contrib.def)
+   clojure.contrib.def
+   clojure.contrib.command-line)
   
   (:require
    [clojure.contrib.http.agent :as http]
@@ -20,25 +22,50 @@
    fn)
   
   (:import
+   java.util.Date
    (java.io File
             FileOutputStream
             InputStream)))
 
+(import '(java.util.logging Logger
+                            Level
+                            Formatter
+                            LogRecord
+                            StreamHandler))
+
 (import 'java.net.ConnectException)
+
 (import '(org.apache.commons.httpclient URI
                                         HttpClient
                                         HttpStatus
                                         ConnectTimeoutException 
                                         NoHttpResponseException))
+
 (import '(org.apache.commons.httpclient.methods GetMethod))
 (import '(org.apache.commons.httpclient.params HttpMethodParams))
 (import '(org.apache.commons.httpclient.util EncodingUtil))
 
-;; (def clojure.core/*assert* true)
+(defmethod print-method clojure.lang.Delay
+  [x w] ;; Don't print/eval delays
+  ((get-method print-method Object) x w))
 
-;; Don't print delays
-(defmethod print-method clojure.lang.Delay [x w]
-           ((get-method print-method Object) x w))
+(defn set-root-logger-log-level [log-level]
+  (let [root-logger (Logger/getLogger "")
+        console-handler (first (.getHandlers root-logger))
+        date-formatter (java.text.SimpleDateFormat. "HH:mm:ss")
+        log-formatter
+        (proxy [Formatter] []
+          (format [#^LogRecord record]
+                  (str \return
+                       (.format date-formatter (Date. (.getMillis record)))
+                       \space
+                       (.getMessage record)
+                       \newline)))]
+    (.setFormatter console-handler log-formatter)
+    (.setLevel console-handler log-level)
+    (.setLevel root-logger log-level)))
+
+(set-root-logger-log-level (Level/FINE)) ;; Log to console DEBUG messages
 
 (defn same [f & xs]
   (apply = (map f xs)))
@@ -74,10 +101,57 @@
 
 (defalias supplied and)
 
-(defn as-file [x]
-  (let [type (type x)]
-    (cond (= type File) x
-          (= type String) (new File x))))
+(defn as-file
+  [arg & {:as args :keys [exists create readable writeable directory]}]
+  (let [argtype (type arg)]
+    (cond (= argtype File)
+          (let [maybe-exists
+                (fn [f] (cond (= exists true)  (when (.exists f) f)
+                             (= exists false) (when-not (.exists f) f)
+                             (not exists)     f))
+                maybe-directory
+                (fn [f] (cond (= directory true)  (when (.isDirectory f) f)
+                             (= directory false) (when-not (.isDirectory f) f)
+                             (not directory)  f))
+                maybe-readable
+                (fn [f] (cond (= readable true)  (when (.canRead f) f)
+                             (= readable false) (when-not (.canRead f) f)
+                             (not readable)     f))
+                maybe-writeable
+                (fn [f] (cond (= writeable true)  (when (.canWrite f) f)
+                             (= writeable false) (when-not (.canWrite f) f)
+                             (not writeable)     f))
+                maybe-create
+                (fn [f] (cond (and (= create true) (not (.exists f)))
+                             (let [dir (File. (.getParent f))]
+                               (if-not (.exists dir)
+                                 (throw (new Exception
+                                             "Cannot create file in nonexistant directory."))
+                                 (if-not (.canWrite dir)
+                                   (throw (new Exception
+                                               "Cannot create file in nonwriteable directory."))
+                                   (with-return f (.createNewFile f)))))
+                             :else f))]
+            
+            (-> arg maybe-create maybe-exists maybe-directory maybe-readable maybe-writeable))
+
+          (= argtype String) (if args
+                               (apply as-file (new File arg) (flatten (seq args)))
+                               (as-file (new File arg))))))
+
+(defn list-directory-files [dir] 
+  (seq (.listFiles (as-file dir :readable true :directory true))))
+
+;; (defn upload-files [paths]
+;;   (->> paths
+;;        (map path)
+;;        (map (fn/or (fn/and file? identity)
+;;                    (fn/and directory? (comp sort files-in-directory))
+;;                    (constantly nil)))
+;;        (flatten)
+;;        (map upload-file)
+;;        (remove nil?)
+;;        (distinct)))
 
 (defn select-from
   "Select elements from sequence.
@@ -218,6 +292,7 @@
   (when-let [body (make-download-agent-body line)]
     (make-agent (merge body
                        {:state-atom (atom :idle)
+                        :fail-reason-atom (atom nil)
                         :precedence (or precedence (swap! *precedence* inc))}
                        (when environment {:environment environment})
                        (when strategy {:strategy strategy})
@@ -244,6 +319,12 @@
   (cond (keyword? in-state) (= in-state (state a))
         (set? in-state)     (keyword? (in-state (state a)))))
 
+(defn fail-reason [{:as a fail-reason-atom :fail-reason-atom}]
+  (deref fail-reason-atom))
+
+(defn fail-reason! [{:as a fail-reason-atom :fail-reason-atom} reason]
+  (with-return a (reset! fail-reason-atom reason)))
+
 (defn dead?   [a] (state? a :dead))
 (defn alive?  [a] (not (dead? a)))
 (defn active? [a] (state? a #{:running :stopping}))
@@ -267,9 +348,17 @@
            (try (let [a1 (action a)]
                   (cond (active? a1) (state! a1 :idle)
                         :else a1))
-                (catch AssertionError err (state! a :failed))
-                (catch Exception      err (state! a :failed)))
-           (catch AssertionError err a))))
+                (catch AssertionError err
+                  (with-return a
+                    (state! a :failed)
+                    (fail-reason! a err)))
+                (catch Exception err
+                  (with-return a
+                    (state! a :failed)
+                    (fail-reason! a err))))
+           (catch AssertionError err
+             (with-return a
+               (fail-reason! a err))))))
 
 (defn run [a]
   (execute a (get-action a)))
@@ -314,10 +403,12 @@
         (let [content-length (.getResponseContentLength get)]
           (cond (not content-length)
                 (do (log/info (str "Cannot check file before download. " name))
+                    (fail-reason! a "Cannot check file before download.")
                     (fail a))
 
                 (not= content-length (- total-size (actual-file-length file)))
                 (do (log/info (str "Downloading file size mismatch " name))
+                    (fail-reason! a "Downloading file size mismatch.")
                     (fail a))
 
                 :else
@@ -337,6 +428,7 @@
                   (idle a))))
         (catch Exception e 
           (do (log/info (str "Error until downloading " name))
+              (fail-reason! a "Error until downloading.")
               (fail a)))
         (finally (do (.releaseConnection get)))))))
 
@@ -351,7 +443,8 @@
                     (idle (merge a
                                  {:total-size content-length}
                                  (when (not name) {:name filename})))))
-          :else (fail a))))
+          :else (do (fail-reason! a "Couldn't get head.")
+                    (fail a)))))
 
 (defn files-dsv-*-data-cod-ru-reflex-strategy
   [{:as a :keys [address name file path total-size]}]
@@ -369,7 +462,8 @@
                           (new String (byte-array (derefed response :body))))] ;; TODO: Use HTTP/string
         (if link (idle (assoc a :link link))
             (die a)))
-      (fail a))))
+      (do (fail-reason! a "Couldn't parse page.")
+          (fail a)))))
 
 (defn data-cod-ru-make-child-agent [{:as a :keys [link path precedence]}]
   {:pre [(supplied link path precedence (env a))]}
@@ -462,19 +556,46 @@
 
 (defservice data-cod-ru
   :address-pattern #"http://[\w\-]*.data.cod.ru/\d+"
-  :strategy data-cod-ru-reflex-strategy
+  :strategy (schedule-strategy data-cod-ru-reflex-strategy)
   :body #(hash-map :address nil :link nil :child nil))
 
 (defservice files3?-dsv-*-data-cod-ru
   :address-pattern #"http://files3?.dsv.*.data.cod.ru/.+"
-  :strategy files-dsv-*-data-cod-ru-reflex-strategy
+  :strategy (schedule-strategy files-dsv-*-data-cod-ru-reflex-strategy)
   :max-active-agents 1
   :body #(hash-map :address nil :name nil :file nil :path nil
                    :total-size nil :file-size-atom (atom nil)))
 
 (defservice files2-dsv-*-data-cod-ru
   :address-pattern #"http://files2.dsv.*.data.cod.ru/.+"
-  :strategy files-dsv-*-data-cod-ru-reflex-strategy
+  :strategy (schedule-strategy files-dsv-*-data-cod-ru-reflex-strategy)
   :max-active-agents 1
   :body #(hash-map :address nil :name nil :file nil :path nil
                    :total-size nil :file-size-atom (atom nil)))
+
+(defn -main [& args]
+  (with-command-line args
+    "Use it!"
+    [[quiet?  q? "Work quietly."]
+     [debug?  d? "Print debug messages."]
+     remaining-args]
+
+    (set-root-logger-log-level (cond quiet? (Level/OFF)
+                                     debug? (Level/FINE)
+                                     :else  (Level/INFO)))
+
+    (let [jobs-file    (some #(as-file % :directory false :readable true)
+                             remaining-args)
+          working-path (or (some #(as-file % :directory true :writeable true)
+                                 remaining-args)
+                           (as-file (System/getProperty "user.dir") :writeable true))]
+      (when (and jobs-file working-path)
+        (let [lines (duck/read-lines jobs-file)
+              download-environment (make-environment)]
+          (doseq [line lines]
+            (make-download-agent line :environment download-environment
+                                 :path working-path))
+          ;; (turn-on-cli-for-all-download-environments)
+          ;; (add-hook download-environment-termination-hook :system-exit (fn [e] (System/exit 0)))
+          (doseq [a (agents download-environment)]
+            (send-off a run)))))))
