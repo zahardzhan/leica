@@ -34,6 +34,8 @@
 (import '(org.apache.commons.httpclient.params HttpMethodParams))
 (import '(org.apache.commons.httpclient.util EncodingUtil))
 
+;; (def clojure.core/*assert* true)
+
 ;; Don't print delays
 (defmethod print-method clojure.lang.Delay [x w]
            ((get-method print-method Object) x w))
@@ -69,6 +71,8 @@
       `(and (or (nil? ~(first clauses))
                 (do ~(second clauses)))
             (when-supplied ~@(next (next clauses))))))
+
+(defalias supplied and)
 
 (defn as-file [x]
   (let [type (type x)]
@@ -228,14 +232,12 @@
   (deref state-atom))
 
 (defn state! [{:as a state-atom :state-atom} new-state]
-  (when-not (({:idle     #{:running}
-               :failed   #{:running}
-               :dead     #{}
-               :running  #{:stopping :idle :failed :dead}
-               :stopping #{:idle :failed :dead}}
-              (state a)) new-state)
-    (throw (new AssertionError
-                "Download agent cannot change state.")))
+  {:pre [(({:idle     #{:running}
+            :failed   #{:running}
+            :dead     #{}
+            :running  #{:stopping :idle :failed :dead}
+            :stopping #{:idle :failed :dead}}
+           (state a)) new-state)]}
   (with-return a (reset! state-atom new-state)))
 
 (defn state? [a in-state]
@@ -265,8 +267,9 @@
            (try (let [a1 (action a)]
                   (cond (active? a1) (state! a1 :idle)
                         :else a1))
-                (catch Exception _ (state! a :failed)))
-           (catch AssertionError _ a))))
+                (catch AssertionError err (state! a :failed))
+                (catch Exception      err (state! a :failed)))
+           (catch AssertionError err a))))
 
 (defn run [a]
   (execute a (get-action a)))
@@ -278,25 +281,27 @@
   (if (.exists file) (.length file) 0))
 
 (defn out-of-space-on-path? [{:as a :keys [path file total-size]}]
-  (when (and path file total-size)
-    (if (.exists file)
-      (< (.getUsableSpace path) (- total-size (.length file)))
-      (= (.getUsableSpace path) 0))))
+  {:pre [(supplied path file total-size)]}
+  (if (.exists file)
+    (< (.getUsableSpace path) (- total-size (.length file)))
+    (= (.getUsableSpace path) 0)))
 
 (defn fully-loaded? [{:as a :keys [file total-size]}]
-  (when (and file (.exists file) total-size)
-    (<= total-size (.length file))))
+  {:pre [(supplied file total-size)]}
+  (boolean (and (.exists file) (<= total-size (.length file)))))
 
 (defn get-file [{:as a :keys [name path]}]
-  (when (and name path)
-    (idle (assoc a :file (new File path name)))))
+  {:pre [(supplied name path)]}
+  (idle (assoc a :file (new File path name))))
 
 (defvar- timeout-after-fail*   3000)
 (defvar- connection-timeout*  15000)
 (defvar- get-request-timeout* 30000)
 (defvar- buffer-size*         65536)
 
-(defn download [{:as a :keys [name address file total-size file-size-atom]}]
+(defn download
+  [{:as a :keys [name address file total-size file-size-atom]}]
+  {:pre [(supplied name address file total-size file-size-atom)]}
   (let [client (new HttpClient)
         get    (new GetMethod address)]
     (when (and address file)
@@ -335,8 +340,8 @@
               (fail a)))
         (finally (do (.releaseConnection get)))))))
 
-(defn files-dsv-*-data-cod-ru-get-head
-  [{:as a :keys [address name]}]
+(defn files-dsv-*-data-cod-ru-get-head [{:as a :keys [address name]}]
+  {:pre [(supplied address)]}
   (let [response (HTTP/HEAD address)]
     (cond (= (derefed response :status :code) 200)
           (let [content-length (new Integer (derefed response :headers :content-length))
@@ -357,35 +362,25 @@
         :else                         download))
 
 (defn data-cod-ru-parse-page [{:as a :keys [address]}]
-  ;; (let [resp (GET "http://localhost:8123/issue-1")
-  ;;       body (String. (byte-array (:body @resp)) "UTF-8")]
-  ;;   (is (= "глава" body)))
-  (let [client (new HttpClient)
-        get (new GetMethod address)]
-    (.. client getHttpConnectionManager getParams 
-        (setConnectionTimeout connection-timeout*))
-    (.. get getParams (setSoTimeout get-request-timeout*))
-    (try (let [status (.executeMethod client get)]
-           (if (= status HttpStatus/SC_OK)
-             (let [link (re-find #"http://files[-\d\w\.]*data.cod.ru/[^\"]+"
-                                 (duck/slurp* (.getResponseBodyAsStream get)))]
-               (if link (idle (assoc a :link link))
-                   (die a)))
-             (fail a)))
-         (catch Exception e (fail a))
-         (finally (.releaseConnection get)))))
+  {:pre [(supplied address)]}
+  (let [response (HTTP/GET address)]
+    (if (= (derefed response :status :code) 200)
+      (let [link (re-find #"http://files[-\d\w\.]*data.cod.ru/[^\"]+"
+                          (new String (byte-array (derefed response :body))))]
+        (if link (idle (assoc a :link link))
+            (die a)))
+      (fail a))))
 
 (defn data-cod-ru-make-child-agent [{:as a :keys [link path precedence]}]
-  (when (and link path (env a))
-    (let [child (make-download-agent link :environment (env a)
-                                     :precedence precedence
-                                     :path path)]
-      (if-not child (die a)
-              (do (send-off child run)
-                  (idle (assoc a :child child)))))))
+  {:pre [(supplied link path precedence (env a))]}
+  (let [child (make-download-agent link :environment (env a)
+                                   :precedence precedence
+                                   :path path)]
+    (if-not child (die a)
+            (do (send-off child run)
+                (idle (assoc a :child child))))))
 
-(defn data-cod-ru-reflex-strategy
-  [{:as a :keys [address link child]}]
+(defn data-cod-ru-reflex-strategy [{:as a :keys [address link child]}]
   (cond (not (and address (env a))) die
         (not link)     data-cod-ru-parse-page
         (not child)    data-cod-ru-make-child-agent
