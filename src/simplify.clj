@@ -36,12 +36,20 @@
 
 ;; Don't print delays
 (defmethod print-method clojure.lang.Delay [x w]
-  ((get-method print-method Object) x w))
+           ((get-method print-method Object) x w))
+
+(defn same [f & xs]
+  (apply = (map f xs)))
 
 (defmacro with-return
   [expr & body]
   `(do (do ~@body)
        ~expr))
+
+(defmacro let-return 
+  [[form val] & body]
+  `(let [~form ~val]
+     (with-return ~form (do ~@body))))
 
 (defn derefed
   ([] nil)
@@ -67,6 +75,36 @@
     (cond (= type File) x
           (= type String) (new File x))))
 
+(defn select-from
+  "Select elements from sequence.
+
+  (select-from #{1 2 3 4 5 6 7} :entirely-after 3 :where odd?)
+  > (5 7 1 3)"
+  [collection & {:as opts :keys [order-by where entirely-after after before]
+                 :or {where identity}}]
+
+  {:pre  [(when-supplied collection (coll? collection)
+                         order-by (or (keyword? order-by)
+                                      (instance? clojure.lang.IFn order-by))
+                         where (instance? clojure.lang.IFn where))]}
+
+  (let [seq-before (fn [x xs] (take-while (partial not= x) xs))
+        seq-after (fn [x xs] (next (drop-while (partial not= x) xs)))
+        maybe-sort (fn [xs] (if order-by (sort-by order-by xs) xs))
+        maybe-take-part-of-seq
+        (fn [xs] (cond (not (or entirely-after after before)) xs
+                      entirely-after (concat (seq-after entirely-after xs)
+                                             (seq-before entirely-after xs)
+                                             (list entirely-after))
+                      after (seq-after after xs)
+                      before (seq-before before xs)))
+        maybe-filter (fn [xs] (if where (filter where xs) xs))]
+    (when collection
+      (->> collection
+           maybe-sort
+           maybe-take-part-of-seq
+           maybe-filter))))
+
 (defn make-environment []
   {:agents-ref (ref #{})})
 
@@ -84,8 +122,8 @@
 (defn env "The environment belonging to this agent." [a]
   (when a (derefed a :env-ref force deref)))
 
-(defn surrounding "The agents belonging to environment this agent belonging to." [a]
-  (when-let [e (env a)] (difference (agents e) #{a})))
+(defn surrounding "The agents belonging to environment this agent belonging to."
+  [a] (when-let [e (env a)] (difference (agents e) #{a})))
 
 (defn binded? "Agent is binded to environment and vice-versa?"
   ([a]   (boolean (when-let [ags (agents (env a))] (ags a))))
@@ -253,6 +291,7 @@
   (when (and name path)
     (idle (assoc a :file (new File path name)))))
 
+(defvar- timeout-after-fail*   3000)
 (defvar- connection-timeout*  15000)
 (defvar- get-request-timeout* 30000)
 (defvar- buffer-size*         65536)
@@ -281,7 +320,7 @@
                             #^FileOutputStream output (FileOutputStream. file true)]
                   (log/info (str "Начата загрузка " name))
                   (let [buffer (make-array Byte/TYPE buffer-size*)]
-                    (loop [file-size (actual-file-size file)]
+                    (loop [file-size (actual-file-length file)]
                       (let [read-size (.read input buffer)]
                         (when (pos? read-size)
                           (let [new-size (+ file-size read-size)]
@@ -348,6 +387,78 @@
         (not link)     data-cod-ru-parse-page
         (not child)    data-cod-ru-make-child-agent
         :else          die))
+
+(defn download-environment-is-done? [e]
+  (every? #(derefed % dead?) (agents e)))
+
+(defn terminate-download-environment [e] nil)
+
+(defn scheduled-strategy [strategy]
+  (fn s-strategy [{:as a :keys [max-active-agents]}]
+    (let [idle-successor
+          (fn [] (first
+                 (select-from (agents (env *agent*))
+                              :order-by #(derefed % :precedence)
+                              :where #(and (derefed % idle?)
+                                           (same :service
+                                                 (deref *agent*)
+                                                 (deref %))))))
+
+          alive-successor-after
+          (fn [] (first  
+                 (select-from (agents (env *agent*)) :entirely-after *agent*
+                              :order-by #(derefed % :precedence)
+                              :where #(and (derefed % alive?)
+                                           (same :service
+                                                 (deref *agent*)
+                                                 (deref %))))))
+
+          run-idle-or-alive-successor-after
+          (fn [] (let [idle (idle-successor)
+                      alive-after (alive-successor-after)]
+                  (boolean (when (or idle alive-after)
+                             (send-off (or idle alive-after) run)))))
+
+          try-to-terminate-environment
+          (fn [] (when-let [e (env *agent*)]
+                  (when (download-environment-is-done? e)
+                    (terminate-download-environment e))))
+
+          active-same-service-agents
+          (fn [] (seq (select-from (surrounding *agent*)
+                                  :where #(and (derefed % active?)
+                                               (same :service
+                                                     (deref *agent*)
+                                                     (deref %))))))
+
+          sleep-after-fail
+          (fn [] (send-off *agent* sleep timeout-after-fail*))
+
+          rerun
+          (fn [] (send-off *agent* run))]
+      (cond (not max-active-agents)
+            (fn [old-a]
+              (let-return
+               [new-a ((apply strategy old-a) old-a)]
+               (cond (dead? new-a) (or (run-idle-or-alive-successor-after)
+                                       (try-to-terminate-environment))
+                     (fail? new-a) (do (sleep-after-fail)
+                                       (rerun))
+                     :else         (rerun))))
+
+            (and (pos? max-active-agents)
+                 (> (count (active-same-service-agents)) max-active-agents))
+            pass
+
+            (pos? max-active-agents)
+            (fn [old-a]
+              (let-return
+               [new-a ((apply strategy old-a) old-a)]
+               (cond (dead? new-a) (or (run-idle-or-alive-successor-after)
+                                       (try-to-terminate-environment))
+                     (fail? new-a) (do (sleep-after-fail)
+                                       (run-idle-or-alive-successor-after))
+                     :else         (rerun))))))))
 
 (defservice data-cod-ru
   :address-pattern #"http://[\w\-]*.data.cod.ru/\d+"
