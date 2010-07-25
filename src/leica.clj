@@ -9,7 +9,7 @@
 (ns leica
   (:gen-class)
   (:use
-   clojure.set
+   [clojure.set :only [difference union]]
    clojure.test
    clojure.contrib.def
    clojure.contrib.command-line)
@@ -41,7 +41,7 @@
                                         ConnectTimeoutException 
                                         NoHttpResponseException))
 
-(import '(org.apache.commons.httpclient.methods GetMethod))
+(import '(org.apache.commons.httpclient.methods GetMethod HeadMethod))
 (import '(org.apache.commons.httpclient.params HttpMethodParams))
 (import '(org.apache.commons.httpclient.util EncodingUtil))
 
@@ -101,37 +101,39 @@
 
 (defalias supplied and)
 
+(def nothing nil)
+
 (defn as-file
   [arg & {:as args :keys [exists create readable writeable directory]}]
   (let [argtype (type arg)]
     (cond (= argtype File)
-          (let [maybe-exists
-                (fn [f] (cond (= exists true)  (when (.exists f) f)
-                             (= exists false) (when-not (.exists f) f)
-                             (not exists)     f))
+          (let [maybe-create
+                (fn [f] (when f (cond (and (= create true) (not (.exists f)))
+                                     (let [dir (File. (.getParent f))]
+                                       (if-not (.exists dir)
+                                         (throw (new Exception
+                                                     "Cannot create file in nonexistant directory."))
+                                         (if-not (.canWrite dir)
+                                           (throw (new Exception
+                                                       "Cannot create file in nonwriteable directory."))
+                                           (do (.createNewFile f) f))))
+                                     :else f)))
+                maybe-exists
+                (fn [f] (when f (cond (= exists true)  (when (.exists f) f)
+                                     (= exists false) (when-not (.exists f) f)
+                                     (not exists)     f)))
                 maybe-directory
-                (fn [f] (cond (= directory true)  (when (.isDirectory f) f)
-                             (= directory false) (when-not (.isDirectory f) f)
-                             (not directory)  f))
+                (fn [f] (when f (cond (= directory true)  (when (.isDirectory f) f)
+                                     (= directory false) (when-not (.isDirectory f) f)
+                                     (not directory)  f)))
                 maybe-readable
-                (fn [f] (cond (= readable true)  (when (.canRead f) f)
-                             (= readable false) (when-not (.canRead f) f)
-                             (not readable)     f))
+                (fn [f] (when f (cond (= readable true)  (when (.canRead f) f)
+                                     (= readable false) (when-not (.canRead f) f)
+                                     (not readable)     f)))
                 maybe-writeable
-                (fn [f] (cond (= writeable true)  (when (.canWrite f) f)
-                             (= writeable false) (when-not (.canWrite f) f)
-                             (not writeable)     f))
-                maybe-create
-                (fn [f] (cond (and (= create true) (not (.exists f)))
-                             (let [dir (File. (.getParent f))]
-                               (if-not (.exists dir)
-                                 (throw (new Exception
-                                             "Cannot create file in nonexistant directory."))
-                                 (if-not (.canWrite dir)
-                                   (throw (new Exception
-                                               "Cannot create file in nonwriteable directory."))
-                                   (with-return f (.createNewFile f)))))
-                             :else f))]
+                (fn [f] (when f (cond (= writeable true)  (when (.canWrite f) f)
+                                     (= writeable false) (when-not (.canWrite f) f)
+                                     (not writeable)     f)))]
             
             (-> arg maybe-create maybe-exists maybe-directory maybe-readable maybe-writeable))
 
@@ -142,46 +144,24 @@
 (defn list-directory-files [dir] 
   (seq (.listFiles (as-file dir :readable true :directory true))))
 
-;; (defn upload-files [paths]
-;;   (->> paths
-;;        (map path)
-;;        (map (fn/or (fn/and file? identity)
-;;                    (fn/and directory? (comp sort files-in-directory))
-;;                    (constantly nil)))
-;;        (flatten)
-;;        (map upload-file)
-;;        (remove nil?)
-;;        (distinct)))
-
-(defn select-from
-  "Select elements from sequence.
-
-  (select-from #{1 2 3 4 5 6 7} :entirely-after 3 :where odd?)
-  > (5 7 1 3)"
-  [collection & {:as opts :keys [order-by where entirely-after after before]
-                 :or {where identity}}]
-
-  {:pre  [(when-supplied collection (coll? collection)
-                         order-by (or (keyword? order-by)
-                                      (instance? clojure.lang.IFn order-by))
-                         where (instance? clojure.lang.IFn where))]}
-
-  (let [seq-before (fn [x xs] (take-while (partial not= x) xs))
-        seq-after (fn [x xs] (next (drop-while (partial not= x) xs)))
-        maybe-sort (fn [xs] (if order-by (sort-by order-by xs) xs))
-        maybe-take-part-of-seq
-        (fn [xs] (cond (not (or entirely-after after before)) xs
-                      entirely-after (concat (seq-after entirely-after xs)
-                                             (seq-before entirely-after xs)
-                                             (list entirely-after))
-                      after (seq-after after xs)
-                      before (seq-before before xs)))
-        maybe-filter (fn [xs] (if where (filter where xs) xs))]
-    (when collection
-      (->> collection
-           maybe-sort
-           maybe-take-part-of-seq
-           maybe-filter))))
+(defn select [collection & {:keys [where order-by before after entirely-after]}]
+  (let [take-after  (fn [item] (rest (drop-while (partial not= item) collection)))
+        take-before (fn [item] (take-while (partial not= item) collection))
+        take-entirely-after (fn [item] (concat (take-after item)
+                                              (take-before item)
+                                              (list item)))
+        maybe-take-after  #(if after  (take-after  after) %)
+        maybe-take-before #(if before (take-before before) %)
+        maybe-take-entirely-after #(if entirely-after
+                                     (take-entirely-after entirely-after) %)
+        maybe-filter-where #(if where (filter where %) %)
+        maybe-order-by #(if order-by (sort order-by %) %)]
+    (-> (seq collection)
+        maybe-take-entirely-after
+        maybe-take-after
+        maybe-take-before
+        maybe-filter-where
+        maybe-order-by)))
 
 (defn make-environment []
   {:agents-ref (ref #{})})
@@ -277,9 +257,6 @@
          (:address (make-download-agent-body
                     "asdasd http://files.dsv.data.cod.ru/asdf ghjk")))))
 
-(defn can-write-to-directory? [dir]
-  (and (.exists dir) (.isDirectory dir) (.canWrite dir)))
-
 (def *precedence* (atom 0))
 
 (defn make-download-agent
@@ -287,7 +264,7 @@
   {:pre [(when-supplied strategy     (instance? clojure.lang.IFn strategy)
                         precedence   (number? precedence)
                         environment  (map? environment)
-                        path         (can-write-to-directory? (as-file path))
+                        path         (as-file path :directory true :writeable true)
                         name         (string? name))]}
   (when-let [body (make-download-agent-body line)]
     (make-agent (merge body
@@ -333,7 +310,12 @@
 
 (defn pass    [a] a)
 (defn idle    [a] (state! a :idle))
-(defn fail    [a] (state! a :failed))
+
+(defn fail [a & {:as opts :keys [reason]}]
+  (with-return a
+    (state! a :failed)
+    (when reason (fail-reason! a reason))))
+
 (defn die     [a] (state! a :dead))
 
 (defn sleep   [a millis]
@@ -349,16 +331,11 @@
                   (cond (active? a1) (state! a1 :idle)
                         :else a1))
                 (catch AssertionError err
-                  (with-return a
-                    (state! a :failed)
-                    (fail-reason! a err)))
+                  (fail a :reason err))
                 (catch Exception err
-                  (with-return a
-                    (state! a :failed)
-                    (fail-reason! a err))))
+                  (fail a :reason err)))
            (catch AssertionError err
-             (with-return a
-               (fail-reason! a err))))))
+             (fail a :reason err)))))
 
 (defn run [a]
   (execute a (get-action a)))
@@ -383,10 +360,11 @@
   {:pre [(supplied name path)]}
   (idle (assoc a :file (new File path name))))
 
-(defvar- timeout-after-fail*   3000)
-(defvar- connection-timeout*  15000)
-(defvar- get-request-timeout* 30000)
-(defvar- buffer-size*         65536)
+(defvar- timeout-after-fail*        3000)
+(defvar- connection-timeout*       15000)
+(defvar- get-request-timeout*      30000)
+(defvar- head-request-timeout*     10000)
+(defvar- buffer-size*              65536)
 
 (defn download
   [{:as a :keys [name address file total-size file-size-atom]}]
@@ -402,14 +380,10 @@
         (.executeMethod client get)
         (let [content-length (.getResponseContentLength get)]
           (cond (not content-length)
-                (do (log/info (str "Cannot check file before download. " name))
-                    (fail-reason! a "Cannot check file before download.")
-                    (fail a))
+                (fail a :reason "Cannot check file before download.")
 
                 (not= content-length (- total-size (actual-file-length file)))
-                (do (log/info (str "Downloading file size mismatch " name))
-                    (fail-reason! a "Downloading file size mismatch.")
-                    (fail a))
+                (fail a :reason "Downloading file size mismatch.")
 
                 :else
                 (with-open [#^InputStream input (.getResponseBodyAsStream get)
@@ -426,25 +400,26 @@
                     (.flush output))
                   (log/info (str "End downloading " name))
                   (idle a))))
-        (catch Exception e 
-          (do (log/info (str "Error until downloading " name))
-              (fail-reason! a "Error until downloading.")
-              (fail a)))
         (finally (do (.releaseConnection get)))))))
 
 (defn files-dsv-*-data-cod-ru-get-head [{:as a :keys [address name]}]
   {:pre [(supplied address)]}
-  (let [response (HTTP/HEAD address)]
-    (cond (= (derefed response :status :code) 200)
-          (let [content-length (new Integer (derefed response :headers :content-length))
-                content-disposition (derefed response :headers :content-disposition)
-                filename (second (re-find #"; filename=\"(.*)\"" content-disposition))]
-            (if-not (and content-length filename) (die a)
-                    (idle (merge a
-                                 {:total-size content-length}
-                                 (when (not name) {:name filename})))))
-          :else (do (fail-reason! a "Couldn't get head.")
-                    (fail a)))))
+  (let [client (new HttpClient)
+        head (new HeadMethod address)]
+    (.. client getHttpConnectionManager getParams 
+        (setConnectionTimeout connection-timeout*))
+    (.. head getParams (setSoTimeout head-request-timeout*))
+    (try (let [status (.executeMethod client head)]
+           (if (= status HttpStatus/SC_OK)
+             (let [content-length (Integer/parseInt
+                                   (.. head (getResponseHeader "Content-Length") (getValue)))
+                   content-disposition (.. head (getResponseHeader "Content-Disposition") (getValue))
+                   filename (second (re-find #"; filename=\"(.*)\"" content-disposition))]
+               (if-not (and content-length filename) (die a)
+                       (idle (merge a {:total-size content-length}
+                                    (when (not name) {:name filename})))))
+             (fail a :reason "HEAD request failed.")))
+         (finally (.releaseConnection head)))))
 
 (defn files-dsv-*-data-cod-ru-reflex-strategy
   [{:as a :keys [address name file path total-size]}]
@@ -456,14 +431,20 @@
 
 (defn data-cod-ru-parse-page [{:as a :keys [address]}]
   {:pre [(supplied address)]}
-  (let [response (HTTP/GET address)]
-    (if (= (derefed response :status :code) 200)
-      (let [link (re-find #"http://files[-\d\w\.]*data.cod.ru/[^\"]+"
-                          (new String (byte-array (derefed response :body))))] ;; TODO: Use HTTP/string
-        (if link (idle (assoc a :link link))
-            (die a)))
-      (do (fail-reason! a "Couldn't parse page.")
-          (fail a)))))
+  (let [client (new HttpClient)
+        get (new GetMethod address)]
+    (.. client getHttpConnectionManager getParams 
+        (setConnectionTimeout connection-timeout*))
+    (.. get getParams (setSoTimeout get-request-timeout*))
+    (try (let [status (.executeMethod client get)]
+           (if (= status HttpStatus/SC_OK)
+             (let [link (re-find #"http://files[-\d\w\.]*data.cod.ru/[^\"]+"
+                                 (duck/slurp* (.getResponseBodyAsStream get)))]
+               (if link (idle (assoc a :link link))
+                   (die a)))
+             (fail a)))
+         (catch Exception e (fail a))
+         (finally (.releaseConnection get)))))
 
 (defn data-cod-ru-make-child-agent [{:as a :keys [link path precedence]}]
   {:pre [(supplied link path precedence (env a))]}
@@ -485,90 +466,72 @@
 
 (defn terminate-download-environment [e] nil)
 
-(defn schedule-strategy [strategy]
+(defn try-to-terminate-environment [e]
+  (when (download-environment-is-done? e)
+    (terminate-download-environment e)))
+
+(defn data-cod-ru-schedule-strategy [strategy]
+  (fn scheduled-strategy [{:as a-stgy}]
+    (cond (not *agent*) (strategy a-stgy)
+
+          :else
+          (fn scheduled-action [a]
+            (let-return
+             [new-a ((strategy a) a)]
+             (cond (dead? new-a) (do nothing)
+                   (fail? new-a) (do (send-off *agent* sleep timeout-after-fail*)
+                                     (send-off *agent* run))
+                   :else         (do (send-off *agent* run))))))))
+
+(defn idle-service-successors [a]
+  (select (surrounding a) :order-by #(derefed % :precedence)
+          :where #(and (derefed % idle?) (same :service (deref a) (deref %)))))
+
+(defn failed-service-successors-after [a]
+  (select (surrounding a) :entirely-after a :order-by #(derefed % :precedence)
+          :where #(and (derefed % fail?) (same :service (deref a) (deref %)))))
+
+(defn active-service-neighbours [a]
+  (select (surrounding a) :where #(and (derefed % active?)
+                                       (same :service
+                                             (deref a)
+                                             (deref %)))))
+
+(defn files-dsv-*-data-cod-ru-schedule-strategy [strategy]
   (fn scheduled-strategy [{:as a-stgy :keys [max-active-agents]}]
-    (let [idle-successor
-          (fn [] (first
-                 (select-from (agents (env *agent*))
-                              :order-by #(derefed % :precedence)
-                              :where #(and (derefed % idle?)
-                                           (same :service
-                                                 (deref *agent*)
-                                                 (deref %))))))
+    (cond (not *agent*) (strategy a-stgy)
 
-          alive-successor-after
-          (fn [] (first  
-                 (select-from (agents (env *agent*)) :entirely-after *agent*
-                              :order-by #(derefed % :precedence)
-                              :where #(and (derefed % alive?)
-                                           (same :service
-                                                 (deref *agent*)
-                                                 (deref %))))))
+          (>= (count (active-service-neighbours *agent*))
+              max-active-agents)
+          pass
 
-          run-idle-or-alive-successor-after
-          (fn [] (let [idle (idle-successor)
-                      alive-after (alive-successor-after)]
-                  (boolean (when (or idle alive-after)
-                             (send-off (or idle alive-after) run)))))
-
-          try-to-terminate-environment
-          (fn [] (when-let [e (env *agent*)]
-                  (when (download-environment-is-done? e)
-                    (terminate-download-environment e))))
-
-          active-same-service-agents
-          (fn [] (seq (select-from (surrounding *agent*)
-                                  :where #(and (derefed % active?)
-                                               (same :service
-                                                     (deref *agent*)
-                                                     (deref %))))))
-
-          sleep-after-fail
-          (fn [] (send-off *agent* sleep timeout-after-fail*))
-
-          proceed
-          (fn [] (send-off *agent* run))]
-      (cond (not *agent*) (strategy a-stgy)
-
-            (not max-active-agents)
-            (fn scheduled-action [a]
-              (let-return
-               [new-a ((strategy a) a)]
-               (cond (dead? new-a) (or (run-idle-or-alive-successor-after)
-                                       (try-to-terminate-environment))
-                     (fail? new-a) (do (sleep-after-fail)
-                                       (proceed))
-                     :else         (proceed))))
-
-            (and (pos? max-active-agents)
-                 (> (count (active-same-service-agents)) max-active-agents))
-            pass
-
-            (pos? max-active-agents)
-            (fn scheduled-action [a]
-              (let-return
-               [new-a ((strategy a) a)]
-               (cond (dead? new-a) (or (run-idle-or-alive-successor-after)
-                                       (try-to-terminate-environment))
-                     (fail? new-a) (do (sleep-after-fail)
-                                       (run-idle-or-alive-successor-after))
-                     :else         (proceed))))))))
+          :else
+          (fn scheduled-action [a]
+            (let [new-a ((strategy a) a)
+                  successor (or (first (idle-service-successors *agent*))
+                                (first (failed-service-successors-after *agent*)))]
+              (with-return new-a
+                (cond (dead? new-a) (do (when successor (send-off successor run)))
+                      (fail? new-a) (do (when successor (send-off successor run))
+                                        (send-off *agent* sleep timeout-after-fail*)
+                                        (send-off *agent* run))
+                      :else         (do (send-off *agent* run)))))))))
 
 (defservice data-cod-ru
   :address-pattern #"http://[\w\-]*.data.cod.ru/\d+"
-  :strategy (schedule-strategy data-cod-ru-reflex-strategy)
+  :strategy (data-cod-ru-schedule-strategy data-cod-ru-reflex-strategy)
   :body #(hash-map :address nil :link nil :child nil))
 
 (defservice files3?-dsv-*-data-cod-ru
   :address-pattern #"http://files3?.dsv.*.data.cod.ru/.+"
-  :strategy (schedule-strategy files-dsv-*-data-cod-ru-reflex-strategy)
+  :strategy (files-dsv-*-data-cod-ru-schedule-strategy files-dsv-*-data-cod-ru-reflex-strategy)
   :max-active-agents 1
   :body #(hash-map :address nil :name nil :file nil :path nil
                    :total-size nil :file-size-atom (atom nil)))
 
 (defservice files2-dsv-*-data-cod-ru
   :address-pattern #"http://files2.dsv.*.data.cod.ru/.+"
-  :strategy (schedule-strategy files-dsv-*-data-cod-ru-reflex-strategy)
+  :strategy (files-dsv-*-data-cod-ru-schedule-strategy files-dsv-*-data-cod-ru-reflex-strategy)
   :max-active-agents 1
   :body #(hash-map :address nil :name nil :file nil :path nil
                    :total-size nil :file-size-atom (atom nil)))
