@@ -23,6 +23,7 @@
   
   (:import
    java.util.Date
+   java.net.URLDecoder
    (java.io File
             FileOutputStream
             InputStream)))
@@ -309,7 +310,11 @@
 (defn fail?   [a] (state? a :failed))
 
 (defn pass    [a] a)
-(defn idle    [a] (state! a :idle))
+
+(defn idle [a]
+  (with-return a
+    (state! a :idle)
+    (fail-reason! a nil)))
 
 (defn fail [a & {:as opts :keys [reason]}]
   (with-return a
@@ -328,8 +333,8 @@
   (if (dead? a) a
       (try (state! a :running)
            (try (let [a1 (action a)]
-                  (cond (active? a1) (state! a1 :idle)
-                        :else a1))
+                  (cond (active? a1) (idle a1)
+                        :else        a1))
                 (catch AssertionError err
                   (fail a :reason err))
                 (catch Exception err
@@ -414,7 +419,7 @@
              (let [content-length (Integer/parseInt
                                    (.. head (getResponseHeader "Content-Length") (getValue)))
                    content-disposition (.. head (getResponseHeader "Content-Disposition") (getValue))
-                   filename (second (re-find #"; filename=\"(.*)\"" content-disposition))]
+                   filename (URLDecoder/decode (second (re-find #"; filename=\"(.*)\"" content-disposition)))]
                (if-not (and content-length filename) (die a)
                        (idle (merge a {:total-size content-length}
                                     (when (not name) {:name filename})))))
@@ -484,37 +489,37 @@
                    :else         (do (send-off *agent* run))))))))
 
 (defn idle-service-successors [a]
-  (select (surrounding a) :order-by #(derefed % :precedence)
+  (select (agents (env a)) :order-by #(derefed % :precedence)
           :where #(and (derefed % idle?) (same :service (deref a) (deref %)))))
 
 (defn failed-service-successors-after [a]
-  (select (surrounding a) :entirely-after a :order-by #(derefed % :precedence)
+  (select (agents (env a)) :entirely-after a :order-by #(derefed % :precedence)
           :where #(and (derefed % fail?) (same :service (deref a) (deref %)))))
 
+(defn alive-service-successors-after [a]
+  (select (agents (env a)) :entirely-after a :order-by #(derefed % :precedence)
+          :where #(and (derefed % alive?) (same :service (deref a) (deref %)))))
+
 (defn active-service-neighbours [a]
-  (select (surrounding a) :where #(and (derefed % active?)
-                                       (same :service
-                                             (deref a)
-                                             (deref %)))))
+  (select (surrounding a) :where #(and (same :service (deref %) (deref a))
+                                       (derefed % active?))))
 
 (defn files-dsv-*-data-cod-ru-schedule-strategy [strategy]
-  (fn scheduled-strategy [{:as a-stgy :keys [max-active-agents]}]
+  (fn scheduled-strategy [{:as a-stgy :keys [max-active-agents service]}]
     (cond (not *agent*) (strategy a-stgy)
 
-          (>= (count (active-service-neighbours *agent*))
-              max-active-agents)
-          pass
+          (> (count (active-service-neighbours *agent*)) max-active-agents) idle
 
           :else
           (fn scheduled-action [a]
             (let [new-a ((strategy a) a)
                   successor (or (first (idle-service-successors *agent*))
-                                (first (failed-service-successors-after *agent*)))]
+                                (first (failed-service-successors-after *agent*))
+                                (first (alive-service-successors-after *agent*)))]
               (with-return new-a
                 (cond (dead? new-a) (do (when successor (send-off successor run)))
-                      (fail? new-a) (do (when successor (send-off successor run))
-                                        (send-off *agent* sleep timeout-after-fail*)
-                                        (send-off *agent* run))
+                      (fail? new-a) (do (send-off *agent* sleep timeout-after-fail*)
+                                        (when successor (send-off successor run)))
                       :else         (do (send-off *agent* run)))))))))
 
 (defservice data-cod-ru
@@ -525,6 +530,7 @@
 (defservice files3?-dsv-*-data-cod-ru
   :address-pattern #"http://files3?.dsv.*.data.cod.ru/.+"
   :strategy (files-dsv-*-data-cod-ru-schedule-strategy files-dsv-*-data-cod-ru-reflex-strategy)
+  ;; :strategy files-dsv-*-data-cod-ru-reflex-strategy
   :max-active-agents 1
   :body #(hash-map :address nil :name nil :file nil :path nil
                    :total-size nil :file-size-atom (atom nil)))
@@ -532,6 +538,7 @@
 (defservice files2-dsv-*-data-cod-ru
   :address-pattern #"http://files2.dsv.*.data.cod.ru/.+"
   :strategy (files-dsv-*-data-cod-ru-schedule-strategy files-dsv-*-data-cod-ru-reflex-strategy)
+  ;; :strategy files-dsv-*-data-cod-ru-reflex-strategy
   :max-active-agents 1
   :body #(hash-map :address nil :name nil :file nil :path nil
                    :total-size nil :file-size-atom (atom nil)))
