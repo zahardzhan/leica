@@ -522,7 +522,6 @@
 
 (defservice data-cod-ru
   :address-pattern #"http://[\w\-]*.data.cod.ru/\d+"
-  ;; :strategy (data-cod-ru-schedule-strategy data-cod-ru-reflex-strategy)
   :strategy data-cod-ru-strategy
   :body #(hash-map :address nil :link nil :child nil))
 
