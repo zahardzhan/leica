@@ -12,7 +12,8 @@
    [clojure.set :only [difference union]]
    clojure.test
    clojure.contrib.def
-   clojure.contrib.command-line)
+   clojure.contrib.command-line
+   hooks)
   
   (:require
    [clojure.contrib.http.agent :as http]
@@ -66,7 +67,7 @@
     (.setLevel console-handler log-level)
     (.setLevel root-logger log-level)))
 
-(set-root-logger-log-level (Level/FINE)) ;; Log to console DEBUG messages
+(set-root-logger-log-level (Level/FINE))
 
 (defn same [f & xs]
   (apply = (map f xs)))
@@ -156,13 +157,14 @@
         maybe-take-entirely-after #(if entirely-after
                                      (take-entirely-after entirely-after) %)
         maybe-filter-where #(if where (filter where %) %)
-        maybe-order-by #(if order-by (sort order-by %) %)]
-    (-> (seq collection)
-        maybe-take-entirely-after
-        maybe-take-after
-        maybe-take-before
-        maybe-filter-where
-        maybe-order-by)))
+        maybe-order-by #(if order-by (sort-by order-by %) %)]
+    (when (seq collection)
+      (-> (seq collection)
+          maybe-take-entirely-after
+          maybe-take-after
+          maybe-take-before
+          maybe-filter-where
+          maybe-order-by))))
 
 (defn make-environment []
   {:agents-ref (ref #{})})
@@ -285,8 +287,8 @@
   (deref state-atom))
 
 (defn state! [{:as a state-atom :state-atom} new-state]
-  {:pre [(({:idle     #{:running}
-            :failed   #{:running}
+  {:pre [(({:idle     #{:dead :idle :failed :running}
+            :failed   #{:dead :idle :failed :running}
             :dead     #{}
             :running  #{:stopping :idle :failed :dead}
             :stopping #{:idle :failed :dead}}
@@ -303,11 +305,12 @@
 (defn fail-reason! [{:as a fail-reason-atom :fail-reason-atom} reason]
   (with-return a (reset! fail-reason-atom reason)))
 
-(defn dead?   [a] (state? a :dead))
-(defn alive?  [a] (not (dead? a)))
-(defn active? [a] (state? a #{:running :stopping}))
-(defn idle?   [a] (state? a :idle))
-(defn fail?   [a] (state? a :failed))
+(defn dead?    [a] (state? a :dead))
+(defn alive?   [a] (not (dead? a)))
+(defn active?  [a] (state? a #{:running :stopping}))
+(defn passive? [a] (not (active? a)))
+(defn idle?    [a] (state? a :idle))
+(defn fail?    [a] (state? a :failed))
 
 (defn pass    [a] a)
 
@@ -326,24 +329,20 @@
 (defn sleep   [a millis]
   (with-return a (Thread/sleep millis)))
 
-(defn get-action [{:as a strategy :strategy}]
-  (strategy a))
+(defn run [{:as a :keys [strategy]}]
+  (. System/out println (str "Run" \space (:service a) \space (:precedence a)))
+  (cond (dead? a) a
 
-(defn execute [a action]
-  (if (dead? a) a
-      (try (state! a :running)
-           (try (let [a1 (action a)]
-                  (cond (active? a1) (idle a1)
-                        :else        a1))
-                (catch AssertionError err
-                  (fail a :reason err))
-                (catch Exception err
-                  (fail a :reason err)))
-           (catch AssertionError err
-             (fail a :reason err)))))
+        (active? a) (fail a :reason "Cannot run agent - it is running.")
 
-(defn run [a]
-  (execute a (get-action a)))
+        (passive? a)
+        (let [action (ref nil)]
+          (dosync (state! a :running)
+                  (ref-set action (strategy a)))
+          (try (let-return [acted (@action a)]
+                           (when (active? acted) (idle a)))
+               (catch Exception err
+                 (fail a :reason err))))))
 
 (defn file-size [{:as a file-size-atom :file-size-atom}]
   (deref file-size-atom))
@@ -363,7 +362,7 @@
 
 (defn get-file [{:as a :keys [name path]}]
   {:pre [(supplied name path)]}
-  (idle (assoc a :file (new File path name))))
+  (assoc a :file (new File path name)))
 
 (defvar- timeout-after-fail*        3000)
 (defvar- connection-timeout*       15000)
@@ -391,20 +390,20 @@
                 (fail a :reason "Downloading file size mismatch.")
 
                 :else
-                (with-open [#^InputStream input (.getResponseBodyAsStream get)
-                            #^FileOutputStream output (FileOutputStream. file true)]
-                  (log/info (str "Begin downloading " name))
-                  (let [buffer (make-array Byte/TYPE buffer-size*)]
-                    (loop [file-size (actual-file-length file)]
-                      (let [read-size (.read input buffer)]
-                        (when (pos? read-size)
-                          (let [new-size (+ file-size read-size)]
-                            (.write output buffer 0 read-size)
-                            (reset! file-size-atom new-size)
-                            (recur new-size)))))
-                    (.flush output))
-                  (log/info (str "End downloading " name))
-                  (idle a))))
+                (with-return a
+                  (with-open [#^InputStream input (.getResponseBodyAsStream get)
+                              #^FileOutputStream output (FileOutputStream. file true)]
+                    (log/info (str "Begin downloading " name))
+                    (let [buffer (make-array Byte/TYPE buffer-size*)]
+                      (loop [file-size (actual-file-length file)]
+                        (let [read-size (.read input buffer)]
+                          (when (pos? read-size)
+                            (let [new-size (+ file-size read-size)]
+                              (.write output buffer 0 read-size)
+                              (reset! file-size-atom new-size)
+                              (recur new-size)))))
+                      (.flush output))
+                    (log/info (str "End downloading " name))))))
         (finally (do (.releaseConnection get)))))))
 
 (defn files-dsv-*-data-cod-ru-get-head [{:as a :keys [address name]}]
@@ -421,72 +420,19 @@
                    content-disposition (.. head (getResponseHeader "Content-Disposition") (getValue))
                    filename (URLDecoder/decode (second (re-find #"; filename=\"(.*)\"" content-disposition)))]
                (if-not (and content-length filename) (die a)
-                       (idle (merge a {:total-size content-length}
-                                    (when (not name) {:name filename})))))
+                       (merge a {:total-size content-length}
+                              (when (not name) {:name filename}))))
              (fail a :reason "HEAD request failed.")))
          (finally (.releaseConnection head)))))
-
-(defn files-dsv-*-data-cod-ru-reflex-strategy
-  [{:as a :keys [address name file path total-size]}]
-  (cond (not address)                 die
-        (not (and name total-size))   files-dsv-*-data-cod-ru-get-head
-        (not file)                    get-file
-        (or (out-of-space-on-path? a) (fully-loaded? a)) die
-        :else                         download))
-
-(defn data-cod-ru-parse-page [{:as a :keys [address]}]
-  {:pre [(supplied address)]}
-  (let [client (new HttpClient)
-        get (new GetMethod address)]
-    (.. client getHttpConnectionManager getParams 
-        (setConnectionTimeout connection-timeout*))
-    (.. get getParams (setSoTimeout get-request-timeout*))
-    (try (let [status (.executeMethod client get)]
-           (if (= status HttpStatus/SC_OK)
-             (let [link (re-find #"http://files[-\d\w\.]*data.cod.ru/[^\"]+"
-                                 (duck/slurp* (.getResponseBodyAsStream get)))]
-               (if link (idle (assoc a :link link))
-                   (die a)))
-             (fail a)))
-         (catch Exception e (fail a))
-         (finally (.releaseConnection get)))))
-
-(defn data-cod-ru-make-child-agent [{:as a :keys [link path precedence]}]
-  {:pre [(supplied link path precedence (env a))]}
-  (let [child (make-download-agent link :environment (env a)
-                                   :precedence precedence
-                                   :path path)]
-    (if-not child (die a)
-            (do (send-off child run)
-                (idle (assoc a :child child))))))
-
-(defn data-cod-ru-reflex-strategy [{:as a :keys [address link child]}]
-  (cond (not (and address (env a))) die
-        (not link)     data-cod-ru-parse-page
-        (not child)    data-cod-ru-make-child-agent
-        :else          die))
 
 (defn download-environment-is-done? [e]
   (every? #(derefed % dead?) (agents e)))
 
 (defn terminate-download-environment [e] nil)
 
-(defn try-to-terminate-environment [e]
+(defn try-to-terminate-download-environment [e]
   (when (download-environment-is-done? e)
     (terminate-download-environment e)))
-
-(defn data-cod-ru-schedule-strategy [strategy]
-  (fn scheduled-strategy [{:as a-stgy}]
-    (cond (not *agent*) (strategy a-stgy)
-
-          :else
-          (fn scheduled-action [a]
-            (let-return
-             [new-a ((strategy a) a)]
-             (cond (dead? new-a) (do nothing)
-                   (fail? new-a) (do (send-off *agent* sleep timeout-after-fail*)
-                                     (send-off *agent* run))
-                   :else         (do (send-off *agent* run))))))))
 
 (defn idle-service-successors [a]
   (select (agents (env a)) :order-by #(derefed % :precedence)
@@ -500,27 +446,83 @@
   (select (agents (env a)) :entirely-after a :order-by #(derefed % :precedence)
           :where #(and (derefed % alive?) (same :service (deref a) (deref %)))))
 
-(defn active-service-neighbours [a]
-  (select (surrounding a) :where #(and (same :service (deref %) (deref a))
-                                       (derefed % active?))))
+(defn active-service-agents [service environment]
+  (select (agents environment) :where #(and (= service (derefed % :service))
+                                            (derefed % active?))))
 
-(defn files-dsv-*-data-cod-ru-schedule-strategy [strategy]
-  (fn scheduled-strategy [{:as a-stgy :keys [max-active-agents service]}]
-    (cond (not *agent*) (strategy a-stgy)
-
-          (> (count (active-service-neighbours *agent*)) max-active-agents) idle
-
+(defn files-dsv-*-data-cod-ru-strategy
+  [{:as a :keys [address name file path total-size service max-active-agents]}]
+  (let [schedule
+        (fn [action body]
+          (let [new-body (action body)]
+            (with-return new-body
+              (when *agent*
+                (let [successor (or (first (idle-service-successors *agent*))
+                                    (first (failed-service-successors-after *agent*))
+                                    (first (alive-service-successors-after *agent*)))]
+                  (cond (dead? new-body)  (do (when successor (send-off successor run)))
+                        (fail? new-body)  (do (send-off *agent* sleep timeout-after-fail*)
+                                              (when successor (send-off successor run)))
+                        :else             (do (send-off *agent* run))))))))]
+    (cond (not address)
+          (add-hook die schedule)
+          
+          (> (count (active-service-agents service (env a))) max-active-agents)
+          pass
+        
+          (not (and name total-size))
+          (add-hook files-dsv-*-data-cod-ru-get-head schedule)
+          
+          (not file)
+          (add-hook get-file schedule)
+          
+          (or (out-of-space-on-path? a) (fully-loaded? a))
+          (add-hook die schedule)
+          
           :else
-          (fn scheduled-action [a]
-            (let [new-a ((strategy a) a)
-                  successor (or (first (idle-service-successors *agent*))
-                                (first (failed-service-successors-after *agent*))
-                                (first (alive-service-successors-after *agent*)))]
-              (with-return new-a
-                (cond (dead? new-a) (do (when successor (send-off successor run)))
-                      (fail? new-a) (do (send-off *agent* sleep timeout-after-fail*)
-                                        (when successor (send-off successor run)))
-                      :else         (do (send-off *agent* run)))))))))
+          (add-hook download schedule))))
+
+(defn data-cod-ru-parse-page [{:as a :keys [address]}]
+  {:pre [(supplied address)]}
+  (let [client (new HttpClient)
+        get (new GetMethod address)]
+    (.. client getHttpConnectionManager getParams 
+        (setConnectionTimeout connection-timeout*))
+    (.. get getParams (setSoTimeout get-request-timeout*))
+    (try (let [status (.executeMethod client get)]
+           (if (= status HttpStatus/SC_OK)
+             (let [link (re-find #"http://files[-\d\w\.]*data.cod.ru/[^\"]+"
+                                 (duck/slurp* (.getResponseBodyAsStream get)))]
+               (if link (assoc a :link link)
+                   (die a)))
+             (fail a)))
+         (catch Exception e (fail a))
+         (finally (.releaseConnection get)))))
+
+(defn data-cod-ru-make-child-agent [{:as a :keys [link path precedence]}]
+  {:pre [(supplied link path precedence (env a))]}
+  (let [child (make-download-agent link :environment (env a)
+                                   :precedence precedence
+                                   :path path)]
+    (if-not child (die a)
+            (do (send-off child run)
+                (assoc a :child child)))))
+
+(defn data-cod-ru-reflex-strategy [{:as a :keys [address link child]}]
+  (cond (not (and address (env a))) die
+        (not link)     data-cod-ru-parse-page
+        (not child)    data-cod-ru-make-child-agent
+        :else          die))
+
+(defn data-cod-ru-schedule-strategy [strategy]
+  (fn scheduled-strategy [{:as a-stgy}]
+    (fn scheduled-action [a]
+      (let-return
+       [new-a ((strategy a) a)]
+       (cond (dead? new-a) (do nothing)
+             (fail? new-a) (do (send-off *agent* sleep timeout-after-fail*)
+                               (send-off *agent* run))
+             :else         (do (send-off *agent* run)))))))
 
 (defservice data-cod-ru
   :address-pattern #"http://[\w\-]*.data.cod.ru/\d+"
@@ -529,16 +531,14 @@
 
 (defservice files3?-dsv-*-data-cod-ru
   :address-pattern #"http://files3?.dsv.*.data.cod.ru/.+"
-  :strategy (files-dsv-*-data-cod-ru-schedule-strategy files-dsv-*-data-cod-ru-reflex-strategy)
-  ;; :strategy files-dsv-*-data-cod-ru-reflex-strategy
+  :strategy files-dsv-*-data-cod-ru-strategy
   :max-active-agents 1
   :body #(hash-map :address nil :name nil :file nil :path nil
                    :total-size nil :file-size-atom (atom nil)))
 
 (defservice files2-dsv-*-data-cod-ru
   :address-pattern #"http://files2.dsv.*.data.cod.ru/.+"
-  :strategy (files-dsv-*-data-cod-ru-schedule-strategy files-dsv-*-data-cod-ru-reflex-strategy)
-  ;; :strategy files-dsv-*-data-cod-ru-reflex-strategy
+  :strategy files-dsv-*-data-cod-ru-strategy
   :max-active-agents 1
   :body #(hash-map :address nil :name nil :file nil :path nil
                    :total-size nil :file-size-atom (atom nil)))
