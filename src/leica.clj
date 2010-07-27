@@ -160,11 +160,11 @@
         maybe-order-by #(if order-by (sort-by order-by %) %)]
     (when (seq collection)
       (-> (seq collection)
+          maybe-order-by
           maybe-take-entirely-after
           maybe-take-after
           maybe-take-before
-          maybe-filter-where
-          maybe-order-by))))
+          maybe-filter-where))))
 
 (defn make-environment []
   {:agents-ref (ref #{})})
@@ -287,11 +287,11 @@
   (deref state-atom))
 
 (defn state! [{:as a state-atom :state-atom} new-state]
-  {:pre [(({:idle     #{:dead :idle :failed :running}
-            :failed   #{:dead :idle :failed :running}
+  {:pre [(({:idle     #{:idle :failed :dead :running}
+            :failed   #{:idle :failed :dead :running}
             :dead     #{}
-            :running  #{:stopping :idle :failed :dead}
-            :stopping #{:idle :failed :dead}}
+            :running  #{:running :stopping :idle :failed :dead}
+            :stopping #{:stopping :idle :failed :dead}}
            (state a)) new-state)]}
   (with-return a (reset! state-atom new-state)))
 
@@ -464,8 +464,7 @@
                         (fail? new-body)  (do (send-off *agent* sleep timeout-after-fail*)
                                               (when successor (send-off successor run)))
                         :else             (do (send-off *agent* run))))))))]
-    (cond (not address)
-          (add-hook die schedule)
+    (cond (not address) (add-hook die schedule)
           
           (> (count (active-service-agents service (env a))) max-active-agents)
           pass
@@ -473,14 +472,12 @@
           (not (and name total-size))
           (add-hook files-dsv-*-data-cod-ru-get-head schedule)
           
-          (not file)
-          (add-hook get-file schedule)
+          (not file) (add-hook get-file schedule)
           
           (or (out-of-space-on-path? a) (fully-loaded? a))
           (add-hook die schedule)
           
-          :else
-          (add-hook download schedule))))
+          :else (add-hook download schedule))))
 
 (defn data-cod-ru-parse-page [{:as a :keys [address]}]
   {:pre [(supplied address)]}
@@ -508,25 +505,25 @@
             (do (send-off child run)
                 (assoc a :child child)))))
 
-(defn data-cod-ru-reflex-strategy [{:as a :keys [address link child]}]
-  (cond (not (and address (env a))) die
-        (not link)     data-cod-ru-parse-page
-        (not child)    data-cod-ru-make-child-agent
-        :else          die))
-
-(defn data-cod-ru-schedule-strategy [strategy]
-  (fn scheduled-strategy [{:as a-stgy}]
-    (fn scheduled-action [a]
-      (let-return
-       [new-a ((strategy a) a)]
-       (cond (dead? new-a) (do nothing)
-             (fail? new-a) (do (send-off *agent* sleep timeout-after-fail*)
-                               (send-off *agent* run))
-             :else         (do (send-off *agent* run)))))))
+(defn data-cod-ru-strategy [{:as a :keys [address link child]}]
+  (let [schedule
+        (fn [action body]
+          (let [new-body (action body)]
+            (with-return new-body
+              (when *agent*
+                (cond (dead? new-body) (do nothing)
+                      (fail? new-body) (do (send-off *agent* sleep timeout-after-fail*)
+                                           (send-off *agent* run))
+                      :else            (do (send-off *agent* run)))))))]
+    (cond (not (and address (env a))) die
+          (not link)     (add-hook data-cod-ru-parse-page schedule)
+          (not child)    (add-hook data-cod-ru-make-child-agent schedule)
+          :else          die)))
 
 (defservice data-cod-ru
   :address-pattern #"http://[\w\-]*.data.cod.ru/\d+"
-  :strategy (data-cod-ru-schedule-strategy data-cod-ru-reflex-strategy)
+  ;; :strategy (data-cod-ru-schedule-strategy data-cod-ru-reflex-strategy)
+  :strategy data-cod-ru-strategy
   :body #(hash-map :address nil :link nil :child nil))
 
 (defservice files3?-dsv-*-data-cod-ru
