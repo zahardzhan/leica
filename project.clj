@@ -4,10 +4,10 @@
   :autodoc {:name "Leica", :page-title "Leica API documentation"}
   :dependencies     [[org.clojure/clojure "1.2.0-master-SNAPSHOT"]
                      [org.clojure/clojure-contrib "1.2.0-SNAPSHOT"]
-                     [ahc-clj "0.1.1"]
                      [hooks "1.0.0"]
-                     [commons-codec "1.4"]
+                     [fn    "1.0.0"]
+                     [commons-codec      "1.4"]
                      [commons-httpclient "3.1"]
-                     [commons-logging "1.1.1"]]
+                     [commons-logging    "1.1.1"]]
   :dev-dependencies [[swank-clojure "1.2.1"]]
   :main leica)
