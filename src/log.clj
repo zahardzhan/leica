@@ -16,7 +16,7 @@
 
 (defvar *log-levels* #{:trace :debug :info :warn :error :fatal})
 
-(defn log-level? [maybe-level]
+(defn- log-level? [maybe-level]
   (boolean (*log-levels* maybe-level)))
 
 (defn- make-logging-agent
@@ -75,7 +75,7 @@
 (defn error [message] (log :error message))
 (defn fatal [message] (log :fatal message))
 
-(defn set-log [& {:keys [enable-levels disable-levels format]}]
+(defn set-log [& {:keys [levels enable-levels disable-levels format]}]
   (let [namespace *ns*]
     (when-not (logging-agent-set? namespace)
       (setup-logging-agent namespace (make-logging-agent)))
@@ -83,6 +83,9 @@
       (apply enable-log-level! namespace enable-levels))
     (when (seq disable-levels)
       (apply disable-log-level! namespace disable-levels))
+    (when (seq levels)
+      (apply disable-log-level! namespace *log-levels*)
+      (apply enable-log-level! namespace levels))
     (when (ifn? format)
       (set-format-message! namespace format))))
 

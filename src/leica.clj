@@ -10,77 +10,54 @@
   (:gen-class)
   (:use
    [clojure.set :only [difference union]]
-   clojure.test
-   clojure.contrib.def
    clojure.contrib.command-line
-   hooks)
+   clojure.contrib.def
+   clojure.test
+   hooks
+   log)
   
   (:require
    [clojure.contrib.http.agent :as http]
-   [clojure.contrib.logging :as log]
    [clojure.contrib.duck-streams :as duck]
-   [async.http.client :as HTTP]
    fn)
   
   (:import
-   java.util.Date
-   java.net.URLDecoder
+   (java.util Date)
+
+   (java.net URLDecoder
+             ConnectException)   
+
    (java.io File
             FileOutputStream
-            InputStream)))
+            InputStream)
 
-(import '(java.util.logging Logger
-                            Level
-                            Formatter
-                            LogRecord
-                            StreamHandler))
-
-(import 'java.net.ConnectException)
-
-(import '(org.apache.commons.httpclient URI
-                                        HttpClient
-                                        HttpStatus
-                                        ConnectTimeoutException 
-                                        NoHttpResponseException))
-
-(import '(org.apache.commons.httpclient.methods GetMethod HeadMethod))
-(import '(org.apache.commons.httpclient.params HttpMethodParams))
-(import '(org.apache.commons.httpclient.util EncodingUtil))
+   (org.apache.commons.httpclient URI
+                                  HttpClient
+                                  HttpStatus
+                                  ConnectTimeoutException 
+                                  NoHttpResponseException
+                                  methods.GetMethod
+                                  methods.HeadMethod
+                                  params.HttpMethodParams
+                                  util.EncodingUtil)))
 
 (defmethod print-method clojure.lang.Delay
-  [x w] ;; Don't print/eval delays
-  ((get-method print-method Object) x w))
-
-(defn set-root-logger-log-level [log-level]
-  (let [root-logger (Logger/getLogger "")
-        console-handler (first (.getHandlers root-logger))
-        date-formatter (java.text.SimpleDateFormat. "HH:mm:ss")
-        log-formatter
-        (proxy [Formatter] []
-          (format [#^LogRecord record]
-                  (str \return
-                       (.format date-formatter (Date. (.getMillis record)))
-                       \space
-                       (.getMessage record)
-                       \newline)))]
-    (.setFormatter console-handler log-formatter)
-    (.setLevel console-handler log-level)
-    (.setLevel root-logger log-level)))
-
-(set-root-logger-log-level (Level/FINE))
+  [x w] ((get-method print-method Object) x w)) ;; Don't print/eval delays
 
 (defn same [f & xs]
   (apply = (map f xs)))
 
-(defmacro with-return
-  [expr & body]
+(defmacro with-return [expr & body]
   `(do (do ~@body)
        ~expr))
 
-(defmacro let-return 
-  [[form val] & body]
+(defmacro let-return [[form val] & body]
   `(let [~form ~val]
      (with-return ~form (do ~@body))))
+
+(defmacro defhook [name qualifier target args & body]
+  (let [key# (keyword name)]
+    `(add-hook ~qualifier ~target ~key# (fn ~args ~@body))))
 
 (defn derefed
   ([] nil)
@@ -88,8 +65,7 @@
   ([x f] (f (derefed x)))
   ([x f & fs] ((apply comp (reverse fs)) (derefed x f))))
 
-(defmacro with-deref 
-  [[ref & refs] & body]
+(defmacro with-deref [[ref & refs] & body]
   (if ref
     `(let [~ref (derefed ~ref)]
        (with-deref ~refs ~@body))
@@ -169,24 +145,29 @@
 (defn make-environment []
   {:agents-ref (ref #{})})
 
-(defn agents "The agents belonging to this environment." [e]
-  (when e (deref (:agents-ref e))))
+(defn agents
+  "The agents belonging to this environment."
+  [e] (when e (deref (:agents-ref e))))
 
 (declare bind unbind)
 
 (defn make-agent [{:as opts :keys [environment]}]
   (let [a (agent (merge (dissoc opts :environment)
-                        {:env-ref (delay (ref environment))}))]
+                        {:env-ref (delay (ref environment))})
+                 :error-mode :fail)]
     (with-return a
       (when environment (bind a environment)))))
 
-(defn env "The environment belonging to this agent." [a]
-  (when a (derefed a :env-ref force deref)))
+(defn env
+  "The environment belonging to this agent."
+  [a] (when a (derefed a :env-ref force deref)))
 
-(defn surrounding "The agents belonging to environment this agent belonging to."
+(defn surrounding
+  "The agents belonging to environment this agent belonging to."
   [a] (when-let [e (env a)] (difference (agents e) #{a})))
 
-(defn binded? "Agent is binded to environment and vice-versa?"
+(defn binded?
+  "Agent is binded to environment and vice-versa?"
   ([a]   (boolean (when-let [ags (agents (env a))] (ags a))))
   ([a e] (and (identical? e (env a)) (binded? a))))
 
@@ -271,94 +252,125 @@
                         name         (string? name))]}
   (when-let [body (make-download-agent-body line)]
     (make-agent (merge body
-                       {:state-atom (atom :idle)
-                        :fail-reason-atom (atom nil)
-                        :precedence (or precedence (swap! *precedence* inc))}
+                       {:precedence (or precedence (swap! *precedence* inc))
+                        :run-atom (atom false)
+                        :alive true
+                        :fail-atom (atom nil)
+                        :goal-atom (atom nil)}
                        (when environment {:environment environment})
                        (when strategy {:strategy strategy})
                        (when path {:path (as-file path)})
                        (when name {:name name})))))
 
+(defn download-agent-to-str
+  "TODO: String representation of agent."
+  [a] (derefed a str))
+
 (deftest make-download-agent-test
   (is (= "http://files.dsv.data.cod.ru/asdg"
-         (:address @(make-download-agent "a http://files.dsv.data.cod.ru/asdg g")))))
+         (:address @(make-download-agent
+                     "a http://files.dsv.data.cod.ru/asdg g")))))
 
-(defn state [{:as a state-atom :state-atom}]
-  (deref state-atom))
+(defn precedence [a]
+  (derefed a :precedence))
 
-(defn state! [{:as a state-atom :state-atom} new-state]
-  {:pre [(({:idle     #{:idle :failed :dead :running}
-            :failed   #{:idle :failed :dead :running}
-            :dead     #{}
-            :running  #{:running :stopping :idle :failed :dead}
-            :stopping #{:stopping :idle :failed :dead}}
-           (state a)) new-state)]}
-  (with-return a (reset! state-atom new-state)))
+(defn strategy [a]
+  (derefed a :strategy))
 
-(defn state? [a in-state]
-  (cond (keyword? in-state) (= in-state (state a))
-        (set? in-state)     (keyword? (in-state (state a)))))
+(defn goal [a]
+  (derefed a :goal-atom deref))
 
-(defn fail-reason [{:as a fail-reason-atom :fail-reason-atom}]
-  (deref fail-reason-atom))
+(defn goal! [a new-goal]
+  (reset! (derefed a :goal-atom) new-goal))
 
-(defn fail-reason! [{:as a fail-reason-atom :fail-reason-atom} reason]
-  (with-return a (reset! fail-reason-atom reason)))
+(defn agent-fail [a]
+  (derefed a :fail-atom deref))
 
-(defn dead?    [a] (state? a :dead))
-(defn alive?   [a] (not (dead? a)))
-(defn active?  [a] (state? a #{:running :stopping}))
-(defn passive? [a] (not (active? a)))
-(defn idle?    [a] (state? a :idle))
-(defn fail?    [a] (state? a :failed))
+(defn failed? [a]
+  (boolean (agent-fail a)))
 
-(defn pass    [a] a)
+(defn alive? [a]
+  (derefed a :alive))
 
-(defn idle [a]
-  (with-return a
-    (state! a :idle)
-    (fail-reason! a nil)))
+(defn dead? [a]
+  (not (alive? a)))
 
-(defn fail [a & {:as opts :keys [reason]}]
-  (with-return a
-    (state! a :failed)
-    (when reason (fail-reason! a reason))))
+(defn run? [a]
+  (derefed a :run-atom deref))
 
-(defn die     [a] (state! a :dead))
+(defn idle? [a]
+  (and (alive? a) (not (run? a))))
 
-(defn sleep   [a millis]
-  (with-return a (Thread/sleep millis)))
+(defn succeeded [agents]
+  (remove agent-error agents))
 
-(defn run [{:as a :keys [strategy]}]
-  (. System/out println (str "Run" \space (:service a) \space (:precedence a)))
-  (cond (dead? a) a
+(defn stop [a]
+  (goal! a :stop))
 
-        (active? a) (fail a :reason "Cannot run agent - it is running.")
+(defn run [{:as a :keys [strategy run-atom fail-atom]}]
+  (when (and (not *agent*) (run? a))
+    (throw (Exception. "Cannot run agent while it is running.")))
+  
+  (debug (str "Run " (download-agent-to-str a)))
 
-        (passive? a)
-        (let [action (ref nil)]
-          (dosync (state! a :running)
-                  (ref-set action (strategy a)))
-          (try (let-return [acted (@action a)]
-                           (when (active? acted) (idle a)))
-               (catch Exception err
-                 (fail a :reason err))))))
+  (if (dead? a) a
+      (try (reset! run-atom true)
+           (let [action (strategy a)]
+             (with-return (action a)
+               (reset! fail-atom nil)))
+           (catch Error e
+             (error (str "Error:" \newline
+                         (download-agent-to-str a) \newline
+                         e \newline))
+             (reset! fail-atom nil)
+             (throw e))
+           (catch RuntimeException e
+             (error (str "Runtime Exception:" \newline
+                         (download-agent-to-str a) \newline
+                         e \newline))
+             (reset! fail-atom nil)
+             (throw e))
+           (catch Throwable e ;; Checked exceptions interpreted as simple failures
+             (with-return a
+               (error (str "Fail:" \newline
+                           (download-agent-to-str a) \newline
+                           e \newline))
+               (reset! fail-atom e)
+               (release-pending-sends)))
+           (finally (reset! run-atom false)))))
 
-(defn file-size [{:as a file-size-atom :file-size-atom}]
-  (deref file-size-atom))
+(defn file-length [a]
+  (derefed a :file-length-atom derefed))
+
+(defn total-length [a]
+  (derefed a :total-length))
+
+(defn agent-name [a]
+  (derefed a :name))
+
+(defn service [a]
+  (derefed a :service))
 
 (defn actual-file-length [file]
   (if (.exists file) (.length file) 0))
 
-(defn out-of-space-on-path? [{:as a :keys [path file total-size]}]
-  {:pre [(supplied path file total-size)]}
+(defn out-of-space-on-path? [{:as a :keys [path file total-length]}]
+  {:pre [(supplied path file total-length)]}
   (if (.exists file)
-    (< (.getUsableSpace path) (- total-size (.length file)))
+    (< (.getUsableSpace path) (- total-length (.length file)))
     (= (.getUsableSpace path) 0)))
 
-(defn fully-loaded? [{:as a :keys [file total-size]}]
-  {:pre [(supplied file total-size)]}
-  (boolean (and (.exists file) (<= total-size (.length file)))))
+(defn fully-loaded? [{:as a :keys [file total-length]}]
+  {:pre [(supplied file total-length)]}
+  (boolean (and (.exists file) (<= total-length (.length file)))))
+
+(defalias pass identity)
+
+(defn die [a]
+  (assoc a :alive false))
+
+(defn sleep [a millis]
+  (with-return a (Thread/sleep millis)))
 
 (defn get-file [{:as a :keys [name path]}]
   {:pre [(supplied name path)]}
@@ -370,9 +382,54 @@
 (defvar- head-request-timeout*     10000)
 (defvar- buffer-size*              65536)
 
+(defn download-agent-performance [a]
+  (let [total-length (total-length a)
+        file-length  (file-length a)]
+    {:percent (if (and (number? total-length) (number? file-length)
+                       (pos? total-length) (pos? file-length))
+                (/ file-length total-length)
+                0)}))
+
+(defvar progress-agent* (agent {:agents #{}}))
+
+(defn begin-monitor-progress [a] ;; TODO: Make it work
+  {:pre (instance? clojure.lang.Agent a)}
+  (send-off progress-agent* assoc :agents
+            (union (@progress-agent* :agents) #{a})))
+
+(defn cease-monitor-progress [a]
+  {:pre (instance? clojure.lang.Agent a)}
+  (send-off progress-agent* assoc :agents
+            (difference (@progress-agent* :agents) #{a})))
+
+(defn update-progress []
+  (send-off progress-agent*
+            (fn [progress-agent]
+              (with-return progress-agent
+                (let [progress-strings
+                  (for [a (@progress-agent* :agents)
+                        :let [name (agent-name a)]
+                        :let [performance (download-agent-performance a)]
+                        :let [percent (:percent performance)]]
+                    (str \[
+                         (cond (not name) \-
+                               (< (count name) 12) name
+                               :longer (let [name-head (apply str (take 5 name))
+                                             name-tail (apply str (take-last 7 name))]
+                                         (str name-head \. \. name-tail)))
+                         \space percent \% \]))]
+                  (.print System/out (apply str \return progress-strings))
+                  (.flush System/out))))))
+
+(defmacro with-update-agent-progress [a & body]
+  (if-not (instance? clojure.lang.Agent a) `(do ~@body)
+          `(try (begin-monitor-progress a)
+                (do ~@body)
+                (finally (cease-monitor-progress a)))))
+
 (defn download
-  [{:as a :keys [name address file total-size file-size-atom]}]
-  {:pre [(supplied name address file total-size file-size-atom)]}
+  [{:as a :keys [name address file total-length file-length-atom]}]
+  {:pre [(supplied name address file total-length file-length-atom)]}
   (let [client (new HttpClient)
         get    (new GetMethod address)]
     (when (and address file)
@@ -384,27 +441,31 @@
         (.executeMethod client get)
         (let [content-length (.getResponseContentLength get)]
           (cond (not content-length)
-                (fail a :reason "Cannot check file before download.")
+                (throw (Exception. "Cannot check file before download."))
 
-                (not= content-length (- total-size (actual-file-length file)))
-                (fail a :reason "Downloading file size mismatch.")
+                (not= content-length (- total-length (actual-file-length file)))
+                (throw (Exception. "Downloading file size mismatch."))
 
                 :else
                 (with-return a
                   (with-open [#^InputStream input (.getResponseBodyAsStream get)
                               #^FileOutputStream output (FileOutputStream. file true)]
-                    (log/info (str "Begin downloading " name))
-                    (let [buffer (make-array Byte/TYPE buffer-size*)]
-                      (loop [file-size (actual-file-length file)]
-                        (let [read-size (.read input buffer)]
-                          (when (pos? read-size)
-                            (let [new-size (+ file-size read-size)]
-                              (.write output buffer 0 read-size)
-                              (reset! file-size-atom new-size)
-                              (recur new-size)))))
-                      (.flush output))
-                    (log/info (str "End downloading " name))))))
-        (finally (do (.releaseConnection get)))))))
+                    (with-update-agent-progress *agent*
+                      (info (str "Begin download " name))
+                      (let [buffer (make-array Byte/TYPE buffer-size*)]
+                        (loop [file-size (actual-file-length file)]
+                          (let [read-size (.read input buffer)]
+                            (when (pos? read-size)
+                              (let [new-size (+ file-size read-size)]
+                                (.write output buffer 0 read-size)
+                                (reset! file-length-atom new-size)
+                                (update-progress)
+                                (release-pending-sends)
+                                (when (not= (goal a) :stop)
+                                  (recur new-size))))))
+                        (.flush output)))
+                    (info (str "End download " name))))))
+        (finally (.releaseConnection get))))))
 
 (defn files-dsv-*-data-cod-ru-get-head [{:as a :keys [address name]}]
   {:pre [(supplied address)]}
@@ -420,13 +481,13 @@
                    content-disposition (.. head (getResponseHeader "Content-Disposition") (getValue))
                    filename (URLDecoder/decode (second (re-find #"; filename=\"(.*)\"" content-disposition)))]
                (if-not (and content-length filename) (die a)
-                       (merge a {:total-size content-length}
+                       (merge a {:total-length content-length}
                               (when (not name) {:name filename}))))
-             (fail a :reason "HEAD request failed.")))
+             (throw (Exception. "HEAD request failed."))))
          (finally (.releaseConnection head)))))
 
 (defn download-environment-is-done? [e]
-  (every? #(derefed % dead?) (agents e)))
+  (every? dead? (agents e)))
 
 (defn terminate-download-environment [e] nil)
 
@@ -435,41 +496,52 @@
     (terminate-download-environment e)))
 
 (defn idle-service-successors [a]
-  (select (agents (env a)) :order-by #(derefed % :precedence)
-          :where #(and (derefed % idle?) (same :service (deref a) (deref %)))))
+  (select (succeeded (agents (env a))) :order-by precedence
+          :where (fn/and idle? (partial same service a))))
 
 (defn failed-service-successors-after [a]
-  (select (agents (env a)) :entirely-after a :order-by #(derefed % :precedence)
-          :where #(and (derefed % fail?) (same :service (deref a) (deref %)))))
+  (select (succeeded (agents (env a))) :entirely-after a :order-by precedence
+          :where (fn/and failed? (partial same service a))))
 
 (defn alive-service-successors-after [a]
-  (select (agents (env a)) :entirely-after a :order-by #(derefed % :precedence)
-          :where #(and (derefed % alive?) (same :service (deref a) (deref %)))))
+  (select (succeeded (agents (env a))) :entirely-after a :order-by precedence
+          :where (fn/and alive? (partial same service a))))
 
-(defn active-service-agents [service environment]
-  (select (agents environment) :where #(and (= service (derefed % :service))
-                                            (derefed % active?))))
+(defn running-service-agents [service environment]
+  (select (succeeded (agents environment))
+          :where #(and (= service (service %)) (run? %))))
 
 (defn files-dsv-*-data-cod-ru-strategy
-  [{:as a :keys [address name file path total-size service max-active-agents]}]
-  (let [schedule
+  [{:as a :keys [address name file path total-length service max-active-agents]}]
+  (let [get-successor
+        (fn [] (when *agent* (or (first (idle-service-successors *agent*))
+                                (first (failed-service-successors-after *agent*))
+                                (first (alive-service-successors-after *agent*)))))
+        schedule
         (fn [action body]
-          (let [new-body (action body)]
-            (with-return new-body
+          (try
+            (let [new-body (action body)]
+              (with-return new-body
+                (when *agent*
+                  (let [successor (get-successor)]
+                    (if (dead? new-body)
+                      (when successor (send-off successor run))
+                      (send-off *agent* run))))))
+            (catch Throwable t
               (when *agent*
-                (let [successor (or (first (idle-service-successors *agent*))
-                                    (first (failed-service-successors-after *agent*))
-                                    (first (alive-service-successors-after *agent*)))]
-                  (cond (dead? new-body)  (do (when successor (send-off successor run)))
-                        (fail? new-body)  (do (send-off *agent* sleep timeout-after-fail*)
-                                              (when successor (send-off successor run)))
-                        :else             (do (send-off *agent* run))))))))]
+                (let [successor (get-successor)]
+                  (send-off *agent* sleep timeout-after-fail*)
+                  (when successor (send-off successor run))))
+              (throw t))))]
     (cond (not address) (add-hook die schedule)
           
-          (> (count (active-service-agents service (env a))) max-active-agents)
+          (> (count (running-service-agents service (env a))) max-active-agents)
+          pass
+
+          (= (goal a) :stop)
           pass
         
-          (not (and name total-size))
+          (not (and name total-length))
           (add-hook files-dsv-*-data-cod-ru-get-head schedule)
           
           (not file) (add-hook get-file schedule)
@@ -492,8 +564,7 @@
                                  (duck/slurp* (.getResponseBodyAsStream get)))]
                (if link (assoc a :link link)
                    (die a)))
-             (fail a)))
-         (catch Exception e (fail a))
+             (throw (Exception. "Fail to parse page."))))
          (finally (.releaseConnection get)))))
 
 (defn data-cod-ru-make-child-agent [{:as a :keys [link path precedence]}]
@@ -508,14 +579,17 @@
 (defn data-cod-ru-strategy [{:as a :keys [address link child]}]
   (let [schedule
         (fn [action body]
-          (let [new-body (action body)]
-            (with-return new-body
+          (try
+            (let [new-body (action body)]
+              (with-return new-body
+                (when *agent*
+                  (when (alive? new-body) (send-off *agent* run)))))
+            (catch Throwable t
               (when *agent*
-                (cond (dead? new-body) (do nothing)
-                      (fail? new-body) (do (send-off *agent* sleep timeout-after-fail*)
-                                           (send-off *agent* run))
-                      :else            (do (send-off *agent* run)))))))]
+                (send-off *agent* sleep timeout-after-fail*)
+                (send-off *agent* run)))))]
     (cond (not (and address (env a))) die
+          (= (goal a) :stop) pass
           (not link)     (add-hook data-cod-ru-parse-page schedule)
           (not child)    (add-hook data-cod-ru-make-child-agent schedule)
           :else          die)))
@@ -530,14 +604,16 @@
   :strategy files-dsv-*-data-cod-ru-strategy
   :max-active-agents 1
   :body #(hash-map :address nil :name nil :file nil :path nil
-                   :total-size nil :file-size-atom (atom nil)))
+                   :total-length nil :file-length-atom (atom nil)))
 
 (defservice files2-dsv-*-data-cod-ru
   :address-pattern #"http://files2.dsv.*.data.cod.ru/.+"
   :strategy files-dsv-*-data-cod-ru-strategy
   :max-active-agents 1
   :body #(hash-map :address nil :name nil :file nil :path nil
-                   :total-size nil :file-size-atom (atom nil)))
+                   :total-length nil :file-length-atom (atom nil)))
+
+(set-log :enable-levels [:debug])
 
 (defn -main [& args]
   (with-command-line args
@@ -546,22 +622,23 @@
      [debug?  d? "Print debug messages."]
      remaining-args]
 
-    (set-root-logger-log-level (cond quiet? (Level/OFF)
-                                     debug? (Level/FINE)
-                                     :else  (Level/INFO)))
+    (set-log :levels (cond quiet? ()
+                           debug? (list :debug :info :warn :error :fatal)
+                           :else  (list :info :error :fatal)))
 
-    (let [jobs-file    (some #(as-file % :directory false :readable true)
-                             remaining-args)
-          working-path (or (some #(as-file % :directory true :writeable true)
-                                 remaining-args)
+    (let [jobs-file (some #(as-file % :directory false :readable true) remaining-args)
+          working-path (or (some #(as-file % :directory true :writeable true) remaining-args)
                            (as-file (System/getProperty "user.dir") :writeable true))]
       (when (and jobs-file working-path)
         (let [lines (duck/read-lines jobs-file)
               download-environment (make-environment)]
           (doseq [line lines]
-            (make-download-agent line :environment download-environment
+            (make-download-agent line
+                                 :environment download-environment
                                  :path working-path))
-          ;; (turn-on-cli-for-all-download-environments)
-          ;; (add-hook download-environment-termination-hook :system-exit (fn [e] (System/exit 0)))
+          
+          (add-hook :after terminate-download-environment
+                    :system-exit (fn [e] (System/exit 0)))
+          
           (doseq [a (agents download-environment)]
             (send-off a run)))))))
