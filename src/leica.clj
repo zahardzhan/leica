@@ -13,13 +13,13 @@
    clojure.contrib.command-line
    clojure.contrib.def
    clojure.test
-   hooks
-   log)
+   hooks)
   
   (:require
    [clojure.contrib.http.agent :as http]
    [clojure.contrib.duck-streams :as duck]
-   fn)
+   fn
+   log)
   
   (:import
    (java.util Date)
@@ -51,7 +51,7 @@
   `(do (do ~@body)
        ~expr))
 
-(defmacro let-return [[form val] & body]
+(defmacro with-let-ret [[form val] & body]
   `(let [~form ~val]
      (with-return ~form (do ~@body))))
 
@@ -64,6 +64,8 @@
   ([x] (if (instance? clojure.lang.IDeref x) (deref x) x))
   ([x f] (f (derefed x)))
   ([x f & fs] ((apply comp (reverse fs)) (derefed x f))))
+
+(defalias dref derefed)
 
 (defmacro with-deref [[ref & refs] & body]
   (if ref
@@ -145,34 +147,119 @@
           maybe-take-before
           maybe-filter-where))))
 
-(defn make-environment []
-  {:agents-ref (ref #{})})
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defn agents
-  "The agents belonging to this environment."
-  [e] (when e (deref (:agents-ref e))))
+(defprotocol Download-Environment-Protocol
+  (agents [e]))
+
+(defrecord Download-Environment [agents-ref]
+  Download-Environment-Protocol
+  (agents [e] @agents-ref))
+
+(declare operating?)
+
+(defn operating [ags]
+  (filter operating? ags))
+
+(defn make-download-environment []
+  (new Download-Environment (ref #{})))
+
+(make-download-environment)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defprotocol Download-Agent-Protocol
+  (ask     [a & opts])
+  (body    [a] [a key] [a key value] [a key value & kvs])
+  (state   [a] [a key] [a key value] [a key value & kvs])
+  (precedence [a])
+  (env     [a])
+  (binded? [a] [a e])
+  (surround [a])
+  (run?    [a])
+  (stop?   [a])
+  (alive?  [a])
+  (dead?   [a])
+  (fail?   [a])
+  (failure [a])
+  (operating? [a])
+  (program [a]))
+
+(defrecord Download-Agent
+  [agent-precedence ;; number
+   agent-controller ;; (agent)
+   state-delay      ;; (delay (ref {k v, ...}))
+   body-ref         ;; (ref {k v, ...})
+   ]
+
+  Object
+  (toString [this] (str "Download Agent: " @body-ref))
+
+  Download-Agent-Protocol
+  (ask     [a & opts])
+  (body    [a] @body-ref)
+  (body    [a key] (@body-ref key))
+  (body    [a key value] (dosync (alter body-ref key value)))
+  (body    [a key value & kvs]
+           (dosync (apply (partial alter body-ref assoc key value) (seq kvs))))
+  (state   [a] @state-delay)
+  (state   [a key] (@@state-delay key))
+  (state   [a key value] (dosync (alter @state-delay assoc key value)))
+  (state   [a key value & kvs] ;; TODO: Test
+           (dosync (apply (partial alter @state-delay assoc key value) (seq kvs))))
+  (precedence [a] agent-precedence)
+  (env     [a] (state a :env))
+  (binded? [a] (boolean (when-let [ags (agents (env a))] (ags a)))) ;; TODO: Test
+  (binded? [a e] (and (identical? e (env a)) (binded? a))) ;; TODO: Test
+  (surround [a] (when-let [e (env a)] (difference (agents e) #{a})))
+  (run?    [a] (state a :run))
+  (stop?   [a] (state a :stop))
+  (alive?  [a] (state a :alive))
+  (dead?   [a] (not (alive? a)))
+  (fail?   [a] (boolean (state a :fail)))
+  (failure [a] (state a :fail))
+  (operating? [a] (and (alive? a) (not (stop? a))))
+  (program [a] (state a :program)))
 
 (declare bind unbind)
 
-(defn make-agent [{:as opts :keys [environment]}]
-  (let [a (agent (merge (dissoc opts :environment)
-                        {:env-ref (delay (ref environment))})
-                 :error-mode :fail)]
-    (with-return a
-      (when environment (bind a environment)))))
+(defvar make-download-agent
+  (let [precedence-counter (atom 0)]
+    (fn [& {:as opts :keys [environment precedence program]}]
+      (with-let-ret
+        [a (new Download-Agent
+                (or precedence (swap! precedence-counter inc))
+                (agent nil :error-mode :fail)
+                (delay (ref {:alive   true
+                             :run     false
+                             :stop    false
+                             :fail    nil
+                             :env     nil
+                             :program program
+                             :pending-actions clojure.lang.PersistentQueue/EMPTY
+                             :running-actions #{}}))
+                (ref (dissoc opts :environment :precedence :program)))]
+        (when-supplied environment (bind a environment))))))
 
-(defn env
-  "The environment belonging to this agent."
-  [a] (when a (derefed a :env-ref force deref)))
+(let [a (make-download-agent)]
+  [(alive? a)
+   (state a :alive false :run true)
+   (alive? a) (run? a)])
 
-(defn surrounding
-  "The agents belonging to environment this agent belonging to."
-  [a] (when-let [e (env a)] (difference (agents e) #{a})))
+(let [r (ref {:a 1 :b 2})]
+  (dosync (apply (partial alter r assoc :a 2) (seq [:b 3]))))
 
-(defn binded?
-  "Agent is binded to environment and vice-versa?"
-  ([a]   (boolean (when-let [ags (agents (env a))] (ags a))))
-  ([a e] (and (identical? e (env a)) (binded? a))))
+((fn [x & xs] xs) 1 2 3 4)
+
+(deftest make-download-agent-test
+  (is (= "http://files.dsv.data.cod.ru/asdg"
+         (:address @(make-download-agent
+                     "a http://files.dsv.data.cod.ru/asdg g")))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn bind [a e]
   (with-return e
@@ -244,8 +331,6 @@
          (:address (make-download-agent-body
                     "asdasd http://files.dsv.data.cod.ru/asdf ghjk")))))
 
-(def *precedence* (atom 0))
-
 (defn make-download-agent
   [line & {:as opts :keys [environment strategy precedence path name]}]
   {:pre [(when-supplied strategy     (instance? clojure.lang.IFn strategy)
@@ -265,54 +350,6 @@
                        (when strategy {:strategy strategy})
                        (when path {:path (as-file path)})
                        (when name {:name name})))))
-
-(defn download-agent-to-str
-  "TODO: String representation of agent."
-  [a] (derefed a str))
-
-(deftest make-download-agent-test
-  (is (= "http://files.dsv.data.cod.ru/asdg"
-         (:address @(make-download-agent
-                     "a http://files.dsv.data.cod.ru/asdg g")))))
-
-(defn precedence [a]
-  (derefed a :precedence))
-
-(defn strategy [a]
-  (derefed a :strategy))
-
-(defn goal [a]
-  (derefed a :goal-atom deref))
-
-(defn goal! [a new-goal]
-  (reset! (derefed a :goal-atom) new-goal))
-
-(defn agent-fail [a]
-  (derefed a :fail-atom deref))
-
-(defn failed? [a]
-  (boolean (agent-fail a)))
-
-(defn alive? [a]
-  (derefed a :alive))
-
-(defn dead? [a]
-  (not (alive? a)))
-
-(defn run? [a]
-  (derefed a :run-atom deref))
-
-(defn stop? [a]
-  (derefed a :stop-atom deref))
-
-(defn stop! [a]
-  (swap! (derefed a :stop-atom) not))
-
-(defn idle? [a]
-  (and (alive? a) (not (run? a))))
-
-(defn succeeded [agents]
-  (remove agent-error agents))
 
 (defn run [{:as a :keys [strategy run-atom fail-atom]}]
   (when (and (not *agent*) (run? a))
@@ -337,7 +374,7 @@
                          e \newline))
              (reset! fail-atom nil)
              (throw e))
-           (catch Throwable e ;; Checked exceptions interpreted as simple failures
+           (catch Throwable e
              (with-return a
                (error (str "Fail:" \newline
                            (download-agent-to-str a) \newline
@@ -346,17 +383,10 @@
                (release-pending-sends)))
            (finally (reset! run-atom false)))))
 
-(defn file-length [a]
-  (derefed a :file-length-atom derefed))
-
-(defn total-length [a]
-  (derefed a :total-length))
-
-(defn agent-name [a]
-  (derefed a :name))
-
-(defn service [a]
-  (derefed a :service))
+(defn file-length   [a] (body a :file-length))
+(defn total-length  [a] (body a :total-length))
+(defn aname         [a] (body a :name))
+(defn service       [a] (body a :service))
 
 (defn actual-file-length [file]
   (if (.exists file) (.length file) 0))
