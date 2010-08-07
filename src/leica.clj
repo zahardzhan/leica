@@ -77,6 +77,9 @@
                 (do ~(second clauses)))
             (when-supplied ~@(next (next clauses))))))
 
+(defn agent? [x]
+  (instance? clojure.lang.Agent x))
+
 (defalias supplied and)
 
 (def nothing nil)
@@ -218,7 +221,7 @@
                    {:service service-keyword#}))))
 
 (defn extract-url [line]
-  (first (re-find #"((https?|ftp|gopher|telnet|file|notes|ms-help):((//)|(\\\\))+[\w\d:#@%/;$()~_?\+-=\\\.&]*)"
+  (first (re-find #"((https?|ftp|file):((//)|(\\\\))+[\w\d:#@%/;$()~_?\+-=\\\.&]*)"
                   line)))
 
 (defn match-service [line]
@@ -253,7 +256,8 @@
   (when-let [body (make-download-agent-body line)]
     (make-agent (merge body
                        {:precedence (or precedence (swap! *precedence* inc))
-                        :run-atom (atom false)
+                        :run-atom  (atom false)
+                        :stop-atom (atom false)
                         :alive true
                         :fail-atom (atom nil)
                         :goal-atom (atom nil)}
@@ -298,14 +302,17 @@
 (defn run? [a]
   (derefed a :run-atom deref))
 
+(defn stop? [a]
+  (derefed a :stop-atom deref))
+
+(defn stop! [a]
+  (swap! (derefed a :stop-atom) not))
+
 (defn idle? [a]
   (and (alive? a) (not (run? a))))
 
 (defn succeeded [agents]
   (remove agent-error agents))
-
-(defn stop [a]
-  (goal! a :stop))
 
 (defn run [{:as a :keys [strategy run-atom fail-atom]}]
   (when (and (not *agent*) (run? a))
@@ -313,7 +320,7 @@
   
   (debug (str "Run " (download-agent-to-str a)))
 
-  (if (dead? a) a
+  (if (or (dead? a) (stop? a)) a
       (try (reset! run-atom true)
            (let [action (strategy a)]
              (with-return (action a)
@@ -392,13 +399,13 @@
 
 (defvar progress-agent* (agent {:agents #{}}))
 
-(defn begin-monitor-progress [a] ;; TODO: Make it work
-  {:pre (instance? clojure.lang.Agent a)}
+(defn begin-monitor-progress [a]
+  {:pre (agent? a)}
   (send-off progress-agent* assoc :agents
             (union (@progress-agent* :agents) #{a})))
 
 (defn cease-monitor-progress [a]
-  {:pre (instance? clojure.lang.Agent a)}
+  {:pre (agent? a)}
   (send-off progress-agent* assoc :agents
             (difference (@progress-agent* :agents) #{a})))
 
@@ -418,14 +425,14 @@
                                              name-tail (apply str (take-last 7 name))]
                                          (str name-head \. \. name-tail)))
                          \space percent \% \]))]
-                  (.print System/out (apply str \return progress-strings))
+                  (.println System/out (apply str \return progress-strings))
                   (.flush System/out))))))
 
-(defmacro with-update-agent-progress [a & body]
-  (if-not (instance? clojure.lang.Agent a) `(do ~@body)
-          `(try (begin-monitor-progress a)
-                (do ~@body)
-                (finally (cease-monitor-progress a)))))
+(defmacro with-monitoring-progress [a & body]
+  `(try (when (agent? ~a)
+          (begin-monitor-progress ~a))
+        (do ~@body)
+        (finally (cease-monitor-progress ~a))))
 
 (defn download
   [{:as a :keys [name address file total-length file-length-atom]}]
@@ -450,7 +457,7 @@
                 (with-return a
                   (with-open [#^InputStream input (.getResponseBodyAsStream get)
                               #^FileOutputStream output (FileOutputStream. file true)]
-                    (with-update-agent-progress *agent*
+                    (with-monitoring-progress *agent*
                       (info (str "Begin download " name))
                       (let [buffer (make-array Byte/TYPE buffer-size*)]
                         (loop [file-size (actual-file-length file)]
@@ -459,9 +466,7 @@
                               (let [new-size (+ file-size read-size)]
                                 (.write output buffer 0 read-size)
                                 (reset! file-length-atom new-size)
-                                (update-progress)
-                                (release-pending-sends)
-                                (when (not= (goal a) :stop)
+                                (when (not (stop? a))
                                   (recur new-size))))))
                         (.flush output)))
                     (info (str "End download " name))))))
@@ -538,9 +543,6 @@
           (> (count (running-service-agents service (env a))) max-active-agents)
           pass
 
-          (= (goal a) :stop)
-          pass
-        
           (not (and name total-length))
           (add-hook files-dsv-*-data-cod-ru-get-head schedule)
           
@@ -589,7 +591,6 @@
                 (send-off *agent* sleep timeout-after-fail*)
                 (send-off *agent* run)))))]
     (cond (not (and address (env a))) die
-          (= (goal a) :stop) pass
           (not link)     (add-hook data-cod-ru-parse-page schedule)
           (not child)    (add-hook data-cod-ru-make-child-agent schedule)
           :else          die)))
@@ -625,7 +626,7 @@
     (set-log :levels (cond quiet? ()
                            debug? (list :debug :info :warn :error :fatal)
                            :else  (list :info :error :fatal)))
-
+    
     (let [jobs-file (some #(as-file % :directory false :readable true) remaining-args)
           working-path (or (some #(as-file % :directory true :writeable true) remaining-args)
                            (as-file (System/getProperty "user.dir") :writeable true))]

@@ -1,42 +1,47 @@
 ;;; -*- mode: clojure; coding: utf-8 -*-
 
 (ns test.sketch
-  (:use clojure.test hooks)
+  (:use clojure.test hooks log)
   (:use :reload leica)
-  (:require [async.http.client :as HTTP]
-            [clojure.contrib.http.agent :as http])
+  (:require
+   [clojure.contrib.http.agent :as http]
+   [clojure.contrib.pprint :as pp])
   (:import java.io.File))
 
-(do
-  (def e0 (make-environment))
+(defn make-env-and-ags []
+  (def e1 (make-environment))
+  ;; (def a1 (make-download-agent "http://dsv-region.data.cod.ru/73895" :environment e1
+  ;;                              :path "/home/haru/Inbox"))
+
   (doseq [line
-          ;; ["http://files2.dsv-region.data.cod.ru/proxy/1/?WyJlOTMzNjc0ZjNhODA5ODAwNTcwMmM5Y2VjNzQyYTI4NSIsMTI4MDQ2NjU1NSwiXHUwNDIxXHUwNDQyXHUwNDM4XHUwNDNhXHUwNDM1XHUwNDQwXHUwNDRiLnJhciIsIng4Y1BYMG0zendFU0M5a2I4aXhsb2I2T1RwMkRoSjRia081WmJBOUpVVVwvSDBOcmNwaFJjZ3dnWTlId2pPOVptMEg2T2pGd3MyUStGM0wwR2FcLzVZWXhBb1ZaQ2U5ditlSFkwRHZ6VVpXZDkzM3NhZGZIUjhKQWRialZNbld2K0llc21wdzZIMmRzZUJ2UWhwSDQ2amRVZVVjRWcrR29aWnZobnZTZGpDQWJNPSJd"
-          ;;  "http://files2.dsv-region.data.cod.ru/proxy/1/?WyI1OWY4MDU4NDljNGUzOGI1MWE0NzYzMjRlNDgxOWY5MiIsMTI4MDQ2NjU2NiwiM0QtQXJ0LVdhbGxwYXBlcnMucmFyIiwiUHNOS3BocUhoZ05mOVd4cjlZR1ZJT1Y3eDZSWDNcL1NCZ0h0UVBFV1pmSVwvdFdadjlZcytscERRVUE1elFGYXdEMlE2dWExK2xHTVwvYm5cL1wvY3dXMVJNa2hyMEQ4XC9ubUhUU2t1bWptaG9kN0diSXpsM3ZQZ25iVVwvcFpKdHpoS3Z1YVlxOXRcL25tdGNtWU9McjhKNUFhdllCWE9wRUhETG5GODBGY1BOOXcxNUk9Il0%3D"
-          ;;  ]
-          ["http://dsv.data.cod.ru/868417"
-           "http://dsv.data.cod.ru/867518"
-           "http://dsv.data.cod.ru/866756"
-           "http://dsv.data.cod.ru/868967"]
-          ]
-    (make-download-agent line :environment e0
+          ["http://dsv-region.data.cod.ru/73895"
+           "http://dsv.data.cod.ru/883971"
+           "http://dsv.data.cod.ru/883969"]]
+    (make-download-agent line :environment e1
                          :path "/home/haru/Inbox")))
 
 (comment
-  (let [a1 (first (agents e0))
-        a2 (second (agents e0))]
-    (count (select (agents e0) :entirely-after a1 :order-by #(derefed % :precedence)
-                   :where #(and (derefed % fail?) (same :service (deref a1) (deref %))))))
+  (make-env-and-ags)
+  e1
+  (strategy a1)
+  ((strategy a1) @a1)
+  (run @a1)
+  (send-off a1 run)
+
+  (count (agents e1))
+  (count (filter alive? (agents e1)))
   
-  (count (agents e0))
-  (send-off (first (agents e0)) run)
-
-  (doseq [a (agents e0)]
+  (doseq [a (succeeded (agents e1))]
     (send-off a run))
+  
+  (map (fn [a] {:serv (service a) :goal (goal a) :run (run? a) :alive (alive? a) :fail (failed? a) :error (agent-error a)})
+       (agents e1))
 
-  [(map #(derefed % state) (agents e0))
-   (map #(derefed % fail-reason) (agents e0))
-   (map agent-errors (agents e0))]
+  (doseq [a (agents e1)]
+    (goal! a :stop))
 
-  (throw  (first (agent-errors (first (next (next (agents e0)))))))
-
-  )
+  (def asdf 1)
+  (binding [asdf 2]
+    @(future asdf))
+  leica/progress-agent*
+    )
