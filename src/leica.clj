@@ -147,137 +147,178 @@
           maybe-take-before
           maybe-filter-where))))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(defvar- services* (atom {}))
 
-(defprotocol Download-Environment-Protocol
-  (agents [e]))
+(defmacro defservice [service & opts]
+  `(let [service-keyword# (keyword (str *ns*) (str (quote ~service)))]
+     (swap! services* assoc service-keyword#
+            (merge (hash-map ~@opts)
+                   {:service service-keyword#}))))
 
-(defrecord Download-Environment [agents-ref]
-  Download-Environment-Protocol
-  (agents [e] @agents-ref))
+(defn extract-url [line]
+  (first (re-find
+          #"((https?|ftp|file):((//)|(\\\\))+[\w\d:#@%/;$()~_?\+-=\\\.&]*)"
+          line)))
 
-(declare operating?)
+(defn match-service [line]
+  (when-let [url (extract-url line)]
+    (first (for [[service-name {:keys [address-pattern]}] @services*
+                 :let [address (re-find address-pattern url)]
+                 :when address]
+             [service-name address]))))
 
-(defn operating [ags]
-  (filter operating? ags))
+(defn make-download-agent-body [line]
+  (when-let [[service-name address] (match-service line)]
+    (let [{:as service :keys [body]} (service-name @services*)]
+      (merge service {:address address}))))
 
-(defn make-download-environment []
-  (new Download-Environment (ref #{})))
+(deftest make-download-agent-body-test
+  (is (= "http://files.dsv.data.cod.ru/asdf"
+         (:address (make-download-agent-body
+                    "asdasd http://files.dsv.data.cod.ru/asdf ghjk")))))
 
-(make-download-environment)
+(defprotocol Body
+  (body    [this])
+  (slot    [this key])
+  (set-slot [this key value]))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(defmacro defreader
+  "Define slot-reader for objects that implement Body protocol."
+  [slot-name]
+  (let [slot-key# (keyword slot-name)]
+    (list 'defn slot-name ['this]
+          (list 'slot 'this slot-key#))))
 
-(defprotocol Download-Agent-Protocol
+(defmacro defwriter
+  "Define slot-writer for objects that implement Body protocol."
+  [slot-name]
+  (let [slot-key# (keyword slot-name)
+        set-slot-name# (symbol (str 'set- slot-name))]
+    (list 'defn set-slot-name# ['this 'value]
+          (list 'set-slot 'this slot-key# 'value))))
+
+(defmacro defaccessor
+  "Define both slot-reader and slot-writer for objects that implement Body protocol."
+  [slot-name]
+  `(do (defreader ~slot-name)
+       (defwriter ~slot-name)))
+
+(defprotocol Environment
+  (agents  [e]))
+
+(defprotocol Agent
   (ask     [a & opts])
-  (body    [a] [a key] [a key value] [a key value & kvs])
-  (state   [a] [a key] [a key value] [a key value & kvs])
-  (precedence [a])
-  (env     [a])
-  (binded? [a] [a e])
-  (surround [a])
-  (run?    [a])
-  (stop?   [a])
-  (alive?  [a])
-  (dead?   [a])
-  (fail?   [a])
-  (failure [a])
-  (operating? [a])
-  (program [a]))
+  (env     [a]))
 
-(defrecord Download-Agent
-  [agent-precedence ;; number
-   agent-controller ;; (agent)
-   state-delay      ;; (delay (ref {k v, ...}))
-   body-ref         ;; (ref {k v, ...})
-   ]
+(defrecord DownloadEnvironment
+  [environment-body] ;; (delay (ref {slot value, ...}))
 
   Object
-  (toString [this] (str "Download Agent: " @body-ref))
+  (toString [this] (str "Download Environment: " (body this)))
 
-  Download-Agent-Protocol
+  Body
+  (body    [this] @@environment-body)
+  (slot    [this key] (@@environment-body key))
+  (set-slot [this key value] (alter @environment-body assoc key value))
+  
+  Environment
+  (agents [e] (slot e :agents)))
+
+(defn make-download-environment []
+  (new DownloadEnvironment (delay (ref {:agents #{}}))))
+
+(defrecord DownloadAgent
+  [agent-controller ;; (agent ?)
+   agent-body]      ;; (delay (ref {slot value, ...}))
+
+  Object
+  (toString [this] (str "Download Agent: " (body this)))
+
+  Body
+  (body    [this] @@agent-body)
+  (slot    [this key] (@@agent-body key))
+  (set-slot [this key value] (alter @agent-body assoc key value))
+
+  Agent
   (ask     [a & opts])
-  (body    [a] @body-ref)
-  (body    [a key] (@body-ref key))
-  (body    [a key value] (dosync (alter body-ref key value)))
-  (body    [a key value & kvs]
-           (dosync (apply (partial alter body-ref assoc key value) (seq kvs))))
-  (state   [a] @state-delay)
-  (state   [a key] (@@state-delay key))
-  (state   [a key value] (dosync (alter @state-delay assoc key value)))
-  (state   [a key value & kvs] ;; TODO: Test
-           (dosync (apply (partial alter @state-delay assoc key value) (seq kvs))))
-  (precedence [a] agent-precedence)
-  (env     [a] (state a :env))
-  (binded? [a] (boolean (when-let [ags (agents (env a))] (ags a)))) ;; TODO: Test
-  (binded? [a e] (and (identical? e (env a)) (binded? a))) ;; TODO: Test
-  (surround [a] (when-let [e (env a)] (difference (agents e) #{a})))
-  (run?    [a] (state a :run))
-  (stop?   [a] (state a :stop))
-  (alive?  [a] (state a :alive))
-  (dead?   [a] (not (alive? a)))
-  (fail?   [a] (boolean (state a :fail)))
-  (failure [a] (state a :fail))
-  (operating? [a] (and (alive? a) (not (stop? a))))
-  (program [a] (state a :program)))
+  (env     [a] (slot a :environment)))
 
 (declare bind unbind)
 
 (defvar make-download-agent
   (let [precedence-counter (atom 0)]
-    (fn [& {:as opts :keys [environment precedence program]}]
-      (with-let-ret
-        [a (new Download-Agent
-                (or precedence (swap! precedence-counter inc))
-                (agent nil :error-mode :fail)
-                (delay (ref {:alive   true
-                             :run     false
-                             :stop    false
-                             :fail    nil
-                             :env     nil
-                             :program program
-                             :pending-actions clojure.lang.PersistentQueue/EMPTY
-                             :running-actions #{}}))
-                (ref (dissoc opts :environment :precedence :program)))]
-        (when-supplied environment (bind a environment))))))
+    (fn [line & {:as opts :keys [environment precedence program path name goal]}]
+      {:pre [(when-supplied program      (ifn? program)
+                            precedence   (number? precedence)
+                            environment  (instance? DownloadEnvironment environment)
+                            path         (as-file path :directory true :writeable true)
+                            name         (string? name))]}
+      (when-let [agent-body (make-download-agent-body line)]
+        (with-let-ret
+          [a (new DownloadAgent
+                  (agent nil :error-mode :fail)
+                  (delay (ref (merge
+                               {:precedence  (or precedence (swap! precedence-counter inc))
+                                :pending-actions clojure.lang.PersistentQueue/EMPTY
+                                :running-actions #{}
+                                :alive   true
+                                :run     false
+                                :stop    false
+                                :fail    nil}
+                               agent-body
+                               (dissoc opts :environment :precedence :program
+                                       :path :name :goal)
+                               (when (supplied environment) {:environment environment})
+                               (when (supplied program) {:program program})
+                               (when (supplied path) {:path (as-file path)})
+                               (when (supplied name) {:name name})
+                               (when (supplied goal) {:goal goal})))))]
+          (when (supplied environment) (bind a environment))))))
+  "Download Agent constructor.")
 
-(let [a (make-download-agent)]
-  [(alive? a)
-   (state a :alive false :run true)
-   (alive? a) (run? a)])
+(defwriter   agents)
+(defwriter   environment)
+(defreader   precedence)
+(defreader   program)
+(defaccessor pending-actions)
+(defaccessor running-actions)
+(defaccessor alive)
+(defaccessor run)
+(defaccessor stop)
+(defaccessor fail)
+(defaccessor path)
+(defaccessor goal)
+(defaccessor file)
+(defaccessor file-length)
+(defaccessor total-file-length)
+(defaccessor service)
 
-(let [r (ref {:a 1 :b 2})]
-  (dosync (apply (partial alter r assoc :a 2) (seq [:b 3]))))
+(defn surround [a]
+  (when-let [e (env a)] (difference (agents e) #{a})))
 
-((fn [x & xs] xs) 1 2 3 4)
-
-(deftest make-download-agent-test
-  (is (= "http://files.dsv.data.cod.ru/asdg"
-         (:address @(make-download-agent
-                     "a http://files.dsv.data.cod.ru/asdg g")))))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(defn binded?
+  ([a] (boolean (when-let [e (env a)]
+                  (when-let [ags (agents e)]
+                    (ags a)))))
+  ([a e] (and (identical? e (env a)) (binded? a))))
 
 (defn bind [a e]
   (with-return e
     (when-not (binded? a e)
       (when (binded? a) (unbind a))
-      (dosync (alter (:agents-ref e) union #{a})
-              (ref-set (derefed a :env-ref force) e)))))
+      (dosync (set-agents e (union (agents e) #{a}))
+              (set-environment a e)))))
 
 (defn unbind [a]
   (with-return a
     (when (binded? a)
-      (dosync (alter (:agents-ref (env a)) difference #{a})
-              (ref-set (derefed a :env-ref force) nil)))))
+      (dosync (set-agents (env a) (difference (agents (env a)) #{a}))
+              (set-environment a nil)))))
 
 (deftest agent-bind-test
-  (let [e1 (make-environment)
-        a1 (make-agent {:environment e1})
-        a2 (make-agent {:environment e1})]
+  (let [e1 (make-download-environment)
+        a1 (make-download-agent "http://files.dsv.data.cod.ru/asd1" :environment e1)
+        a2 (make-download-agent "http://files.dsv.data.cod.ru/asd2" :environment e1)] 
     (is (and (binded? a1 e1)
              (binded? a1)
              (binded? a2 e1)
@@ -298,58 +339,6 @@
              (binded? a1)
              (binded? a2 e1)
              (binded? a2)))))
-
-(defvar- services* (atom {}))
-
-(defmacro defservice [service & opts]
-  `(let [service-keyword# (keyword (str *ns*) (str (quote ~service)))]
-     (swap! services* assoc service-keyword#
-            (merge (hash-map ~@opts)
-                   {:service service-keyword#}))))
-
-(defn extract-url [line]
-  (first (re-find #"((https?|ftp|file):((//)|(\\\\))+[\w\d:#@%/;$()~_?\+-=\\\.&]*)"
-                  line)))
-
-(defn match-service [line]
-  (when-let [url (extract-url line)]
-    (first (for [[service-name {:keys [address-pattern]}] @services*
-                 :let [address (re-find address-pattern url)]
-                 :when address]
-             [service-name address]))))
-
-(defn make-download-agent-body [line]
-  (when-let [[service-name address] (match-service line)]
-    (let [{:as service :keys [body]} (service-name @services*)]
-      (dissoc (merge service
-                     (when body (body))
-                     {:address address})
-              :body))))
-
-(deftest make-download-agent-body-test
-  (is (= "http://files.dsv.data.cod.ru/asdf"
-         (:address (make-download-agent-body
-                    "asdasd http://files.dsv.data.cod.ru/asdf ghjk")))))
-
-(defn make-download-agent
-  [line & {:as opts :keys [environment strategy precedence path name]}]
-  {:pre [(when-supplied strategy     (instance? clojure.lang.IFn strategy)
-                        precedence   (number? precedence)
-                        environment  (map? environment)
-                        path         (as-file path :directory true :writeable true)
-                        name         (string? name))]}
-  (when-let [body (make-download-agent-body line)]
-    (make-agent (merge body
-                       {:precedence (or precedence (swap! *precedence* inc))
-                        :run-atom  (atom false)
-                        :stop-atom (atom false)
-                        :alive true
-                        :fail-atom (atom nil)
-                        :goal-atom (atom nil)}
-                       (when environment {:environment environment})
-                       (when strategy {:strategy strategy})
-                       (when path {:path (as-file path)})
-                       (when name {:name name})))))
 
 (defn run [{:as a :keys [strategy run-atom fail-atom]}]
   (when (and (not *agent*) (run? a))
@@ -382,11 +371,6 @@
                (reset! fail-atom e)
                (release-pending-sends)))
            (finally (reset! run-atom false)))))
-
-(defn file-length   [a] (body a :file-length))
-(defn total-length  [a] (body a :total-length))
-(defn aname         [a] (body a :name))
-(defn service       [a] (body a :service))
 
 (defn actual-file-length [file]
   (if (.exists file) (.length file) 0))
@@ -627,22 +611,32 @@
 
 (defservice data-cod-ru
   :address-pattern #"http://[\w\-]*.data.cod.ru/\d+"
-  :strategy data-cod-ru-strategy
-  :body #(hash-map :address nil :link nil :child nil))
+  ;; :program data-cod-ru-strategy
+  :address nil
+  :link nil
+  :child nil)
 
 (defservice files3?-dsv-*-data-cod-ru
   :address-pattern #"http://files3?.dsv.*.data.cod.ru/.+"
-  :strategy files-dsv-*-data-cod-ru-strategy
+  ;; :program files-dsv-*-data-cod-ru-strategy
   :max-active-agents 1
-  :body #(hash-map :address nil :name nil :file nil :path nil
-                   :total-length nil :file-length-atom (atom nil)))
+  :address nil
+  :name nil
+  :file nil
+  :path nil
+  :total-file-length nil
+  :file-length nil)
 
 (defservice files2-dsv-*-data-cod-ru
   :address-pattern #"http://files2.dsv.*.data.cod.ru/.+"
-  :strategy files-dsv-*-data-cod-ru-strategy
+  ;; :program files-dsv-*-data-cod-ru-strategy
   :max-active-agents 1
-  :body #(hash-map :address nil :name nil :file nil :path nil
-                   :total-length nil :file-length-atom (atom nil)))
+  :address nil
+  :name nil
+  :file nil
+  :path nil
+  :total-file-length nil
+  :file-length nil)
 
 (set-log :enable-levels [:debug])
 
