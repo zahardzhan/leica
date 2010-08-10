@@ -184,24 +184,24 @@
 
 (defmacro defreader
   "Define slot-reader for objects that implement Body protocol."
-  [slot-name]
-  (let [slot-key# (keyword slot-name)]
-    (list 'defn slot-name ['this]
-          (list 'slot 'this slot-key#))))
+  ([slot-name]
+     (let [slot-key# (keyword slot-name)]
+       (list 'defn slot-name ['this]
+             (list 'slot 'this slot-key#))))
+  ([slot-key slot-name]
+     (list 'defn slot-name ['this]
+           (list 'slot 'this slot-key))))
 
 (defmacro defwriter
   "Define slot-writer for objects that implement Body protocol."
-  [slot-name]
-  (let [slot-key# (keyword slot-name)
-        set-slot-name# (symbol (str 'set- slot-name))]
-    (list 'defn set-slot-name# ['this 'value]
-          (list 'set-slot 'this slot-key# 'value))))
-
-(defmacro defaccessor
-  "Define both slot-reader and slot-writer for objects that implement Body protocol."
-  [slot-name]
-  `(do (defreader ~slot-name)
-       (defwriter ~slot-name)))
+  ([slot-name]
+     (let [slot-key# (keyword slot-name)
+           set-slot-name# (symbol (str 'set- slot-name))]
+       (list 'defn set-slot-name# ['this 'value]
+             (list 'set-slot 'this slot-key# 'value))))
+  ([slot-key slot-name]
+     (list 'defn slot-name ['this 'value]
+           (list 'set-slot 'this slot-key 'value))))
 
 (defprotocol Environment
   (agents  [e]))
@@ -276,22 +276,42 @@
           (when (supplied environment) (bind a environment))))))
   "Download Agent constructor.")
 
-(defwriter   agents)
-(defwriter   environment)
-(defreader   precedence)
-(defreader   program)
-(defaccessor pending-actions)
-(defaccessor running-actions)
-(defaccessor alive)
-(defaccessor run)
-(defaccessor stop)
-(defaccessor fail)
-(defaccessor path)
-(defaccessor goal)
-(defaccessor file)
-(defaccessor file-length)
-(defaccessor total-file-length)
-(defaccessor service)
+(defwriter agents)
+(defwriter environment)
+(defreader precedence)
+(defreader program)
+(defreader pending-actions)
+(defreader running-actions)
+
+(defreader :alive alive?)
+(defwriter :alive set-alive)
+
+(defreader :run run?)
+(defwriter :run set-run)
+
+(defreader :stop stop?)
+(defwriter :stop set-stop)
+
+(defreader :fail fail?)
+(defwriter :fail set-fail)
+
+(defreader path)
+(defwriter path)
+
+(defreader goal)
+(defwriter goal)
+
+(defreader file)
+(defwriter file)
+
+(defreader file-length)
+(defwriter file-length)
+
+(defreader total-file-length)
+(defwriter total-file-length)
+
+(defreader service)
+(defwriter service)
 
 (defn surround [a]
   (when-let [e (env a)] (difference (agents e) #{a})))
