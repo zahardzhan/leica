@@ -183,7 +183,7 @@
   (set-slot [this key value]))
 
 (defmacro defreader
-  "Define slot-reader for objects that implement Body protocol."
+  "Define slot-reader for objects that implement Body protocol." ;; TODO: Maybe deprecate
   ([slot-name]
      (let [slot-key# (keyword slot-name)]
        (list 'defn slot-name ['this]
@@ -193,7 +193,7 @@
            (list 'slot 'this slot-key))))
 
 (defmacro defwriter
-  "Define slot-writer for objects that implement Body protocol."
+  "Define slot-writer for objects that implement Body protocol." ;; TODO: Maybe deprecate
   ([slot-name]
      (let [slot-key# (keyword slot-name)
            set-slot-name# (symbol (str 'set- slot-name))]
@@ -210,38 +210,52 @@
   (ask     [a & opts])
   (env     [a]))
 
-(defrecord DownloadEnvironment
+(deftype DownloadEnvironment
   [environment-body] ;; (delay (ref {slot value, ...}))
 
   Object
   (toString [this] (str "Download Environment: " (body this)))
 
   Body
-  (body    [this] @@environment-body)
-  (slot    [this key] (@@environment-body key))
+  (body     [this] @@environment-body)
+  (slot     [this key] (@@environment-body key))
   (set-slot [this key value] (alter @environment-body assoc key value))
+
+  clojure.lang.IFn
+  (invoke   [e key] (slot e key))
+  (invoke   [e key value] (set-slot e key value))
+
+  clojure.lang.ILookup
+  (valAt    [e key] (slot e key))
   
   Environment
-  (agents [e] (slot e :agents)))
+  (agents   [e] (slot e :agents)))
 
 (defn make-download-environment []
   (new DownloadEnvironment (delay (ref {:agents #{}}))))
 
-(defrecord DownloadAgent
+(deftype DownloadAgent
   [agent-controller ;; (agent ?)
    agent-body]      ;; (delay (ref {slot value, ...}))
 
   Object
-  (toString [this] (str "Download Agent: " (body this)))
+  (toString [this] (str "Download Agent: " (dissoc (body this) :environment)))
 
   Body
-  (body    [this] @@agent-body)
-  (slot    [this key] (@@agent-body key))
+  (body     [this] @@agent-body)
+  (slot     [this key] (@@agent-body key))
   (set-slot [this key value] (alter @agent-body assoc key value))
 
+  clojure.lang.IFn
+  (invoke   [a key] (slot a key))
+  (invoke   [a key value] (set-slot a key value))
+
+  clojure.lang.ILookup
+  (valAt    [a key] (slot a key))
+
   Agent
-  (ask     [a & opts])
-  (env     [a] (slot a :environment)))
+  (ask      [a & opts])
+  (env      [a] (slot a :environment)))
 
 (declare bind unbind)
 
@@ -273,45 +287,7 @@
                                (when (supplied path) {:path (as-file path)})
                                (when (supplied name) {:name name})
                                (when (supplied goal) {:goal goal})))))]
-          (when (supplied environment) (bind a environment))))))
-  "Download Agent constructor.")
-
-(defwriter agents)
-(defwriter environment)
-(defreader precedence)
-(defreader program)
-(defreader pending-actions)
-(defreader running-actions)
-
-(defreader :alive alive?)
-(defwriter :alive set-alive)
-
-(defreader :run run?)
-(defwriter :run set-run)
-
-(defreader :stop stop?)
-(defwriter :stop set-stop)
-
-(defreader :fail fail?)
-(defwriter :fail set-fail)
-
-(defreader path)
-(defwriter path)
-
-(defreader goal)
-(defwriter goal)
-
-(defreader file)
-(defwriter file)
-
-(defreader file-length)
-(defwriter file-length)
-
-(defreader total-file-length)
-(defwriter total-file-length)
-
-(defreader service)
-(defwriter service)
+          (when (supplied environment) (bind a environment)))))))
 
 (defn surround [a]
   (when-let [e (env a)] (difference (agents e) #{a})))
@@ -326,14 +302,15 @@
   (with-return e
     (when-not (binded? a e)
       (when (binded? a) (unbind a))
-      (dosync (set-agents e (union (agents e) #{a}))
-              (set-environment a e)))))
+      (dosync (e :agents (union (e :agents) #{a}))
+              (a :environment e)))))
 
 (defn unbind [a]
   (with-return a
     (when (binded? a)
-      (dosync (set-agents (env a) (difference (agents (env a)) #{a}))
-              (set-environment a nil)))))
+      (let [e (env a)]
+        (dosync (e :agents (difference (e :agents) #{a}))
+                (a :environment nil))))))
 
 (deftest agent-bind-test
   (let [e1 (make-download-environment)
