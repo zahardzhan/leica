@@ -178,9 +178,8 @@
                     "asdasd http://files.dsv.data.cod.ru/asdf ghjk")))))
 
 (defprotocol Body
-  (body    [this])
-  (slot    [this key])
-  (set-slot [this key value]))
+  (body [this])
+  (set-slot [this k v]))
 
 (defmacro defreader
   "Define slot-reader for objects that implement Body protocol." ;; TODO: Maybe deprecate
@@ -203,59 +202,60 @@
      (list 'defn slot-name ['this 'value]
            (list 'set-slot 'this slot-key 'value))))
 
-(defprotocol Environment
-  (agents  [e]))
+(defprotocol Environment)
 
 (defprotocol Agent
-  (ask     [a & opts])
-  (env     [a]))
+  (ask [this & opts]))
 
 (deftype DownloadEnvironment
-  [environment-body] ;; (delay (ref {slot value, ...}))
+  [environment-body]
 
   Object
-  (toString [this] (str "Download Environment: " (body this)))
+  (toString [this] (str (body this)))
 
   Body
-  (body     [this] @@environment-body)
-  (slot     [this key] (@@environment-body key))
-  (set-slot [this key value] (alter @environment-body assoc key value))
+  (body [this] @@environment-body)
+  (set-slot [this k v] (alter @environment-body assoc k v))
+
+  java.util.Map
+  (get [this k] (@@environment-body k))
 
   clojure.lang.IFn
-  (invoke   [e key] (slot e key))
-  (invoke   [e key value] (set-slot e key value))
+  (invoke [this key] (get this key))
 
   clojure.lang.ILookup
-  (valAt    [e key] (slot e key))
+  (valAt [this key] (get this key))
   
-  Environment
-  (agents   [e] (slot e :agents)))
+  Environment)
 
 (defn make-download-environment []
   (new DownloadEnvironment (delay (ref {:agents #{}}))))
 
 (deftype DownloadAgent
-  [agent-controller ;; (agent ?)
-   agent-body]      ;; (delay (ref {slot value, ...}))
+  [agent-controller
+   agent-body]
 
   Object
-  (toString [this] (str "Download Agent: " (dissoc (body this) :environment)))
+  (toString [this] (str (dissoc (body this)
+                                :environment
+                                :pending-actions
+                                :running-actions)))
 
   Body
-  (body     [this] @@agent-body)
-  (slot     [this key] (@@agent-body key))
-  (set-slot [this key value] (alter @agent-body assoc key value))
+  (body [this] @@agent-body)
+  (set-slot [this k v] (alter @agent-body assoc k v))
+
+  java.util.Map
+  (get [this k] (@@agent-body k))
 
   clojure.lang.IFn
-  (invoke   [a key] (slot a key))
-  (invoke   [a key value] (set-slot a key value))
+  (invoke [this key] (get this key))
 
   clojure.lang.ILookup
-  (valAt    [a key] (slot a key))
+  (valAt [this key] (get this key))
 
   Agent
-  (ask      [a & opts])
-  (env      [a] (slot a :environment)))
+  (ask [this & opts]))
 
 (declare bind unbind)
 
@@ -290,27 +290,29 @@
           (when (supplied environment) (bind a environment)))))))
 
 (defn surround [a]
-  (when-let [e (env a)] (difference (agents e) #{a})))
+  (difference (:agents (:environment a)) (hash-set a)))
 
 (defn binded?
-  ([a] (boolean (when-let [e (env a)]
-                  (when-let [ags (agents e)]
-                    (ags a)))))
-  ([a e] (and (identical? e (env a)) (binded? a))))
+  ([a] (contains? (:agents (:environment a)) a))
+  ([a e] (and (identical? e (:environment a)) (binded? a))))
 
 (defn bind [a e]
   (with-return e
     (when-not (binded? a e)
       (when (binded? a) (unbind a))
-      (dosync (e :agents (union (e :agents) #{a}))
-              (a :environment e)))))
+      (dosync (set-slot e :agents (union (:agents e) (hash-set a)))
+              (set-slot a :environment e)))))
 
 (defn unbind [a]
   (with-return a
     (when (binded? a)
-      (let [e (env a)]
-        (dosync (e :agents (difference (e :agents) #{a}))
-                (a :environment nil))))))
+      (let [e (:environment a)]
+        (dosync (set-slot e :agents (difference (:agents e) (hash-set a)))
+                (set-slot a :environment nil))))))
+
+(def e1 (make-download-environment))
+(def a1 (make-download-agent "http://files.dsv.data.cod.ru/asd2" :environment e1))
+a1
 
 (deftest agent-bind-test
   (let [e1 (make-download-environment)
