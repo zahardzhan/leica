@@ -16,8 +16,9 @@
    hooks)
   
   (:require
-   [clojure.contrib.http.agent :as http]
+   [com.twinql.clojure.http :as http]
    [clojure.contrib.duck-streams :as duck]
+   [clojure.contrib.io :as io]
    fn
    log)
   
@@ -41,50 +42,81 @@
                                   params.HttpMethodParams
                                   util.EncodingUtil)))
 
-(defmethod print-method clojure.lang.Delay
-  [x w] ((get-method print-method Object) x w)) ;; Don't print/eval delays
+(defvar timeout-after-fail* 3000)
+(defvar connection-timeout* 15000)
+(defvar get-request-timeout* 30000)
+(defvar head-request-timeout* 30000)
+(defvar buffer-size* 65536)
+
+;; Даже несколько удивлен тем, что функция высшего порядка same
+;; практически нигде никем никогда не используется. Что может быть
+;; логичнее чем код типа (same parents alice bob).
 
 (defn same [f & xs]
   (apply = (map f xs)))
+
+;; Выполняет блок кода body, при этом возвращает значение выражения
+;; expr.
 
 (defmacro with-return [expr & body]
   `(do (do ~@body)
        ~expr))
 
-(defmacro with-let-ret [[form val] & body]
+;; Связывает значение val с именем form, выполняет блок кода body и в
+;; конце возвращает значение form.
+
+(defmacro let-return [[form val] & body]
   `(let [~form ~val]
      (with-return ~form (do ~@body))))
 
-(defmacro defhook [name qualifier target args & body]
-  (let [key# (keyword name)]
-    `(add-hook ~qualifier ~target ~key# (fn ~args ~@body))))
-
-(defn derefed
+(defn dref
   ([] nil)
   ([x] (if (instance? clojure.lang.IDeref x) (deref x) x))
-  ([x f] (f (derefed x)))
-  ([x f & fs] ((apply comp (reverse fs)) (derefed x f))))
-
-(defalias dref derefed)
+  ([x & fs] ((apply comp (reverse fs)) (dref x))))
 
 (defmacro with-deref [[ref & refs] & body]
   (if ref
-    `(let [~ref (derefed ~ref)]
+    `(let [~ref (dref ~ref)]
        (with-deref ~refs ~@body))
     `(do ~@body)))
 
 (defmacro when-supplied [& clauses]
-  (if (not clauses) true
-      `(and (or (nil? ~(first clauses))
-                (do ~(second clauses)))
-            (when-supplied ~@(next (next clauses))))))
+  (if-not clauses true
+          `(and (or (nil? ~(first clauses))
+                    (do ~(second clauses)))
+                (when-supplied ~@(next (next clauses))))))
+
+(defalias supplied and)
 
 (defn agent? [x]
   (instance? clojure.lang.Agent x))
 
-(defalias supplied and)
-
 (def nothing nil)
+
+(defn take-after [item coll]
+  (rest (drop-while (partial not= item) coll)))
+
+(defn take-before [item coll]
+  (take-while (partial not= item) coll))
+
+(defn take-entirely-after [item coll]
+  (concat (take-after item coll)
+          (take-before item coll)
+          (list item)))
+
+(defn select [collection & {:keys [where order-by before after entirely-after]}]
+  (let [maybe-take-after #(if after (take-after after %) %)
+        maybe-take-before #(if before (take-before before %) %)
+        maybe-take-entirely-after #(if entirely-after (take-entirely-after entirely-after %) %)
+        maybe-filter-where #(if where (filter where %) %)
+        maybe-order-by #(if order-by (sort-by order-by %) %)]
+    (when (seq collection)
+      (-> (seq collection)
+          maybe-order-by
+          maybe-take-entirely-after
+          maybe-take-after
+          maybe-take-before
+          maybe-filter-where))))
 
 (defn as-file
   [arg & {:as args :keys [exists create readable writeable directory]}]
@@ -124,545 +156,359 @@
                                (apply as-file (new File arg) (flatten (seq args)))
                                (as-file (new File arg))))))
 
-(defn list-directory-files [dir] 
-  (seq (.listFiles (as-file dir :readable true :directory true))))
-
-(defn select [collection & {:keys [where order-by before after entirely-after]}]
-  (let [take-after  (fn [item] (rest (drop-while (partial not= item) collection)))
-        take-before (fn [item] (take-while (partial not= item) collection))
-        take-entirely-after (fn [item] (concat (take-after item)
-                                              (take-before item)
-                                              (list item)))
-        maybe-take-after  #(if after  (take-after  after) %)
-        maybe-take-before #(if before (take-before before) %)
-        maybe-take-entirely-after #(if entirely-after
-                                     (take-entirely-after entirely-after) %)
-        maybe-filter-where #(if where (filter where %) %)
-        maybe-order-by #(if order-by (sort-by order-by %) %)]
-    (when (seq collection)
-      (-> (seq collection)
-          maybe-order-by
-          maybe-take-entirely-after
-          maybe-take-after
-          maybe-take-before
-          maybe-filter-where))))
-
-(defvar- services* (atom {}))
-
-(defmacro defservice [service & opts]
-  `(let [service-keyword# (keyword (str *ns*) (str (quote ~service)))]
-     (swap! services* assoc service-keyword#
-            (merge (hash-map ~@opts)
-                   {:service service-keyword#}))))
-
-(defn extract-url [line]
-  (first (re-find
-          #"((https?|ftp|file):((//)|(\\\\))+[\w\d:#@%/;$()~_?\+-=\\\.&]*)"
-          line)))
-
-(defn match-service [line]
-  (when-let [url (extract-url line)]
-    (first (for [[service-name {:keys [address-pattern]}] @services*
-                 :let [address (re-find address-pattern url)]
-                 :when address]
-             [service-name address]))))
-
-(defn make-download-agent-body [line]
-  (when-let [[service-name address] (match-service line)]
-    (let [{:as service :keys [body]} (service-name @services*)]
-      (merge service {:address address}))))
-
-(deftest make-download-agent-body-test
-  (is (= "http://files.dsv.data.cod.ru/asdf"
-         (:address (make-download-agent-body
-                    "asdasd http://files.dsv.data.cod.ru/asdf ghjk")))))
-
-(defprotocol Body
-  (body [this])
-  (set-slot [this k v]))
-
-(defmacro defreader
-  "Define slot-reader for objects that implement Body protocol." ;; TODO: Maybe deprecate
-  ([slot-name]
-     (let [slot-key# (keyword slot-name)]
-       (list 'defn slot-name ['this]
-             (list 'slot 'this slot-key#))))
-  ([slot-key slot-name]
-     (list 'defn slot-name ['this]
-           (list 'slot 'this slot-key))))
-
-(defmacro defwriter
-  "Define slot-writer for objects that implement Body protocol." ;; TODO: Maybe deprecate
-  ([slot-name]
-     (let [slot-key# (keyword slot-name)
-           set-slot-name# (symbol (str 'set- slot-name))]
-       (list 'defn set-slot-name# ['this 'value]
-             (list 'set-slot 'this slot-key# 'value))))
-  ([slot-key slot-name]
-     (list 'defn slot-name ['this 'value]
-           (list 'set-slot 'this slot-key 'value))))
-
-(defprotocol Environment)
-
-(defprotocol Agent
-  (ask [this & opts]))
-
-(deftype DownloadEnvironment
-  [environment-body]
-
-  Object
-  (toString [this] (str (body this)))
-
-  Body
-  (body [this] @@environment-body)
-  (set-slot [this k v] (alter @environment-body assoc k v))
-
-  java.util.Map
-  (get [this k] (@@environment-body k))
-
-  clojure.lang.IFn
-  (invoke [this key] (get this key))
-
-  clojure.lang.ILookup
-  (valAt [this key] (get this key))
-  
-  Environment)
-
-(defn make-download-environment []
-  (new DownloadEnvironment (delay (ref {:agents #{}}))))
-
-(deftype DownloadAgent
-  [agent-controller
-   agent-body]
-
-  Object
-  (toString [this] (str (dissoc (body this)
-                                :environment
-                                :pending-actions
-                                :running-actions)))
-
-  Body
-  (body [this] @@agent-body)
-  (set-slot [this k v] (alter @agent-body assoc k v))
-
-  java.util.Map
-  (get [this k] (@@agent-body k))
-
-  clojure.lang.IFn
-  (invoke [this key] (get this key))
-
-  clojure.lang.ILookup
-  (valAt [this key] (get this key))
-
-  Agent
-  (ask [this & opts]))
-
-(declare bind unbind)
-
-(defvar make-download-agent
-  (let [precedence-counter (atom 0)]
-    (fn [line & {:as opts :keys [environment precedence program path name goal]}]
-      {:pre [(when-supplied program      (ifn? program)
-                            precedence   (number? precedence)
-                            environment  (instance? DownloadEnvironment environment)
-                            path         (as-file path :directory true :writeable true)
-                            name         (string? name))]}
-      (when-let [agent-body (make-download-agent-body line)]
-        (with-let-ret
-          [a (new DownloadAgent
-                  (agent nil :error-mode :fail)
-                  (delay (ref (merge
-                               {:precedence  (or precedence (swap! precedence-counter inc))
-                                :pending-actions clojure.lang.PersistentQueue/EMPTY
-                                :running-actions #{}
-                                :alive   true
-                                :run     false
-                                :stop    false
-                                :fail    nil}
-                               agent-body
-                               (dissoc opts :environment :precedence :program
-                                       :path :name :goal)
-                               (when (supplied environment) {:environment environment})
-                               (when (supplied program) {:program program})
-                               (when (supplied path) {:path (as-file path)})
-                               (when (supplied name) {:name name})
-                               (when (supplied goal) {:goal goal})))))]
-          (when (supplied environment) (bind a environment)))))))
-
-(defn surround [a]
-  (difference (:agents (:environment a)) (hash-set a)))
-
-(defn binded?
-  ([a] (contains? (:agents (:environment a)) a))
-  ([a e] (and (identical? e (:environment a)) (binded? a))))
-
-(defn bind [a e]
-  (with-return e
-    (when-not (binded? a e)
-      (when (binded? a) (unbind a))
-      (dosync (set-slot e :agents (union (:agents e) (hash-set a)))
-              (set-slot a :environment e)))))
-
-(defn unbind [a]
-  (with-return a
-    (when (binded? a)
-      (let [e (:environment a)]
-        (dosync (set-slot e :agents (difference (:agents e) (hash-set a)))
-                (set-slot a :environment nil))))))
-
-(def e1 (make-download-environment))
-(def a1 (make-download-agent "http://files.dsv.data.cod.ru/asd2" :environment e1))
-a1
-
-(deftest agent-bind-test
-  (let [e1 (make-download-environment)
-        a1 (make-download-agent "http://files.dsv.data.cod.ru/asd1" :environment e1)
-        a2 (make-download-agent "http://files.dsv.data.cod.ru/asd2" :environment e1)] 
-    (is (and (binded? a1 e1)
-             (binded? a1)
-             (binded? a2 e1)
-             (binded? a2)))
-    (unbind a1)
-    (unbind a2)
-    (is (not (or (binded? a1 e1)
-                 (binded? a1)
-                 (binded? a2 e1)
-                 (binded? a2))))
-    (bind a1 e1)
-    (is (and (binded? a1 e1)
-             (binded? a1)
-             (not (binded? a2 e1))
-             (not (binded? a2))))
-    (bind a2 e1)
-    (is (and (binded? a1 e1)
-             (binded? a1)
-             (binded? a2 e1)
-             (binded? a2)))))
-
-(defn run [{:as a :keys [strategy run-atom fail-atom]}]
-  (when (and (not *agent*) (run? a))
-    (throw (Exception. "Cannot run agent while it is running.")))
-  
-  (debug (str "Run " (download-agent-to-str a)))
-
-  (if (or (dead? a) (stop? a)) a
-      (try (reset! run-atom true)
-           (let [action (strategy a)]
-             (with-return (action a)
-               (reset! fail-atom nil)))
-           (catch Error e
-             (error (str "Error:" \newline
-                         (download-agent-to-str a) \newline
-                         e \newline))
-             (reset! fail-atom nil)
-             (throw e))
-           (catch RuntimeException e
-             (error (str "Runtime Exception:" \newline
-                         (download-agent-to-str a) \newline
-                         e \newline))
-             (reset! fail-atom nil)
-             (throw e))
-           (catch Throwable e
-             (with-return a
-               (error (str "Fail:" \newline
-                           (download-agent-to-str a) \newline
-                           e \newline))
-               (reset! fail-atom e)
-               (release-pending-sends)))
-           (finally (reset! run-atom false)))))
+(defn list-files [directory]
+  (seq (.listFiles (as-file directory :readable true :directory true))))
 
 (defn actual-file-length [file]
   (if (.exists file) (.length file) 0))
 
-(defn out-of-space-on-path? [{:as a :keys [path file total-length]}]
-  {:pre [(supplied path file total-length)]}
-  (if (.exists file)
-    (< (.getUsableSpace path) (- total-length (.length file)))
-    (= (.getUsableSpace path) 0)))
+(defn extract-url [line]
+  (first (re-find #"((https?|ftp|file):((//)|(\\\\))+[\w\d:#@%/;$()~_?\+-=\\\.&]*)"
+                  line)))
 
-(defn fully-loaded? [{:as a :keys [file total-length]}]
-  {:pre [(supplied file total-length)]}
-  (boolean (and (.exists file) (<= total-length (.length file)))))
+(def downloads (ref #{}))
+
+(defn add-to-downloads [dload]
+  (dosync (alter downloads union (hash-set dload))))
+
+(defn remove-from-downloads [dload]
+  (dosync (alter downloads difference (hash-set dload))))
+
+(defn surround [dload]
+  (difference downloads (hash-set dload)))
+
+(def download-scheduler (agent {}))
+
+(declare schedule-downloads
+         schedule-download
+         schedule-run-download
+         schedule-stop-download)
+
+(def download-types (atom {}))
+
+(defmacro def-download-type [name body]
+  `(let [name-keyword# (keyword (str *ns*) (str (quote ~name)))]
+     (def ~name (with-meta ~body {:type name-keyword#}))
+     (derive name-keyword# ::download)
+     (swap! download-types assoc name-keyword# ~name)
+     ~name))
+
+(defn download-type-matching-address [line]
+  (when-let [url (extract-url line)]
+    (first (for [[type-keyword download-type] @download-types
+                 :when (:link-pattern download-type)
+                 :let [link (re-find (:link-pattern download-type) url)]
+                 :when link]
+             (merge download-type {:link link})))))
+
+(def downloads-precedence-counter (atom 0))
+
+(defn make-download [line & {:as opts :keys [program path name]}]
+  (when-let [download-type (download-type-matching-address line)]
+    (let-return
+     [dload (agent
+             (merge
+              download-type
+              {:precedence (swap! downloads-precedence-counter inc)
+               :alive true
+               :failed false
+               :fail-reason nil
+               :run-atom (atom false)
+               :stop-atom (atom false)}
+              (dissoc opts :program :path :name)
+              (when (supplied program)
+                (if-not (ifn? program)
+                  (throw (Exception. "Program must be invokable."))
+                  {:program program}))
+              (when (supplied path)
+                (if-let [valid-path (as-file path :directory true :writeable true)]
+                  {:path valid-path}
+                  (throw (Exception. "Path must be writeable directory."))))
+              (when (supplied name)
+                (if-not (string? name)
+                  (throw (Exception. "Name must be string."))
+                  {:name name}))))]
+     (add-to-downloads dload))))
+
+(defn download-repr [{:as dload :keys [name link]}]
+  (str "<Download " (apply str (take 30 (or name link))) \>))
+
+(defn alive? [dload]
+  (:alive dload))
+
+(defn dead? [dload]
+  (not (alive? dload)))
+
+(defn failed? [dload]
+  (:failed dload))
+
+(defn fail-reason [dload]
+  (:fail-reason dload))
+
+(defn fail [dload & {reason :reason}]
+  (log/error (str "Error: " (download-repr dload) \newline reason \newline))
+  (assoc dload :failed true :fail-reason reason))
+
+(defn ok [dload]
+  (assoc dload :failed false :fail-reason nil))
+
+(defn die [dload]
+  (assoc dload :alive false))
 
 (defalias pass identity)
 
-(defn die [a]
-  (assoc a :alive false))
+(defn sleep [dload millis]
+  (with-return dload (Thread/sleep millis)))
 
-(defn sleep [a millis]
-  (with-return a (Thread/sleep millis)))
+(defn stop? [dload]
+  (deref (:stop-atom dload)))
 
-(defn get-file [{:as a :keys [name path]}]
-  {:pre [(supplied name path)]}
-  (assoc a :file (new File path name)))
+(defn stop-download [dload])
 
-(defvar- timeout-after-fail*        3000)
-(defvar- connection-timeout*       15000)
-(defvar- get-request-timeout*      30000)
-(defvar- head-request-timeout*     10000)
-(defvar- buffer-size*              65536)
+(defn run? [dload]
+  (deref (:run-atom dload)))
 
-(defn download-agent-performance [a]
-  (let [total-length (total-length a)
-        file-length  (file-length a)]
-    {:percent (if (and (number? total-length) (number? file-length)
-                       (pos? total-length) (pos? file-length))
-                (/ file-length total-length)
-                0)}))
+(defn run-download [{:as dload :keys [program run-atom stop-atom failed]} & {action :action}]
+  (when (and (not *agent*) (run? dload))
+    (throw (Exception. "Cannot run download while it is running.")))
+  
+  (log/debug (str "Run download " (download-repr dload)))
 
-(defvar progress-agent* (agent {:agents #{}}))
+  (if (or (dead? dload) (stop? dload)) dload
+      (try (reset! run-atom true)
 
-(defn begin-monitor-progress [a]
-  {:pre (agent? a)}
-  (send-off progress-agent* assoc :agents
-            (union (@progress-agent* :agents) #{a})))
+           (let [action (or action (program dload))]
+             (ok (action dload)))
 
-(defn cease-monitor-progress [a]
-  {:pre (agent? a)}
-  (send-off progress-agent* assoc :agents
-            (difference (@progress-agent* :agents) #{a})))
+           (catch Error e (fail dload :reason e))
+           (catch RuntimeException e (fail dload :reason e))
+           (catch Throwable e (fail dload :reason e))
 
-(defn update-progress []
-  (send-off progress-agent*
-            (fn [progress-agent]
-              (with-return progress-agent
-                (let [progress-strings
-                  (for [a (@progress-agent* :agents)
-                        :let [name (agent-name a)]
-                        :let [performance (download-agent-performance a)]
-                        :let [percent (:percent performance)]]
-                    (str \[
-                         (cond (not name) \-
-                               (< (count name) 12) name
-                               :longer (let [name-head (apply str (take 5 name))
-                                             name-tail (apply str (take-last 7 name))]
-                                         (str name-head \. \. name-tail)))
-                         \space percent \% \]))]
-                  (.println System/out (apply str \return progress-strings))
-                  (.flush System/out))))))
+           (finally (reset! run-atom false)))))
 
-(defmacro with-monitoring-progress [a & body]
-  `(try (when (agent? ~a)
-          (begin-monitor-progress ~a))
-        (do ~@body)
-        (finally (cease-monitor-progress ~a))))
-
-(defn download
-  [{:as a :keys [name address file total-length file-length-atom]}]
-  {:pre [(supplied name address file total-length file-length-atom)]}
+(defn files*-dsv-*-data-cod-ru-get-head [{:as dload :keys [link name]}]
+  {:pre [(supplied link)]}
   (let [client (new HttpClient)
-        get    (new GetMethod address)]
-    (when (and address file)
-      (try
-        (.. client getHttpConnectionManager getParams 
-            (setConnectionTimeout connection-timeout*))
-        (.. get getParams (setSoTimeout get-request-timeout*))
-        (.setRequestHeader get "Range" (str "bytes=" (actual-file-length file) \-))
-        (.executeMethod client get)
-        (let [content-length (.getResponseContentLength get)]
-          (cond (not content-length)
-                (throw (Exception. "Cannot check file before download."))
-
-                (not= content-length (- total-length (actual-file-length file)))
-                (throw (Exception. "Downloading file size mismatch."))
-
-                :else
-                (with-return a
-                  (with-open [#^InputStream input (.getResponseBodyAsStream get)
-                              #^FileOutputStream output (FileOutputStream. file true)]
-                    (with-monitoring-progress *agent*
-                      (info (str "Begin download " name))
-                      (let [buffer (make-array Byte/TYPE buffer-size*)]
-                        (loop [file-size (actual-file-length file)]
-                          (let [read-size (.read input buffer)]
-                            (when (pos? read-size)
-                              (let [new-size (+ file-size read-size)]
-                                (.write output buffer 0 read-size)
-                                (reset! file-length-atom new-size)
-                                (when (not (stop? a))
-                                  (recur new-size))))))
-                        (.flush output)))
-                    (info (str "End download " name))))))
-        (finally (.releaseConnection get))))))
-
-(defn files-dsv-*-data-cod-ru-get-head [{:as a :keys [address name]}]
-  {:pre [(supplied address)]}
-  (let [client (new HttpClient)
-        head (new HeadMethod address)]
+        head (new HeadMethod link)]
     (.. client getHttpConnectionManager getParams 
         (setConnectionTimeout connection-timeout*))
     (.. head getParams (setSoTimeout head-request-timeout*))
     (try (let [status (.executeMethod client head)]
            (if (= status HttpStatus/SC_OK)
-             (let [content-length (Integer/parseInt
-                                   (.. head (getResponseHeader "Content-Length") (getValue)))
-                   content-disposition (.. head (getResponseHeader "Content-Disposition") (getValue))
-                   filename (URLDecoder/decode (second (re-find #"; filename=\"(.*)\"" content-disposition)))]
-               (if-not (and content-length filename) (die a)
-                       (merge a {:total-length content-length}
+             (let [length (Integer/parseInt
+                           (.. head (getResponseHeader "Content-Length") (getValue)))
+                   disposition (.. head (getResponseHeader "Content-Disposition") (getValue))
+                   filename (URLDecoder/decode (second (re-find #"; filename=\"(.*)\"" disposition)))]
+               (if-not (and length filename) (die dload)
+                       (merge dload
+                              {:total-file-length length}
                               (when (not name) {:name filename}))))
              (throw (Exception. "HEAD request failed."))))
          (finally (.releaseConnection head)))))
 
-(defn download-environment-is-done? [e]
-  (every? dead? (agents e)))
+(defn get-file [{:as dload :keys [name path]}]
+  {:pre [(supplied name path)]}
+  (assoc dload :file (new File path name)))
 
-(defn terminate-download-environment [e] nil)
+(defn out-of-space-on-path? [{:as dload :keys [path file total-file-length]}]
+  {:pre [(supplied path file total-file-length)]}
+  (if (.exists file)
+    (< (.getUsableSpace path) (- total-file-length (.length file)))
+    (= (.getUsableSpace path) 0)))
 
-(defn try-to-terminate-download-environment [e]
-  (when (download-environment-is-done? e)
-    (terminate-download-environment e)))
+(defn fully-loaded? [{:as dload :keys [file total-file-length]}]
+  {:pre [(supplied file total-file-length)]}
+  (boolean (and (.exists file) (<= total-file-length (.length file)))))
 
-(defn idle-service-successors [a]
-  (select (succeeded (agents (env a))) :order-by precedence
-          :where (fn/and idle? (partial same service a))))
+(defn begin-download
+  [{:as dload :keys [name link file total-file-length]}]
+  {:pre [(supplied name link file total-file-length)]}
+  (let [client (HttpClient.)
+        get (GetMethod. link)]
+    (try
+      (.. client getHttpConnectionManager getParams 
+          (setConnectionTimeout connection-timeout*))
+      (.. get getParams (setSoTimeout get-request-timeout*))
+      (.setRequestHeader get "Range" (str "bytes=" (actual-file-length file) \-))
+      (.executeMethod client get)
+      (let [content-length (.getResponseContentLength get)]
+        (cond (not content-length)
+              (throw (Exception. "Cannot check file length before download."))
 
-(defn failed-service-successors-after [a]
-  (select (succeeded (agents (env a))) :entirely-after a :order-by precedence
-          :where (fn/and failed? (partial same service a))))
+              (not= content-length (- total-file-length (actual-file-length file)))
+              (throw (Exception. "Downloading file size mismatch."))
 
-(defn alive-service-successors-after [a]
-  (select (succeeded (agents (env a))) :entirely-after a :order-by precedence
-          :where (fn/and alive? (partial same service a))))
+              :else
+              (with-return dload
+                (with-open [#^InputStream input (.getResponseBodyAsStream get)
+                            #^FileOutputStream output (FileOutputStream. file true)]
+                  (log/info (str "Begin download " name))
+                  (let [buffer (make-array Byte/TYPE buffer-size*)]
+                    (loop [file-size (actual-file-length file)]
+                      (let [read-size (.read input buffer)]
+                        (when (pos? read-size)
+                          (let [new-size (+ file-size read-size)]
+                            (.write output buffer 0 read-size)
+                            ;; (reset! file-length-atom new-size)
+                            (when-not (stop? dload)
+                              (recur new-size)))))))
+                  (.flush output)
+                  (log/info (str "End download " name))))))
+      (finally (.releaseConnection get)))))
 
-(defn running-service-agents [service environment]
-  (select (succeeded (agents environment))
-          :where #(and (= service (service %)) (run? %))))
+(defn files*-dsv-*-data-cod-ru-download-program
+  [{:as dload :keys [link name file path total-file-length]}]
+  (cond (not link) die
+        (not (and name total-file-length)) files*-dsv-*-data-cod-ru-get-head
+        (not file) get-file
+        (or (out-of-space-on-path? dload) (fully-loaded? dload)) die
+        :requirements-ok begin-download))
 
-(defn files-dsv-*-data-cod-ru-strategy
-  [{:as a :keys [address name file path total-length service max-active-agents]}]
-  (let [get-successor
-        (fn [] (when *agent* (or (first (idle-service-successors *agent*))
-                                (first (failed-service-successors-after *agent*))
-                                (first (alive-service-successors-after *agent*)))))
-        schedule
-        (fn [action body]
-          (try
-            (let [new-body (action body)]
-              (with-return new-body
-                (when *agent*
-                  (let [successor (get-successor)]
-                    (if (dead? new-body)
-                      (when successor (send-off successor run))
-                      (send-off *agent* run))))))
-            (catch Throwable t
-              (when *agent*
-                (let [successor (get-successor)]
-                  (send-off *agent* sleep timeout-after-fail*)
-                  (when successor (send-off successor run))))
-              (throw t))))]
-    (cond (not address) (add-hook die schedule)
-          
-          (> (count (running-service-agents service (env a))) max-active-agents)
-          pass
+(def files*-dsv-*-data-cod-ru
+     {:program files*-dsv-*-data-cod-ru-download-program
+      :max-active-downloads 1
+      :link nil
+      :name nil
+      :path nil
+      :file nil
+      :total-file-length nil
+      :file-length nil})
 
-          (not (and name total-length))
-          (add-hook files-dsv-*-data-cod-ru-get-head schedule)
-          
-          (not file) (add-hook get-file schedule)
-          
-          (or (out-of-space-on-path? a) (fully-loaded? a))
-          (add-hook die schedule)
-          
-          :else (add-hook download schedule))))
+(def-download-type files3?-dsv-*-data-cod-ru
+  (merge files*-dsv-*-data-cod-ru
+         {:link-pattern #"http://files3?.dsv.*.data.cod.ru/.+"}))
 
-(defn data-cod-ru-parse-page [{:as a :keys [address]}]
-  {:pre [(supplied address)]}
+(def-download-type files2-dsv-*-data-cod-ru
+  (merge files*-dsv-*-data-cod-ru
+         {:link-pattern #"http://files2.dsv.*.data.cod.ru/.+"}))
+
+(def-download-type files-dsv-region-data-cod-ru
+  (merge files*-dsv-*-data-cod-ru
+         {:link-pattern #"http://files.dsv-region.data.cod.ru/.+"}))
+
+(def-download-type files2-dsv-region-data-cod-ru
+  (merge files*-dsv-*-data-cod-ru
+         {:link-pattern #"http://files2.dsv-region.data.cod.ru/.+"}))
+
+(defn data-cod-ru-parse-page [{:as dload :keys [link]}]
+  {:pre [(supplied link)]}
   (let [client (new HttpClient)
-        get (new GetMethod address)]
+        get (new GetMethod link)]
     (.. client getHttpConnectionManager getParams 
         (setConnectionTimeout connection-timeout*))
     (.. get getParams (setSoTimeout get-request-timeout*))
     (try (let [status (.executeMethod client get)]
            (if (= status HttpStatus/SC_OK)
-             (let [link (re-find #"http://files[-\d\w\.]*data.cod.ru/[^\"]+"
-                                 (duck/slurp* (.getResponseBodyAsStream get)))]
-               (if link (assoc a :link link)
-                   (die a)))
+             (let [child-link (re-find #"http://files[-\d\w\.]*data.cod.ru/[^\"]+"
+                                       (duck/slurp* (.getResponseBodyAsStream get)))]
+               (if child-link
+                 (assoc dload :child-link child-link)
+                 (die dload)))
              (throw (Exception. "Fail to parse page."))))
          (finally (.releaseConnection get)))))
 
-(defn data-cod-ru-make-child-agent [{:as a :keys [link path precedence]}]
-  {:pre [(supplied link path precedence (env a))]}
-  (let [child (make-download-agent link :environment (env a)
-                                   :precedence precedence
-                                   :path path)]
-    (if-not child (die a)
-            (do (send-off child run)
-                (assoc a :child child)))))
+(defn data-cod-ru-make-child-download [{:as dload :keys [link child-link path]}]
+  {:pre [(supplied link child-link path)]}
+  (let [child (or (first (for [dl @downloads :when (= child-link (:link @dl))] dl))
+                  (download child-link :path path))]
+    (if child
+      (with-return dload (schedule-download child))
+      (die dload))))
 
-(defn data-cod-ru-strategy [{:as a :keys [address link child]}]
-  (let [schedule
-        (fn [action body]
-          (try
-            (let [new-body (action body)]
-              (with-return new-body
-                (when *agent*
-                  (when (alive? new-body) (send-off *agent* run)))))
-            (catch Throwable t
-              (when *agent*
-                (send-off *agent* sleep timeout-after-fail*)
-                (send-off *agent* run)))))]
-    (cond (not (and address (env a))) die
-          (not link)     (add-hook data-cod-ru-parse-page schedule)
-          (not child)    (add-hook data-cod-ru-make-child-agent schedule)
-          :else          die)))
+(defn data-cod-ru-download-program [{:as dload :keys [link child-link child]}]
+  (cond (not link) data-cod-ru-parse-page
+        (not child) data-cod-ru-make-child-download
+        :finally die))
 
-(defservice data-cod-ru
-  :address-pattern #"http://[\w\-]*.data.cod.ru/\d+"
-  ;; :program data-cod-ru-strategy
-  :address nil
-  :link nil
-  :child nil)
+(def-download-type data-cod-ru
+  {:link-pattern #"http://[\w\-]*.data.cod.ru/\d+"
+   :program data-cod-ru-download-program
+   :link nil
+   :path nil
+   :child-link nil
+   :child nil})
 
-(defservice files3?-dsv-*-data-cod-ru
-  :address-pattern #"http://files3?.dsv.*.data.cod.ru/.+"
-  ;; :program files-dsv-*-data-cod-ru-strategy
-  :max-active-agents 1
-  :address nil
-  :name nil
-  :file nil
-  :path nil
-  :total-file-length nil
-  :file-length nil)
+(comment
+  (def d1 (make-download "http://files2.dsv-region.data.cod.ru/proxy/3/?WyI0NjcyZTBhYTJiNzc1ZTNjMjRlYWFhMTc4MDgxMzk4MCIsIjEyODgzNDUzMzEiLCJwcmlrb2xfcmFzdGlzaGthLmZsdiIsIm5UbE1obFF2ZVVKNXZRUFpkMlVxVnQyakdxUDFyOXZPN0NpNlwvYTBLMUd1RWRzT1NoMnA5OU5EWllLaGhjaXptSzIrN09HU2w3VkdNTUVNcTd1RjdWTEZzUkI5K1liZFFsb2hiQWRNcjdTNUh6QXpIcmRtREQxaG5hVTVtaXJzR3k3WFRkWCt0MnFXc2xNc0ZcLzdGakRXT3FEV1wvSWZHNmQwM2oyTlwvUlpUUU09Il0%3D"
+                         :path "/home/haru/Inbox/"))
 
-(defservice files2-dsv-*-data-cod-ru
-  :address-pattern #"http://files2.dsv.*.data.cod.ru/.+"
-  ;; :program files-dsv-*-data-cod-ru-strategy
-  :max-active-agents 1
-  :address nil
-  :name nil
-  :file nil
-  :path nil
-  :total-file-length nil
-  :file-length nil)
+  d1
+  ((@d1 :program) @d1)
+  (send-off d1 ((@d1 :program) @d1))
+  (((@d1 :program) @d1) @d1)
 
-(set-log :enable-levels [:debug])
+  d2
+  (send-off d2 ((@d2 :program) @d2))
+  (((@d2 :program) @d2) @d2)
 
-(defn -main [& args]
-  (with-command-line args
-    "Use it!"
-    [[quiet?  q? "Work quietly."]
-     [debug?  d? "Print debug messages."]
-     remaining-args]
+  )
 
-    (set-log :levels (cond quiet? ()
-                           debug? (list :debug :info :warn :error :fatal)
-                           :else  (list :info :error :fatal)))
-    
-    (let [jobs-file (some #(as-file % :directory false :readable true) remaining-args)
-          working-path (or (some #(as-file % :directory true :writeable true) remaining-args)
-                           (as-file (System/getProperty "user.dir") :writeable true))]
-      (when (and jobs-file working-path)
-        (let [lines (duck/read-lines jobs-file)
-              download-environment (make-environment)]
-          (doseq [line lines]
-            (make-download-agent line
-                                 :environment download-environment
-                                 :path working-path))
-          
-          (add-hook :after terminate-download-environment
-                    :system-exit (fn [e] (System/exit 0)))
-          
-          (doseq [a (agents download-environment)]
-            (send-off a run)))))))
+;; (defn download-agent-performance [a]
+;;   (let [total-length (total-length a)
+;;         file-length  (file-length a)]
+;;     {:percent (if (and (number? total-length) (number? file-length)
+;;                        (pos? total-length) (pos? file-length))
+;;                 (/ file-length total-length)
+;;                 0)}))
+
+;; (defvar progress-agent* (agent {:agents #{}}))
+
+;; (defn begin-monitor-progress [a]
+;;   {:pre (agent? a)}
+;;   (send-off progress-agent* assoc :agents
+;;             (union (@progress-agent* :agents) #{a})))
+
+;; (defn cease-monitor-progress [a]
+;;   {:pre (agent? a)}
+;;   (send-off progress-agent* assoc :agents
+;;             (difference (@progress-agent* :agents) #{a})))
+
+;; (defn update-progress []
+;;   (send-off progress-agent*
+;;             (fn [progress-agent]
+;;               (with-return progress-agent
+;;                 (let [progress-strings
+;;                   (for [a (@progress-agent* :agents)
+;;                         :let [name (agent-name a)]
+;;                         :let [performance (download-agent-performance a)]
+;;                         :let [percent (:percent performance)]]
+;;                     (str \[
+;;                          (cond (not name) \-
+;;                                (< (count name) 12) name
+;;                                :longer (let [name-head (apply str (take 5 name))
+;;                                              name-tail (apply str (take-last 7 name))]
+;;                                          (str name-head \. \. name-tail)))
+;;                          \space percent \% \]))]
+;;                   (.println System/out (apply str \return progress-strings))
+;;                   (.flush System/out))))))
+
+;; (defmacro with-monitoring-progress [a & body]
+;;   `(try (when (agent? ~a)
+;;           (begin-monitor-progress ~a))
+;;         (do ~@body)
+;;         (finally (cease-monitor-progress ~a))))
+
+;; (defn download-environment-is-done? [e]
+;;   (every? dead? (agents e)))
+
+;; (defn terminate-download-environment [e] nil)
+
+;; (defn try-to-terminate-download-environment [e]
+;;   (when (download-environment-is-done? e)
+;;     (terminate-download-environment e)))
+
+;; (defn idle-service-successors [a]
+;;   (select (succeeded (agents (env a))) :order-by precedence
+;;           :where (fn/and idle? (partial same service a))))
+
+;; (defn failed-service-successors-after [a]
+;;   (select (succeeded (agents (env a))) :entirely-after a :order-by precedence
+;;           :where (fn/and failed? (partial same service a))))
+
+;; (defn alive-service-successors-after [a]
+;;   (select (succeeded (agents (env a))) :entirely-after a :order-by precedence
+;;           :where (fn/and alive? (partial same service a))))
+
+;; (defn running-service-agents [service environment]
+;;   (select (succeeded (agents environment))
+;;           :where #(and (= service (service %)) (run? %))))
