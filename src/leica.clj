@@ -106,20 +106,6 @@
             (when-not (= (count before) (count coll))
               (list item)))))
 
-(defn select [collection & {:keys [where order-by before after entirely-after]}]
-  (let [maybe-take-after #(if after (take-after after %) %)
-        maybe-take-before #(if before (take-before before %) %)
-        maybe-take-entirely-after #(if entirely-after (take-entirely-after entirely-after %) %)
-        maybe-filter-where #(if where (filter where %) %)
-        maybe-order-by #(if order-by (sort-by order-by %) %)]
-    (when (seq collection)
-      (-> (seq collection)
-          maybe-order-by
-          maybe-take-entirely-after
-          maybe-take-after
-          maybe-take-before
-          maybe-filter-where))))
-
 (defn as-file
   [arg & {:as args :keys [exists create readable writeable directory]}]
   (let [argtype (type arg)]
@@ -273,6 +259,10 @@
 (defn idle [dload]
   (assoc dload :failed false :fail-reason nil))
 
+(defn file-length [{:as dload file-length-atom :file-length-atom}]
+  (when file-length-atom
+    (deref file-length-atom)))
+
 (defn run-download [{:as dload :keys [program run-atom stop-atom failed]} & {action :action}]
   (when (and (not *agent*) (running? dload))
     (throw (Exception. "Cannot run download while it is running.")))
@@ -302,7 +292,8 @@
                    filename (URLDecoder/decode (second (re-find #"; filename=\"(.*)\"" disposition)))]
                (if-not (and length filename) (die dload)
                        (merge dload
-                              {:total-file-length length}
+                              {:total-file-length length
+                               :file-length-atom (atom 0)}
                               (when (not name) {:name filename}))))
              (throw (Exception. "HEAD request failed."))))
          (finally (.releaseConnection head)))))
@@ -322,7 +313,7 @@
   (boolean (and (.exists file) (<= total-file-length (.length file)))))
 
 (defn begin-download
-  [{:as dload :keys [name link file total-file-length]}]
+  [{:as dload :keys [name link file total-file-length file-length-atom]}]
   {:pre [(supplied name link file total-file-length)]}
   (let [client (HttpClient.)
         get (GetMethod. link)]
@@ -350,7 +341,7 @@
                         (when (pos? read-size)
                           (let [new-size (+ file-size read-size)]
                             (.write output buffer 0 read-size)
-                            ;; (reset! file-length-atom new-size)
+                            (reset! file-length-atom new-size)
                             (when-not (stopped? dload)
                               (recur new-size)))))))
                   (.flush output)
@@ -372,8 +363,7 @@
       :name nil
       :path nil
       :file nil
-      :total-file-length nil
-      :file-length nil})
+      :total-file-length nil})
 
 (def-download-type files3?-dsv-*-data-cod-ru
   (merge files*-dsv-*-data-cod-ru
@@ -432,7 +422,7 @@
 (defn exit-program []
   (log/debug "Leica is done. Bye."))
 
-(defn callback-to-download-scheduler [dload]
+(defn callback-download-scheduler [dload]
   (when *agent*
     (send-off download-scheduler* schedule-downloads :callback *agent*)))
 
@@ -444,7 +434,7 @@
    (or (not (seq @downloads))
        (every? (comp dead? deref) @downloads))
    (with-return scheduler
-     (when done-hook (done-hook)))
+     (when donehook (done-hook)))
    
    :shedule
    (let [groups ;; hash map of downloads grouped by type, each group
@@ -457,12 +447,12 @@
           (for [[dloads-type dloads] groups
                 :let [max-running-dloads ;; maximum amount of running
                       ;; downloads for this type of downloads
-                      (:max-running-downloads (dloads-type @download-types*))]
-                :let [running-dloads (filter (comp running? deref) dloads)]
-                :let [count-of-running-dloads (count running-dloads)]
-                :let [idle-dloads (filter (comp idle? deref) dloads)]
-                :let [failed-dloads (filter (comp failed? deref) dloads)]
-                :let [count-of-dloads-to-launch (- max-running-dloads count-of-running-dloads)]]
+                      (:max-running-downloads (dloads-type @download-types*))
+                      running-dloads (filter (comp running? deref) dloads)
+                      count-of-running-dloads (count running-dloads)
+                      idle-dloads (filter (comp idle? deref) dloads)
+                      failed-dloads (filter (comp failed? deref) dloads)
+                      count-of-dloads-to-launch (- max-running-dloads count-of-running-dloads)]]
             (cond
              ;; if no downloads in group then leave
              (not (seq dloads)) ()
@@ -481,13 +471,63 @@
              callback
              (take count-of-dloads-to-launch
                    (concat idle-dloads (take-entirely-after callback failed-dloads))))))]
+     
      (with-return scheduler
        (doseq [successor successors]
          (send-off successor run-download)
          (when schedule-with-callback
-           (send-off successor callback-to-download-scheduler)))))))
+           (send-off successor callback-download-scheduler)))))))
+
+(defmulti performance type)
+
+(defmethod performance ::download
+  [{:as dload :keys [total-file-length]}]
+  (let [file-length (file-length dload)
+        load-percent (when (and (number? total-file-length) (number? file-length)
+                                (pos? total-file-length) (pos? file-length))
+                       (/ file-length total-file-length))]
+    (merge {} (when load-percent {:load-percent load-percent}))))
+
+(performance @(first @downloads*))
+
+(def progress-monitor* (agent {:agents #{}}))
+
+(defn begin-monitor-progress [{:as progress-monitor agents :agents} agnt]
+  {:pre (agent? agnt)}
+  (assoc progress-monitor :agents (union agents (hash-set agnt))))
+
+(defn cease-monitor-progress [{:as progress-monitor agents :agents} agnt]
+  {:pre (agent? agnt)}
+  (assoc progress-monitor :agents (difference agents (hash-set agnt))))
+
+(defmacro with-progress-monitoring [agnt & body]
+  (if-not (agent? agnt)
+    `(do ~@body)
+    `(try (send-off progress-monitor* begin-monitor-progress ~agnt)
+          (do ~@body)
+          (finally (send-off progress-monitor* cease-monitor-progress ~agnt)))))
+
+(defn show-progress [{:as progress-monitor agents :agents}]
+  (with-return progress-monitor
+    (.print System/out \return)
+    (doseq [abody (map deref agents)
+            :let [name (:name abody)
+                  name-length (if (string? name) (count name) nil)
+                  perf (performance abody)
+                  load-percent (:load-percent perf)]]
+      (.print
+       System/out
+       (str \[
+            (cond (not name) \-
+                  (< name-length 12) name
+                  :longer (str (.substring name 0 5) \. \.
+                               (.substring name (- name-length 7) name-length)))
+            \space (or load-percent \0) \% \])))
+    (.println System/out)
+    (.flush System/out)))
 
 (comment
+  (show-progress {:agents @downloads*})
   (def d1 (make-download "http://files2.dsv-region.data.cod.ru/proxy/3/?WyI0NjcyZTBhYTJiNzc1ZTNjMjRlYWFhMTc4MDgxMzk4MCIsIjEyODgzNDUzMzEiLCJwcmlrb2xfcmFzdGlzaGthLmZsdiIsIm5UbE1obFF2ZVVKNXZRUFpkMlVxVnQyakdxUDFyOXZPN0NpNlwvYTBLMUd1RWRzT1NoMnA5OU5EWllLaGhjaXptSzIrN09HU2w3VkdNTUVNcTd1RjdWTEZzUkI5K1liZFFsb2hiQWRNcjdTNUh6QXpIcmRtREQxaG5hVTVtaXJzR3k3WFRkWCt0MnFXc2xNc0ZcLzdGakRXT3FEV1wvSWZHNmQwM2oyTlwvUlpUUU09Il0%3D"
                          :path "/home/haru/Inbox/"))
   (def d2 (make-download "http://files.dsv-region.data.cod.ru/?WyJjMjMyOWMwZWZhNzdjOGFiMWUwNzMwYmI5YTM1OWNmOSIsMTI4ODUwNzAzNywid3d3LmRpc2x5Lm5ldC5ydV9cdTA0MzhcdTA0NDJcdTA0MzBcdTA0M2JcdTA0NGNcdTA0NGZcdTA0M2RcdTA0M2UucmFyIiwiSlJwOFR5aGUwQjNJWWFmUU5FZjF6bmxiZkQ0anIzOXR5cGxCRFE1a1Y5T3ZwcmRnTDhKUlJFVGMyangrTkw5a0UrTFM2NlVRUlVtRUlxazZITFRJMmZoZUVnUWcyWUpwbFRVM3VtSzIxa3FBcm13TzgzRitJOXp3amR1eExsZjF2Y3dwQzdONGRrdDNZaVBvdTZGbkhKdm1LY3g3QnU4QVlzd016bktsU3dVPSJd"
@@ -501,73 +541,4 @@
   d2
   (send-off d2 ((@d2 :program) @d2))
   (((@d2 :program) @d2) @d2)
-
   )
-
-;; (defn download-agent-performance [a]
-;;   (let [total-length (total-length a)
-;;         file-length  (file-length a)]
-;;     {:percent (if (and (number? total-length) (number? file-length)
-;;                        (pos? total-length) (pos? file-length))
-;;                 (/ file-length total-length)
-;;                 0)}))
-
-;; (defvar progress-agent* (agent {:agents #{}}))
-
-;; (defn begin-monitor-progress [a]
-;;   {:pre (agent? a)}
-;;   (send-off progress-agent* assoc :agents
-;;             (union (@progress-agent* :agents) #{a})))
-
-;; (defn cease-monitor-progress [a]
-;;   {:pre (agent? a)}
-;;   (send-off progress-agent* assoc :agents
-;;             (difference (@progress-agent* :agents) #{a})))
-
-;; (defn update-progress []
-;;   (send-off progress-agent*
-;;             (fn [progress-agent]
-;;               (with-return progress-agent
-;;                 (let [progress-strings
-;;                   (for [a (@progress-agent* :agents)
-;;                         :let [name (agent-name a)]
-;;                         :let [performance (download-agent-performance a)]
-;;                         :let [percent (:percent performance)]]
-;;                     (str \[
-;;                          (cond (not name) \-
-;;                                (< (count name) 12) name
-;;                                :longer (let [name-head (apply str (take 5 name))
-;;                                              name-tail (apply str (take-last 7 name))]
-;;                                          (str name-head \. \. name-tail)))
-;;                          \space percent \% \]))]
-;;                   (.println System/out (apply str \return progress-strings))
-;;                   (.flush System/out))))))
-
-;; (defmacro with-monitoring-progress [a & body]
-;;   `(try (when (agent? ~a)
-;;           (begin-monitor-progress ~a))
-;;         (do ~@body)
-;;         (finally (cease-monitor-progress ~a))))
-
-;; (defn download-environment-is-done? [e]
-;;   (every? dead? (agents e)))
-
-;; (defn try-to-terminate-download-environment [e]
-;;   (when (download-environment-is-done? e)
-;;     (terminate-download-environment e)))
-
-;; (defn idle-service-successors [a]
-;;   (select (succeeded (agents (env a))) :order-by precedence
-;;           :where (fn/and idle? (partial same service a))))
-
-;; (defn failed-service-successors-after [a]
-;;   (select (succeeded (agents (env a))) :entirely-after a :order-by precedence
-;;           :where (fn/and failed? (partial same service a))))
-
-;; (defn alive-service-successors-after [a]
-;;   (select (succeeded (agents (env a))) :entirely-after a :order-by precedence
-;;           :where (fn/and alive? (partial same service a))))
-
-;; (defn running-service-agents [service environment]
-;;   (select (succeeded (agents environment))
-;;           :where #(and (= service (service %)) (run? %))))
