@@ -49,8 +49,8 @@
 (defvar buffer-size* 65536)
 
 ;; Даже несколько удивлен тем, что функция высшего порядка same
-;; практически нигде никем никогда не используется. Что может быть
-;; логичнее чем код типа (same parents alice bob).
+;; практически нигде не используется. Что может быть логичнее чем код
+;; типа (same parents alice bob).
 
 (defn same [f & xs]
   (apply = (map f xs)))
@@ -100,9 +100,11 @@
   (take-while (partial not= item) coll))
 
 (defn take-entirely-after [item coll]
-  (concat (take-after item coll)
-          (take-before item coll)
-          (list item)))
+  (let [after (take-after item coll)
+        before (take-before item coll)]
+    (concat after before
+            (when-not (= (count before) (count coll))
+              (list item)))))
 
 (defn select [collection & {:keys [where order-by before after entirely-after]}]
   (let [maybe-take-after #(if after (take-after after %) %)
@@ -166,36 +168,33 @@
   (first (re-find #"((https?|ftp|file):((//)|(\\\\))+[\w\d:#@%/;$()~_?\+-=\\\.&]*)"
                   line)))
 
-(def downloads (ref #{}))
+(def downloads* (ref #{}))
 
 (defn add-to-downloads [dload]
-  (dosync (alter downloads union (hash-set dload))))
+  (dosync (alter downloads* union (hash-set dload))))
 
 (defn remove-from-downloads [dload]
-  (dosync (alter downloads difference (hash-set dload))))
+  (dosync (alter downloads* difference (hash-set dload))))
 
 (defn surround [dload]
-  (difference downloads (hash-set dload)))
+  (difference downloads* (hash-set dload)))
 
-(def download-scheduler (agent {}))
+(def download-scheduler*
+     (agent {:done-hook nil ;; run when there are no more scheduling job
+             :schedule-with-callback false}))
 
-(declare schedule-downloads
-         schedule-download
-         schedule-run-download
-         schedule-stop-download)
-
-(def download-types (atom {}))
+(def download-types* (atom {}))
 
 (defmacro def-download-type [name body]
   `(let [name-keyword# (keyword (str *ns*) (str (quote ~name)))]
      (def ~name (with-meta ~body {:type name-keyword#}))
      (derive name-keyword# ::download)
-     (swap! download-types assoc name-keyword# ~name)
+     (swap! download-types* assoc name-keyword# ~name)
      ~name))
 
 (defn download-type-matching-address [line]
   (when-let [url (extract-url line)]
-    (first (for [[type-keyword download-type] @download-types
+    (first (for [[type-keyword download-type] @download-types*
                  :when (:link-pattern download-type)
                  :let [link (re-find (:link-pattern download-type) url)]
                  :when link]
@@ -246,11 +245,8 @@
   (:fail-reason dload))
 
 (defn fail [dload & {reason :reason}]
-  (log/error (str "Error: " (download-repr dload) \newline reason \newline))
+  (log/error (str "Error:" \space (download-repr dload) \newline reason \newline))
   (assoc dload :failed true :fail-reason reason))
-
-(defn ok [dload]
-  (assoc dload :failed false :fail-reason nil))
 
 (defn die [dload]
   (assoc dload :alive false))
@@ -260,30 +256,35 @@
 (defn sleep [dload millis]
   (with-return dload (Thread/sleep millis)))
 
-(defn stop? [dload]
+(defn stopped? [dload]
   (deref (:stop-atom dload)))
 
 (defn stop-download [dload])
 
-(defn run? [dload]
+(defn running? [dload]
   (deref (:run-atom dload)))
 
+(defn idle? [dload]
+  (and (alive? dload)
+       (not (running? dload))
+       (not (stopped? dload))
+       (not (failed? dload))))
+
+(defn idle [dload]
+  (assoc dload :failed false :fail-reason nil))
+
 (defn run-download [{:as dload :keys [program run-atom stop-atom failed]} & {action :action}]
-  (when (and (not *agent*) (run? dload))
+  (when (and (not *agent*) (running? dload))
     (throw (Exception. "Cannot run download while it is running.")))
   
   (log/debug (str "Run download " (download-repr dload)))
 
-  (if (or (dead? dload) (stop? dload)) dload
+  (if (or (dead? dload) (stopped? dload)) dload
       (try (reset! run-atom true)
-
            (let [action (or action (program dload))]
-             (ok (action dload)))
-
-           (catch Error e (fail dload :reason e))
-           (catch RuntimeException e (fail dload :reason e))
+             (idle (action dload)))
+           ;; (catch Error RuntimeException ...)
            (catch Throwable e (fail dload :reason e))
-
            (finally (reset! run-atom false)))))
 
 (defn files*-dsv-*-data-cod-ru-get-head [{:as dload :keys [link name]}]
@@ -350,7 +351,7 @@
                           (let [new-size (+ file-size read-size)]
                             (.write output buffer 0 read-size)
                             ;; (reset! file-length-atom new-size)
-                            (when-not (stop? dload)
+                            (when-not (stopped? dload)
                               (recur new-size)))))))
                   (.flush output)
                   (log/info (str "End download " name))))))
@@ -366,7 +367,7 @@
 
 (def files*-dsv-*-data-cod-ru
      {:program files*-dsv-*-data-cod-ru-download-program
-      :max-active-downloads 1
+      :max-running-downloads 1
       :link nil
       :name nil
       :path nil
@@ -409,11 +410,11 @@
 
 (defn data-cod-ru-make-child-download [{:as dload :keys [link child-link path]}]
   {:pre [(supplied link child-link path)]}
-  (let [child (or (first (for [dl @downloads :when (= child-link (:link @dl))] dl))
-                  (download child-link :path path))]
-    (if child
-      (with-return dload (schedule-download child))
-      (die dload))))
+  (let [child (or (first (for [dl @downloads* :when (= child-link (:link @dl))] dl))
+                  (make-download child-link :path path))]
+    (if-not child
+      (die dload)
+      dload)))
 
 (defn data-cod-ru-download-program [{:as dload :keys [link child-link child]}]
   (cond (not link) data-cod-ru-parse-page
@@ -428,10 +429,70 @@
    :child-link nil
    :child nil})
 
+(defn exit-program []
+  (log/debug "Leica is done. Bye."))
+
+(defn callback-to-download-scheduler [dload]
+  (when *agent*
+    (send-off download-scheduler* schedule-downloads :callback *agent*)))
+
+(defn schedule-downloads [{:as scheduler :keys [done-hook schedule-with-callback]}
+                          & {:keys [callback]}]
+  (cond
+   ;; if there are no downloads to schedule or all downloads is dead
+   ;; then leave
+   (or (not (seq @downloads))
+       (every? (comp dead? deref) @downloads))
+   (with-return scheduler
+     (when done-hook (done-hook)))
+   
+   :shedule
+   (let [groups ;; hash map of downloads grouped by type, each group
+                ;; sorted by precedence
+         (into {} (for [[type dloads] (group-by (comp type deref) @downloads)]
+                    {type (sort-by (comp :precedence deref) dloads)}))
+
+         successors ;; list of download successors
+         (flatten
+          (for [[dloads-type dloads] groups
+                :let [max-running-dloads ;; maximum amount of running
+                      ;; downloads for this type of downloads
+                      (:max-running-downloads (dloads-type @download-types*))]
+                :let [running-dloads (filter (comp running? deref) dloads)]
+                :let [count-of-running-dloads (count running-dloads)]
+                :let [idle-dloads (filter (comp idle? deref) dloads)]
+                :let [failed-dloads (filter (comp failed? deref) dloads)]
+                :let [count-of-dloads-to-launch (- max-running-dloads count-of-running-dloads)]]
+            (cond
+             ;; if no downloads in group then leave
+             (not (seq dloads)) ()
+
+             ;; if all downloads in group is dead then leave
+             (every? (comp dead? deref) dloads) ()
+
+             ;; if there are more running downloads then it might be for
+             ;; that group then leave
+             (<= count-of-dloads-to-launch 0) ()
+
+             ;; schedule downloads from scratch
+             (not callback)
+             (take count-of-dloads-to-launch (concat idle-dloads failed-dloads))
+
+             callback
+             (take count-of-dloads-to-launch
+                   (concat idle-dloads (take-entirely-after callback failed-dloads))))))]
+     (with-return scheduler
+       (doseq [successor successors]
+         (send-off successor run-download)
+         (when schedule-with-callback
+           (send-off successor callback-to-download-scheduler)))))))
+
 (comment
   (def d1 (make-download "http://files2.dsv-region.data.cod.ru/proxy/3/?WyI0NjcyZTBhYTJiNzc1ZTNjMjRlYWFhMTc4MDgxMzk4MCIsIjEyODgzNDUzMzEiLCJwcmlrb2xfcmFzdGlzaGthLmZsdiIsIm5UbE1obFF2ZVVKNXZRUFpkMlVxVnQyakdxUDFyOXZPN0NpNlwvYTBLMUd1RWRzT1NoMnA5OU5EWllLaGhjaXptSzIrN09HU2w3VkdNTUVNcTd1RjdWTEZzUkI5K1liZFFsb2hiQWRNcjdTNUh6QXpIcmRtREQxaG5hVTVtaXJzR3k3WFRkWCt0MnFXc2xNc0ZcLzdGakRXT3FEV1wvSWZHNmQwM2oyTlwvUlpUUU09Il0%3D"
                          :path "/home/haru/Inbox/"))
-
+  (def d2 (make-download "http://files.dsv-region.data.cod.ru/?WyJjMjMyOWMwZWZhNzdjOGFiMWUwNzMwYmI5YTM1OWNmOSIsMTI4ODUwNzAzNywid3d3LmRpc2x5Lm5ldC5ydV9cdTA0MzhcdTA0NDJcdTA0MzBcdTA0M2JcdTA0NGNcdTA0NGZcdTA0M2RcdTA0M2UucmFyIiwiSlJwOFR5aGUwQjNJWWFmUU5FZjF6bmxiZkQ0anIzOXR5cGxCRFE1a1Y5T3ZwcmRnTDhKUlJFVGMyangrTkw5a0UrTFM2NlVRUlVtRUlxazZITFRJMmZoZUVnUWcyWUpwbFRVM3VtSzIxa3FBcm13TzgzRitJOXp3amR1eExsZjF2Y3dwQzdONGRrdDNZaVBvdTZGbkhKdm1LY3g3QnU4QVlzd016bktsU3dVPSJd"
+                         :path "/home/haru/Inbox/"))
+  (schedule-downloads @download-scheduler*)
   d1
   ((@d1 :program) @d1)
   (send-off d1 ((@d1 :program) @d1))
@@ -490,8 +551,6 @@
 
 ;; (defn download-environment-is-done? [e]
 ;;   (every? dead? (agents e)))
-
-;; (defn terminate-download-environment [e] nil)
 
 ;; (defn try-to-terminate-download-environment [e]
 ;;   (when (download-environment-is-done? e)
