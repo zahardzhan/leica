@@ -16,10 +16,8 @@
    hooks)
   
   (:require
-   [com.twinql.clojure.http :as http]
    [clojure.contrib.duck-streams :as duck]
    [clojure.contrib.io :as io]
-   fn
    log)
   
   (:import
@@ -42,18 +40,18 @@
                                   params.HttpMethodParams
                                   util.EncodingUtil)))
 
-(defvar timeout-after-fail* 3000)
-(defvar connection-timeout* 15000)
-(defvar get-request-timeout* 30000)
-(defvar head-request-timeout* 30000)
-(defvar buffer-size* 65536)
+(def timeout-after-fail* 3000)
+(def connection-timeout* 15000)
+(def get-request-timeout* 30000)
+(def head-request-timeout* 30000)
+(def buffer-size* 65536)
 
 ;; Даже несколько удивлен тем, что функция высшего порядка same
 ;; практически нигде не используется. Что может быть логичнее чем код
 ;; типа (same parents alice bob).
 
 (defn same [f & xs]
-  (apply = (map f xs)))
+  (reduce = (map f xs)))
 
 ;; Выполняет блок кода body, при этом возвращает значение выражения
 ;; expr.
@@ -67,7 +65,8 @@
 
 (defmacro let-return [[form val] & body]
   `(let [~form ~val]
-     (with-return ~form (do ~@body))))
+     (with-return ~form
+       (do ~@body))))
 
 (defn dref
   ([] nil)
@@ -166,8 +165,10 @@
   (difference downloads* (hash-set dload)))
 
 (def download-scheduler*
-     (agent {:done-hook nil ;; run when there are no more scheduling job
-             :schedule-with-callback false}))
+     (agent {:active true
+             :done-hook nil ;; run when there are no more scheduling job
+             :schedule-with-callback false
+             :last-scheduled ()}))
 
 (def download-types* (atom {}))
 
@@ -184,7 +185,7 @@
                  :when (:link-pattern download-type)
                  :let [link (re-find (:link-pattern download-type) url)]
                  :when link]
-             (merge download-type {:link link})))))
+             (assoc download-type :link link)))))
 
 (def downloads-precedence-counter (atom 0))
 
@@ -215,59 +216,79 @@
                   {:name name}))))]
      (add-to-downloads dload))))
 
-(defn download-repr [{:as dload :keys [name link]}]
-  (str "<Download " (apply str (take 30 (or name link))) \>))
+(defn type-dispatch
+  ([x] (type x))
+  ([x & xs] (type x)))
 
-(defn alive? [dload]
-  (:alive dload))
+(defmulti alive? type-dispatch)
+(defmulti idle? type-dispatch)
+(defmulti running? type-dispatch)
+(defmulti stopped? type-dispatch)
+(defmulti failed? type-dispatch)
+(defmulti dead? type-dispatch)
 
-(defn dead? [dload]
-  (not (alive? dload)))
-
-(defn failed? [dload]
-  (:failed dload))
-
-(defn fail-reason [dload]
-  (:fail-reason dload))
-
-(defn fail [dload & {reason :reason}]
-  (log/error (str "Error:" \space (download-repr dload) \newline reason \newline))
-  (assoc dload :failed true :fail-reason reason))
-
-(defn die [dload]
-  (assoc dload :alive false))
-
+(defmulti run type-dispatch)
+(defmulti stop type-dispatch)
+(defmulti idle type-dispatch)
+(defmulti sleep type-dispatch)
+(defmulti fail type-dispatch)
+(defmulti die type-dispatch)
 (defalias pass identity)
 
-(defn sleep [dload millis]
+(defmulti represent type-dispatch)
+(defmulti performance type-dispatch)
+(defmulti fail-reason type-dispatch)
+(defmulti file-length type-dispatch)
+
+(defmethod represent ::download [{:as dload :keys [name link]}]
+  (str "<Download " (apply str (take 30 (or name link))) \>))
+
+(defmethod alive? ::download [dload]
+  (:alive dload))
+
+(defmethod dead? ::download [dload]
+  (not (alive? dload)))
+
+(defmethod failed? ::download [dload]
+  (:failed dload))
+
+(defmethod fail-reason ::download [dload]
+  (:fail-reason dload))
+
+(defmethod fail ::download [dload & {reason :reason}]
+  (log/error (str "Error:" \space (represent dload) \newline reason \newline))
+  (assoc dload :failed true :fail-reason reason))
+
+(defmethod die ::download [dload]
+  (assoc dload :alive false))
+
+(defmethod sleep ::download [dload millis]
   (with-return dload (Thread/sleep millis)))
 
-(defn stopped? [dload]
+(defmethod stopped? ::download [dload]
   (deref (:stop-atom dload)))
 
-(defn stop-download [dload])
-
-(defn running? [dload]
+(defmethod running? ::download [dload]
   (deref (:run-atom dload)))
 
-(defn idle? [dload]
+(defmethod idle? ::download [dload]
   (and (alive? dload)
        (not (running? dload))
        (not (stopped? dload))
        (not (failed? dload))))
 
-(defn idle [dload]
+(defmethod idle ::download [dload]
   (assoc dload :failed false :fail-reason nil))
 
-(defn file-length [{:as dload file-length-atom :file-length-atom}]
-  (when file-length-atom
-    (deref file-length-atom)))
+(defmethod stop ::download [dload])
 
-(defn run-download [{:as dload :keys [program run-atom stop-atom failed]} & {action :action}]
+(defmethod run ::download
+  [{:as dload :keys [program run-atom stop-atom failed]} & {action :action}]
+
   (when (and (not *agent*) (running? dload))
     (throw (Exception. "Cannot run download while it is running.")))
   
-  (log/debug (str "Run download " (download-repr dload)))
+  (log/debug (str "Run download " (represent dload)))
 
   (if (or (dead? dload) (stopped? dload)) dload
       (try (reset! run-atom true)
@@ -286,15 +307,16 @@
     (.. head getParams (setSoTimeout head-request-timeout*))
     (try (let [status (.executeMethod client head)]
            (if (= status HttpStatus/SC_OK)
-             (let [length (Integer/parseInt
-                           (.. head (getResponseHeader "Content-Length") (getValue)))
-                   disposition (.. head (getResponseHeader "Content-Disposition") (getValue))
-                   filename (URLDecoder/decode (second (re-find #"; filename=\"(.*)\"" disposition)))]
-               (if-not (and length filename) (die dload)
-                       (merge dload
-                              {:total-file-length length
-                               :file-length-atom (atom 0)}
-                              (when (not name) {:name filename}))))
+             (let [content-length (.. head (getResponseHeader "Content-Length"))
+                   content-disposition (.. head (getResponseHeader "Content-Disposition"))]
+               (if-not (or content-length content-disposition) (die dload)
+                 (let [length (Integer/parseInt (.getValue content-length))
+                       filename (URLDecoder/decode (second (re-find #"; filename=\"(.*)\"" (.getValue content-disposition))))]
+                   (if-not (and length filename) (die dload)
+                     (assoc dload
+                       :total-file-length length
+                       :file-length-atom (atom 0)
+                       :name (or name filename))))))
              (throw (Exception. "HEAD request failed."))))
          (finally (.releaseConnection head)))))
 
@@ -366,20 +388,16 @@
       :total-file-length nil})
 
 (def-download-type files3?-dsv-*-data-cod-ru
-  (merge files*-dsv-*-data-cod-ru
-         {:link-pattern #"http://files3?.dsv.*.data.cod.ru/.+"}))
+  (assoc files*-dsv-*-data-cod-ru :link-pattern #"http://files3?.dsv.*.data.cod.ru/.+"))
 
 (def-download-type files2-dsv-*-data-cod-ru
-  (merge files*-dsv-*-data-cod-ru
-         {:link-pattern #"http://files2.dsv.*.data.cod.ru/.+"}))
+  (assoc files*-dsv-*-data-cod-ru :link-pattern #"http://files2.dsv.*.data.cod.ru/.+"))
 
-(def-download-type files-dsv-region-data-cod-ru
-  (merge files*-dsv-*-data-cod-ru
-         {:link-pattern #"http://files.dsv-region.data.cod.ru/.+"}))
+(def-download-type files3?-dsv-region-data-cod-ru
+  (assoc files*-dsv-*-data-cod-ru :link-pattern #"http://files3?.dsv-region.data.cod.ru/.+"))
 
 (def-download-type files2-dsv-region-data-cod-ru
-  (merge files*-dsv-*-data-cod-ru
-         {:link-pattern #"http://files2.dsv-region.data.cod.ru/.+"}))
+  (assoc files*-dsv-*-data-cod-ru :link-pattern #"http://files2.dsv-region.data.cod.ru/.+"))
 
 (defn data-cod-ru-parse-page [{:as dload :keys [link]}]
   {:pre [(supplied link)]}
@@ -422,25 +440,32 @@
 (defn exit-program []
   (log/debug "Leica is done. Bye."))
 
-(defn callback-download-scheduler [dload]
-  (when *agent*
-    (send-off download-scheduler* schedule-downloads :callback *agent*)))
+(declare schedule-downloads callback-download-scheduler)
 
-(defn schedule-downloads [{:as scheduler :keys [done-hook schedule-with-callback]}
+(defn callback-download-scheduler-from [dload dload-agent]
+  (with-return dload
+    (send-off download-scheduler* schedule-downloads :callback dload-agent)))
+
+(defn schedule-downloads [{:as scheduler :keys [active done-hook schedule-with-callback last-scheduled]}
                           & {:keys [callback]}]
+  {:pre [(when-supplied callback (agent? callback))]}
   (cond
+   ;; when inactive then leave
+   (not active)
+   (assoc scheduler :last-scheduled ())
+   
    ;; if there are no downloads to schedule or all downloads is dead
    ;; then leave
-   (or (not (seq @downloads))
-       (every? (comp dead? deref) @downloads))
-   (with-return scheduler
-     (when donehook (done-hook)))
+   (or (not (seq @downloads*))
+       (every? (comp dead? deref) @downloads*))
+   (with-return (assoc scheduler :last-scheduled ())
+     (when done-hook (done-hook)))
    
    :shedule
    (let [groups ;; hash map of downloads grouped by type, each group
                 ;; sorted by precedence
-         (into {} (for [[type dloads] (group-by (comp type deref) @downloads)]
-                    {type (sort-by (comp :precedence deref) dloads)}))
+         (into {} (for [[dloads-type dloads] (group-by (comp type deref) @downloads*)]
+                    {dloads-type (sort-by (comp :precedence deref) dloads)}))
 
          successors ;; list of download successors
          (flatten
@@ -472,13 +497,16 @@
              (take count-of-dloads-to-launch
                    (concat idle-dloads (take-entirely-after callback failed-dloads))))))]
      
-     (with-return scheduler
+     (with-return (assoc scheduler :last-scheduled successors)
        (doseq [successor successors]
-         (send-off successor run-download)
+         (send-off successor run)
          (when schedule-with-callback
-           (send-off successor callback-download-scheduler)))))))
+           (send-off successor callback-download-scheduler-from successor)))))))
 
-(defmulti performance type)
+(defmethod file-length ::download
+  [{:as dload file-length-atom :file-length-atom}]
+  (when file-length-atom
+    (deref file-length-atom)))
 
 (defmethod performance ::download
   [{:as dload :keys [total-file-length]}]
@@ -487,8 +515,6 @@
                                 (pos? total-file-length) (pos? file-length))
                        (/ file-length total-file-length))]
     (merge {} (when load-percent {:load-percent load-percent}))))
-
-(performance @(first @downloads*))
 
 (def progress-monitor* (agent {:agents #{}}))
 
@@ -527,18 +553,42 @@
     (.flush System/out)))
 
 (comment
-  (show-progress {:agents @downloads*})
-  (def d1 (make-download "http://files2.dsv-region.data.cod.ru/proxy/3/?WyI0NjcyZTBhYTJiNzc1ZTNjMjRlYWFhMTc4MDgxMzk4MCIsIjEyODgzNDUzMzEiLCJwcmlrb2xfcmFzdGlzaGthLmZsdiIsIm5UbE1obFF2ZVVKNXZRUFpkMlVxVnQyakdxUDFyOXZPN0NpNlwvYTBLMUd1RWRzT1NoMnA5OU5EWllLaGhjaXptSzIrN09HU2w3VkdNTUVNcTd1RjdWTEZzUkI5K1liZFFsb2hiQWRNcjdTNUh6QXpIcmRtREQxaG5hVTVtaXJzR3k3WFRkWCt0MnFXc2xNc0ZcLzdGakRXT3FEV1wvSWZHNmQwM2oyTlwvUlpUUU09Il0%3D"
-                         :path "/home/haru/Inbox/"))
-  (def d2 (make-download "http://files.dsv-region.data.cod.ru/?WyJjMjMyOWMwZWZhNzdjOGFiMWUwNzMwYmI5YTM1OWNmOSIsMTI4ODUwNzAzNywid3d3LmRpc2x5Lm5ldC5ydV9cdTA0MzhcdTA0NDJcdTA0MzBcdTA0M2JcdTA0NGNcdTA0NGZcdTA0M2RcdTA0M2UucmFyIiwiSlJwOFR5aGUwQjNJWWFmUU5FZjF6bmxiZkQ0anIzOXR5cGxCRFE1a1Y5T3ZwcmRnTDhKUlJFVGMyangrTkw5a0UrTFM2NlVRUlVtRUlxazZITFRJMmZoZUVnUWcyWUpwbFRVM3VtSzIxa3FBcm13TzgzRitJOXp3amR1eExsZjF2Y3dwQzdONGRrdDNZaVBvdTZGbkhKdm1LY3g3QnU4QVlzd016bktsU3dVPSJd"
-                         :path "/home/haru/Inbox/"))
-  (schedule-downloads @download-scheduler*)
-  d1
-  ((@d1 :program) @d1)
-  (send-off d1 ((@d1 :program) @d1))
-  (((@d1 :program) @d1) @d1)
 
-  d2
-  (send-off d2 ((@d2 :program) @d2))
-  (((@d2 :program) @d2) @d2)
+  (do
+    (def d1 (make-download "http://files.dsv-region.data.cod.ru/?WyJjMjMyOWMwZWZhNzdjOGFiMWUwNzMwYmI5YTM1OWNmOSIsMTI4ODUwNzAzNywid3d3LmRpc2x5Lm5ldC5ydV9cdTA0MzhcdTA0NDJcdTA0MzBcdTA0M2JcdTA0NGNcdTA0NGZcdTA0M2RcdTA0M2UucmFyIiwiSlJwOFR5aGUwQjNJWWFmUU5FZjF6bmxiZkQ0anIzOXR5cGxCRFE1a1Y5T3ZwcmRnTDhKUlJFVGMyangrTkw5a0UrTFM2NlVRUlVtRUlxazZITFRJMmZoZUVnUWcyWUpwbFRVM3VtSzIxa3FBcm13TzgzRitJOXp3amR1eExsZjF2Y3dwQzdONGRrdDNZaVBvdTZGbkhKdm1LY3g3QnU4QVlzd016bktsU3dVPSJd"
+                           :path "/home/haru/Inbox/"))
+    
+    (def d2 (make-download "http://files2.dsv-region.data.cod.ru/proxy/1/?WyJjNDc5MTg1ZjkyNTZkNWJmZWM3Mzc1NmY5ZDAzYjRhMCIsIjEyODg3NDUyODUiLCJcdTA0MWFcdTA0M2RcdTA0MzhcdTA0MzNcdTA0MzAgJydcdTA0MjBcdTA0NDNcdTA0NDFcdTA0NGMgXHUwNDM4XHUwNDM3XHUwNDNkXHUwNDMwXHUwNDQ3XHUwNDMwXHUwNDNiXHUwNDRjXHUwNDNkXHUwNDMwXHUwNDRmJycucmFyIiwiaVNBSXRcL041Q0tYRXNCY0FIZ01ld2NHMVhXYlZHZFREbjdUbk4xMnR3UEllU0tYaXNHNHh4Z3FXc2swdk52ZW1cL3hQWlFCYlRWdUhNK0pXQVwvRTl0ck12bUp0bCtQV2Y3N25UVE1ncDRwTkhtdlhWMUp5QlNGdVZnWFVDTThpQSs3d3h0ZVB6VG9DN1ZBT1N5N01peHVnTE5jeFJiaFFjeHcwNzlWTGRLcllVPSJd"
+                           :path "/home/haru/Inbox/"))
+
+    (def d3 (make-download "http://files2.dsv-region.data.cod.ru/proxy/3/?WyIwMmM4ZmJiMGQxMDMzOWM3MjY3NmQzNDUyNDUyYjA1ZSIsIjEyODg3NDQwNzMiLCJrYXRyaWcyLmF2aSIsImMyUkNNNEphSVBkWnMyZWJZWW4rSTZsck9JamZPYytzdlwvU0lxcnUzcFFFWXdoYjFFRmZ1ZnNcL1FmTFBMZ1lFOGFcL0lTSmREZmFmNmVGd2sxaUo0V3d4cG1rUVFHUXdhcHI3VWowdUhuUTdDcW52d256UW1DaVhcL2RZWTFTakF6RjlmT0pzWkNOa1FiN214RE9YSnhUZXZ5RWpCc0dVNHNqaDEzMHByNlRQenc9Il0%3D"
+                           :path "/home/haru/Inbox/"))
+
+    (def d4 (make-download "http://files2.dsv-region.data.cod.ru/proxy/3/?WyJhMmFmMjlhMTFiZmM0MmQ2Yjg3OTg5NDAzODNjYTExNyIsIjEyODg3MDc5ODgiLCJ3d3cuZGlzbHkubmV0LnJ1X1x1MDQ0MVx1MDQzZlx1MDQzZVx1MDQ0MFx1MDQ0Mlx1MDQzOFx1MDQzMlx1MDQzZFx1MDQ0Ylx1MDQzNSBcdTA0M2NcdTA0MzBcdTA0NDhcdTA0MzhcdTA0M2RcdTA0NGIucmFyIiwieXpWQTVYcTBZNzNXdWpZY0JHbXBvR3g4NG55VHR4YlJBdEhDOE1iYU4xMEthTlphdENtT2FQQ25nSkttSG5kaHkrRTlFcmtKYWdvN0ViQnJwNG5Rd0cyUUhpUG5sV3RNdTBWdzBYV3RNZVNvd3JHYTYyNytGNFFETzNIZG0yaXpDWTNnZjU4cHY4Z2tNN2d6eHpHR2RBd1ZDbTdNQ0NmaHduSEsyYnFrdWdjPSJd"
+                           :path "/home/haru/Inbox/"))
+
+    (def d5 (make-download "http://files2.dsv-region.data.cod.ru/proxy/1/?WyIwOGNhY2MyYjRlYjIxZWM4ZjU4ZWQ5Yzc5ZGU1YWEwNiIsIjEyODg3MDI0MzYiLCJ3d3cuZGlzbHkubmV0LnJ1X1x1MDQyNVx1MDQ0ZFx1MDQzYlx1MDQ0M1x1MDQzOFx1MDQzZC5yYXIiLCJQYnNjV21WZWJReUoxbkZtNDBNcStCNzBQRnlkUVVTVDlaNE81cVpyXC9EYVMzVUw0empOQW01RE9UNUdiZ09Da2xsMXBzT0lQSTZKdGJlOWpcL2xKb3A1dHhBQUxRMnorWEZFWWFjcmlaKzY5YllneTBtdzBcL1pHXC9XTEFaQVpQc25rMnU4TGV1MFUzQjBYaHAzZ2phVXlUOSs2bTNoa0loeEJRaTZXcElwQmZNPSJd"
+                           :path "/home/haru/Inbox/"))
+
+    (def d6 (make-download "http://files.dsv-region.data.cod.ru/?WyJhY2NhOTZhYTY0ODdmOTZkY2YyZmZmMTgwNGFiNTg0ZSIsMTI4ODkxOTYxOSwid3d3LmRpc2x5Lm5ldC5ydV9cdTA0MjVcdTA0NGRcdTA0M2JcdTA0NDNcdTA0MzhcdTA0M2QucmFyIiwiZlwvZG45dCtlK2hNQmJxb3VnZ0pIQ0FqXC9IK1pZYUpDTWN1SUxRMGxrbTdGRG9Fa3RyTkVjSEpCTUhWb25zSHVITERoaHpTaTNydHg4WnpXRVRGS3M2VnRDdVhvblV2NGxId0xCUnpmWmp4TWx6aWRxVm5sWFg1UjE5SEZaSmRPUVQ0eG01XC9VVzNaVkE5ZFkrb1pcLzA2WnhrOURXcncwYXN5VUlneE16RnVCdz0iXQ%3D%3D"
+                           :path "/home/haru/Inbox/")))
+
+  (send-off download-scheduler* assoc :schedule-with-callback false)
+  (send-off download-scheduler* assoc :schedule-with-callback true)
+
+  (clear-agent-errors download-scheduler*)
+
+  {:dloads (count @downloads*)
+   :dead (count (filter (comp dead? deref) @downloads*))
+   :idle (count (filter (comp idle? deref) @downloads*))
+   :failed (count (filter (comp failed? deref) @downloads*))
+   :run (count (filter (comp running? deref) @downloads*))
+   :scheduled (count (:last-scheduled @download-scheduler*))}
+  
+  (send-off download-scheduler* schedule-downloads :callback d2)
+  download-scheduler*
+  downloads*
+  
+  (throw (first (agent-errors download-scheduler*)))
+
   )
