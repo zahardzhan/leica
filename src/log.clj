@@ -27,7 +27,7 @@
           (fn [message]
             (str \return
                  (. (new SimpleDateFormat "HH:mm:ss") format (new Date))
-                 \space message \newline))}))
+                 \space message))}))
 
 (defn- setup-logging-agent [namespace ag]
   (alter-meta! namespace assoc :logging-agent ag))
@@ -68,12 +68,12 @@
         (write-log-message formatted-message)
         (send-off log-ag write-log-message-to-ag formatted-message)))))
 
-(defn trace [message] (log :trace message))
-(defn debug [message] (log :debug message))
-(defn info  [message] (log :info  message))
-(defn warn  [message] (log :warn  message))
-(defn error [message] (log :error message))
-(defn fatal [message] (log :fatal message))
+(defn trace [message & messages] (log :trace (apply str message messages)))
+(defn debug [message & messages] (log :debug (apply str message messages)))
+(defn info  [message & messages] (log :info  (apply str message messages)))
+(defn warn  [message & messages] (log :warn  (apply str message messages)))
+(defn error [message & messages] (log :error (apply str message messages)))
+(defn fatal [message & messages] (log :fatal (apply str message messages)))
 
 (defn set-log [& {:keys [levels enable-levels disable-levels format]}]
   (let [namespace *ns*]
