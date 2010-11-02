@@ -10,15 +10,15 @@
   (:gen-class)
   (:use
    [clojure.set :only [difference union]]
+   [clojure.contrib.duck-streams :only [slurp* read-lines]]
    clojure.contrib.command-line
    clojure.contrib.def
    clojure.test
+   [log :only [info debug error]]
    hooks)
-  
+
   (:require
-   [clojure.contrib.duck-streams :as duck]
-   [clojure.contrib.io :as io]
-   log)
+   [clojure.contrib.io :as io])
   
   (:import
    (java.util Date)
@@ -46,38 +46,14 @@
 (def head-request-timeout* 30000)
 (def buffer-size* 65536)
 
-;; Даже несколько удивлен тем, что функция высшего порядка same
-;; практически нигде не используется. Что может быть логичнее чем код
-;; типа (same parents alice bob).
-
-(defn same [f & xs]
-  (reduce = (map f xs)))
-
-;; Выполняет блок кода body, при этом возвращает значение выражения
-;; expr.
-
 (defmacro with-return [expr & body]
   `(do (do ~@body)
        ~expr))
-
-;; Связывает значение val с именем form, выполняет блок кода body и в
-;; конце возвращает значение form.
 
 (defmacro let-return [[form val] & body]
   `(let [~form ~val]
      (with-return ~form
        (do ~@body))))
-
-(defn dref
-  ([] nil)
-  ([x] (if (instance? clojure.lang.IDeref x) (deref x) x))
-  ([x & fs] ((apply comp (reverse fs)) (dref x))))
-
-(defmacro with-deref [[ref & refs] & body]
-  (if ref
-    `(let [~ref (dref ~ref)]
-       (with-deref ~refs ~@body))
-    `(do ~@body)))
 
 (defmacro when-supplied [& clauses]
   (if-not clauses true
@@ -89,8 +65,6 @@
 
 (defn agent? [x]
   (instance? clojure.lang.Agent x))
-
-(def nothing nil)
 
 (defn take-after [item coll]
   (rest (drop-while (partial not= item) coll)))
@@ -153,6 +127,8 @@
   (first (re-find #"((https?|ftp|file):((//)|(\\\\))+[\w\d:#@%/;$()~_?\+-=\\\.&]*)"
                   line)))
 
+(declare monitor-progress)
+
 (def downloads* (ref #{}))
 
 (defn add-to-downloads [dload]
@@ -167,7 +143,7 @@
 (def download-scheduler*
      (agent {:active true
              :done-hook nil ;; run when there are no more scheduling job
-             :schedule-with-callback false
+             :schedule-with-callback true
              :last-scheduled ()}))
 
 (def download-types* (atom {}))
@@ -240,6 +216,8 @@
 (defmulti fail-reason type-dispatch)
 (defmulti file-length type-dispatch)
 
+(declare show-progress)
+
 (defmethod represent ::download [{:as dload :keys [name link]}]
   (str "<Download " (apply str (take 30 (or name link))) \>))
 
@@ -256,7 +234,7 @@
   (:fail-reason dload))
 
 (defmethod fail ::download [dload & {reason :reason}]
-  (log/error (str "Error:" \space (represent dload) \newline reason \newline))
+  (error "Error " (represent dload) " reason: " reason)
   (assoc dload :failed true :fail-reason reason))
 
 (defmethod die ::download [dload]
@@ -288,7 +266,7 @@
   (when (and (not *agent*) (running? dload))
     (throw (Exception. "Cannot run download while it is running.")))
   
-  (log/debug (str "Run download " (represent dload)))
+  (debug "Run download " (represent dload))
 
   (if (or (dead? dload) (stopped? dload)) dload
       (try (reset! run-atom true)
@@ -297,6 +275,59 @@
            ;; (catch Error RuntimeException ...)
            (catch Throwable e (fail dload :reason e))
            (finally (reset! run-atom false)))))
+
+(defmethod file-length ::download
+  [{:as dload file-length-atom :file-length-atom}]
+  (when file-length-atom
+    (deref file-length-atom)))
+
+(defmethod performance ::download
+  [{:as dload :keys [total-file-length]}]
+  (let [file-length (file-length dload)
+        load-percent (when (and (number? total-file-length) (number? file-length)
+                                (pos? total-file-length) (pos? file-length))
+                       (int (Math/floor (* 100 (/ file-length total-file-length)))))]
+    (merge {} (when load-percent {:load-percent load-percent}))))
+
+(def eighty-spaces "                                                                                ")
+
+(def progress-monitor* (agent {:agents #{}}))
+
+(defn begin-monitor-progress [{:as progress-monitor agents :agents} agnt]
+  {:pre (agent? agnt)}
+  (assoc progress-monitor :agents (union agents (hash-set agnt))))
+
+(defn cease-monitor-progress [{:as progress-monitor agents :agents} agnt]
+  {:pre (agent? agnt)}
+  (.print System/out (str "\r" eighty-spaces "\r"))
+  (assoc progress-monitor :agents (difference agents (hash-set agnt))))
+
+(defn monitor-progress []
+  (send-off progress-monitor* show-progress)
+  (release-pending-sends))
+
+(defmacro with-progress-monitoring [agnt & body]
+  `(let [agnt?# (agent? ~agnt)]
+     (try (when agnt?# (send-off progress-monitor* begin-monitor-progress ~agnt))
+          (do ~@body)
+          (finally (when agnt?# (send-off progress-monitor* cease-monitor-progress ~agnt))))))
+
+(defn show-progress [{:as progress-monitor agents :agents}]
+  (with-return progress-monitor
+    (.print System/out \return)
+    (doseq [abody (map deref agents)
+            :let [name (:name abody)
+                  name-length (if (string? name) (count name) nil)
+                  perf (performance abody)
+                  load-percent (:load-percent perf)]]
+      (.print System/out (str \[ (cond (not name) \-
+                                       (< name-length 12) name
+                                       :longer (str (.substring name 0 5) \. \.
+                                                    (.substring name (- name-length 7) name-length)))
+                              \space (or load-percent \0) \% \])))
+    (.print System/out \return)
+    ;; (.flush System/out)
+    ))
 
 (defn files*-dsv-*-data-cod-ru-get-head [{:as dload :keys [link name]}]
   {:pre [(supplied link)]}
@@ -356,18 +387,20 @@
               (with-return dload
                 (with-open [#^InputStream input (.getResponseBodyAsStream get)
                             #^FileOutputStream output (FileOutputStream. file true)]
-                  (log/info (str "Begin download " name))
-                  (let [buffer (make-array Byte/TYPE buffer-size*)]
-                    (loop [file-size (actual-file-length file)]
-                      (let [read-size (.read input buffer)]
-                        (when (pos? read-size)
-                          (let [new-size (+ file-size read-size)]
-                            (.write output buffer 0 read-size)
-                            (reset! file-length-atom new-size)
-                            (when-not (stopped? dload)
-                              (recur new-size)))))))
+                  (info "Begin download " name)
+                  (with-progress-monitoring *agent*
+                    (let [buffer (make-array Byte/TYPE buffer-size*)]
+                      (loop [file-size (actual-file-length file)]
+                        (let [read-size (.read input buffer)]
+                          (when (pos? read-size)
+                            (let [new-size (+ file-size read-size)]
+                              (.write output buffer 0 read-size)
+                              (reset! file-length-atom new-size)
+                              (when *agent* (monitor-progress))
+                              (when-not (stopped? dload)
+                                (recur new-size))))))))
                   (.flush output)
-                  (log/info (str "End download " name))))))
+                  (info "End download " name)))))
       (finally (.releaseConnection get)))))
 
 (defn files*-dsv-*-data-cod-ru-download-program
@@ -409,7 +442,7 @@
     (try (let [status (.executeMethod client get)]
            (if (= status HttpStatus/SC_OK)
              (let [child-link (re-find #"http://files[-\d\w\.]*data.cod.ru/[^\"]+"
-                                       (duck/slurp* (.getResponseBodyAsStream get)))]
+                                       (slurp* (.getResponseBodyAsStream get)))]
                (if child-link
                  (assoc dload :child-link child-link)
                  (die dload)))
@@ -437,9 +470,6 @@
    :child-link nil
    :child nil})
 
-(defn exit-program []
-  (log/debug "Leica is done. Bye."))
-
 (declare schedule-downloads callback-download-scheduler)
 
 (defn callback-download-scheduler-from [dload dload-agent]
@@ -448,7 +478,7 @@
 
 (defn schedule-downloads [{:as scheduler :keys [active done-hook schedule-with-callback last-scheduled]}
                           & {:keys [callback]}]
-  {:pre [(when-supplied callback (agent? callback))]}
+  {:pre [(agent? callback)]}
   (cond
    ;; when inactive then leave
    (not active)
@@ -503,57 +533,45 @@
          (when schedule-with-callback
            (send-off successor callback-download-scheduler-from successor)))))))
 
-(defmethod file-length ::download
-  [{:as dload file-length-atom :file-length-atom}]
-  (when file-length-atom
-    (deref file-length-atom)))
+(def help* 
+     "Leica -- downloader written in lisp.
 
-(defmethod performance ::download
-  [{:as dload :keys [total-file-length]}]
-  (let [file-length (file-length dload)
-        load-percent (when (and (number? total-file-length) (number? file-length)
-                                (pos? total-file-length) (pos? file-length))
-                       (/ file-length total-file-length))]
-    (merge {} (when load-percent {:load-percent load-percent}))))
+Download files:
 
-(def progress-monitor* (agent {:agents #{}}))
+leica [keys] [file with links] [directory]")
 
-(defn begin-monitor-progress [{:as progress-monitor agents :agents} agnt]
-  {:pre (agent? agnt)}
-  (assoc progress-monitor :agents (union agents (hash-set agnt))))
+(defn exit-program []
+  (debug "Leica is done. Bye.")
+  (System/exit 0))
 
-(defn cease-monitor-progress [{:as progress-monitor agents :agents} agnt]
-  {:pre (agent? agnt)}
-  (assoc progress-monitor :agents (difference agents (hash-set agnt))))
+(defn -main [& args]
+  (with-command-line args help*
+    [[quiet?  q? "work quietly"]
+     [debug?  d? "write debug messages"]
+     remaining-args]
 
-(defmacro with-progress-monitoring [agnt & body]
-  (if-not (agent? agnt)
-    `(do ~@body)
-    `(try (send-off progress-monitor* begin-monitor-progress ~agnt)
-          (do ~@body)
-          (finally (send-off progress-monitor* cease-monitor-progress ~agnt)))))
+    (let [lines-with-links
+          (read-lines (some #(as-file % :readable true :directory false) remaining-args))
 
-(defn show-progress [{:as progress-monitor agents :agents}]
-  (with-return progress-monitor
-    (.print System/out \return)
-    (doseq [abody (map deref agents)
-            :let [name (:name abody)
-                  name-length (if (string? name) (count name) nil)
-                  perf (performance abody)
-                  load-percent (:load-percent perf)]]
-      (.print
-       System/out
-       (str \[
-            (cond (not name) \-
-                  (< name-length 12) name
-                  :longer (str (.substring name 0 5) \. \.
-                               (.substring name (- name-length 7) name-length)))
-            \space (or load-percent \0) \% \])))
-    (.println System/out)
-    (.flush System/out)))
+          workpath
+          (or (some #(as-file % :writeable true :directory true) remaining-args)
+              (as-file (System/getProperty "user.dir") :writeable true :directory true))]
+
+      (when-not lines-with-links
+        (info "You must specify file with links to download.")
+        (exit-program))
+
+      (when-not workpath
+        (info "You must specify directory in which files will be downloaded.")
+        (exit-program))
+
+      (doseq [line lines-with-links]
+        (make-download line :path workpath))
+
+      (send-off download-scheduler* assoc :done-hook exit-program)
+      (send-off download-scheduler* schedule-downloads))))
 
 (comment
-
   (do
     (def d1 (make-download "http://files.dsv-region.data.cod.ru/?WyJjMjMyOWMwZWZhNzdjOGFiMWUwNzMwYmI5YTM1OWNmOSIsMTI4ODUwNzAzNywid3d3LmRpc2x5Lm5ldC5ydV9cdTA0MzhcdTA0NDJcdTA0MzBcdTA0M2JcdTA0NGNcdTA0NGZcdTA0M2RcdTA0M2UucmFyIiwiSlJwOFR5aGUwQjNJWWFmUU5FZjF6bmxiZkQ0anIzOXR5cGxCRFE1a1Y5T3ZwcmRnTDhKUlJFVGMyangrTkw5a0UrTFM2NlVRUlVtRUlxazZITFRJMmZoZUVnUWcyWUpwbFRVM3VtSzIxa3FBcm13TzgzRitJOXp3amR1eExsZjF2Y3dwQzdONGRrdDNZaVBvdTZGbkhKdm1LY3g3QnU4QVlzd016bktsU3dVPSJd"
                            :path "/home/haru/Inbox/"))
@@ -574,21 +592,15 @@
                            :path "/home/haru/Inbox/")))
 
   (send-off download-scheduler* assoc :schedule-with-callback false)
-  (send-off download-scheduler* assoc :schedule-with-callback true)
-
-  (clear-agent-errors download-scheduler*)
 
   {:dloads (count @downloads*)
    :dead (count (filter (comp dead? deref) @downloads*))
    :idle (count (filter (comp idle? deref) @downloads*))
    :failed (count (filter (comp failed? deref) @downloads*))
    :run (count (filter (comp running? deref) @downloads*))
-   :scheduled (count (:last-scheduled @download-scheduler*))}
+   :scheduled (count (:last-scheduled @download-scheduler*))
+   :progress (count (:agents @progress-monitor*))}
   
-  (send-off download-scheduler* schedule-downloads :callback d2)
+  (send-off download-scheduler* schedule-downloads)
   download-scheduler*
-  downloads*
-  
-  (throw (first (agent-errors download-scheduler*)))
-
-  )
+  downloads*)
