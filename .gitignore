@@ -3,6 +3,12 @@ autodoc
 autodoc/*
 classes/*
 lib/*
+rest
+*.aux
+*.log
+*.out
+*.pdf
+*.tex
 *.pro
 *.jar
 *.swp
